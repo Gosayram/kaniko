@@ -11,7 +11,6 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.87.3
 	github.com/awslabs/amazon-ecr-credential-helper/ecr-login v0.10.1
 	github.com/chrismellard/docker-credential-acr-env v0.0.0-20230304212654-82a0ddb27589
-	github.com/docker/docker v28.4.0+incompatible
 	github.com/go-git/go-billy/v5 v5.6.2
 	github.com/go-git/go-git/v5 v5.16.2
 	github.com/golang/mock v1.6.0
@@ -36,6 +35,8 @@ require (
 require (
 	github.com/GoogleCloudPlatform/docker-credential-gcr/v2 v2.1.22
 	github.com/containerd/containerd v1.7.28
+	github.com/docker/docker v28.3.3+incompatible
+	github.com/moby/sys/user v0.4.0
 )
 
 require github.com/googleapis/enterprise-certificate-proxy v0.3.6 // indirect
@@ -101,7 +102,7 @@ require (
 	github.com/moby/sys/mountinfo v0.7.2 // indirect
 	github.com/moby/sys/sequential v0.6.0 // indirect
 	github.com/moby/sys/signal v0.7.1
-	github.com/moby/sys/symlink v0.3.0 // indirect
+	github.com/moby/sys/symlink v0.3.0
 	github.com/moby/term v0.5.2 // indirect
 	github.com/morikuni/aec v1.0.0 // indirect
 	github.com/opencontainers/go-digest v1.0.0 // indirect
@@ -172,7 +173,6 @@ require (
 	github.com/moby/go-archive v0.1.0 // indirect
 	github.com/moby/sys/atomicwriter v0.1.0 // indirect
 	github.com/moby/sys/reexec v0.1.0 // indirect
-	github.com/moby/sys/user v0.4.0 // indirect
 	github.com/moby/sys/userns v0.1.0 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/otiai10/mint v1.6.3 // indirect

@@ -26,7 +26,7 @@ GOOS ?= $(shell go env GOOS)
 GOARCH ?= $(shell go env GOARCH)
 ORG := github.com/Gosayram
 PROJECT := kaniko
-REGISTRY?=gcr.io/kaniko-project
+REGISTRY?=gcr.io/Gosayram/kaniko
 
 REPOPATH ?= $(ORG)/$(PROJECT)
 
@@ -46,7 +46,7 @@ BUILD_ARG ?=
 # Force using Go Modules and always read the dependencies from
 # the `vendor` folder.
 export GO111MODULE = on
-# export GOFLAGS = -mod=vendor
+export GOFLAGS = -mod=vendor
 
 
 out/executor: $(GO_FILES)
@@ -57,7 +57,7 @@ out/warmer: $(GO_FILES)
 
 .PHONY: install-container-diff
 install-container-diff:
-	@ curl -LO https://github.com/GoogleContainerTools/container-diff/releases/download/v0.17.0/container-diff-$(GOOS)-amd64 && \
+	@ curl -LO https://github.com/Gosayram/container-diff/releases/download/v0.17.0/container-diff-$(GOOS)-amd64 && \
 		chmod +x container-diff-$(GOOS)-amd64 && sudo mv container-diff-$(GOOS)-amd64 /usr/local/bin/container-diff
 
 .PHONY: k3s-setup
