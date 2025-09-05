@@ -20,9 +20,9 @@ import (
 	"os/user"
 	"testing"
 
-	"github.com/GoogleContainerTools/kaniko/pkg/dockerfile"
+	"github.com/Gosayram/kaniko/pkg/dockerfile"
 
-	"github.com/GoogleContainerTools/kaniko/testutil"
+	"github.com/Gosayram/kaniko/testutil"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/moby/buildkit/frontend/dockerfile/instructions"
 )

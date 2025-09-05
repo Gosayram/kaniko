@@ -40,10 +40,10 @@ import (
 	"github.com/pkg/errors"
 	"google.golang.org/api/option"
 
-	"github.com/GoogleContainerTools/kaniko/pkg/timing"
-	"github.com/GoogleContainerTools/kaniko/pkg/util"
-	"github.com/GoogleContainerTools/kaniko/pkg/util/bucket"
-	"github.com/GoogleContainerTools/kaniko/testutil"
+	"github.com/Gosayram/kaniko/pkg/timing"
+	"github.com/Gosayram/kaniko/pkg/util"
+	"github.com/Gosayram/kaniko/pkg/util/bucket"
+	"github.com/Gosayram/kaniko/testutil"
 )
 
 var (
@@ -228,7 +228,7 @@ func getBranchCommitAndURL() (branch, commit, url string) {
 		branch = strings.TrimPrefix(branch, "refs/heads/")
 	}
 	if repo == "" {
-		repo = "GoogleContainerTools/kaniko"
+		repo = "Gosayram/kaniko"
 	}
 	if branch == "" {
 		branch = "main"
@@ -1129,7 +1129,7 @@ func meetsRequirements() bool {
 
 // containerDiff compares the container images image1 and image2.
 func containerDiff(t *testing.T, image1, image2 string, flags ...string) []byte {
-	// workaround for container-diff OCI issue https://github.com/GoogleContainerTools/container-diff/issues/389
+	// workaround for container-diff OCI issue https://github.com/Gosayram/container-diff/issues/389
 	if !strings.HasPrefix(image1, daemonPrefix) {
 		dockerPullCmd := exec.Command("docker", "pull", image1)
 		out := RunCommand(dockerPullCmd, t)

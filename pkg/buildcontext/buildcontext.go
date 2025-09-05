@@ -20,8 +20,8 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/GoogleContainerTools/kaniko/pkg/constants"
-	"github.com/GoogleContainerTools/kaniko/pkg/util"
+	"github.com/Gosayram/kaniko/pkg/constants"
+	"github.com/Gosayram/kaniko/pkg/util"
 )
 
 const (

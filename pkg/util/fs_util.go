@@ -31,8 +31,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/GoogleContainerTools/kaniko/pkg/config"
-	"github.com/GoogleContainerTools/kaniko/pkg/timing"
+	"github.com/Gosayram/kaniko/pkg/config"
+	"github.com/Gosayram/kaniko/pkg/timing"
 	"github.com/docker/docker/pkg/archive"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/karrick/godirwalk"

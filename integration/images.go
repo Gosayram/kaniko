@@ -31,9 +31,9 @@ import (
 	"time"
 
 	"cloud.google.com/go/storage"
-	"github.com/GoogleContainerTools/kaniko/pkg/timing"
-	"github.com/GoogleContainerTools/kaniko/pkg/util"
-	"github.com/GoogleContainerTools/kaniko/pkg/util/bucket"
+	"github.com/Gosayram/kaniko/pkg/timing"
+	"github.com/Gosayram/kaniko/pkg/util"
+	"github.com/Gosayram/kaniko/pkg/util/bucket"
 )
 
 const (
@@ -204,7 +204,7 @@ func NewDockerFileBuilder() *DockerFileBuilder {
 	}
 	d.DockerfilesToIgnore = map[string]struct{}{
 		"Dockerfile_test_add_404": {},
-		// TODO: remove test_user_run from this when https://github.com/GoogleContainerTools/container-diff/issues/237 is fixed
+		// TODO: remove test_user_run from this when https://github.com/Gosayram/container-diff/issues/237 is fixed
 		"Dockerfile_test_user_run": {},
 		// TODO: All the below tests are fialing with errro
 		// You don't have the needed permissions to perform this operation, and you may have invalid credentials.

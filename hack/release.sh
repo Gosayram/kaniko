@@ -64,8 +64,12 @@ rm $TEMP_CHANGELOG_FIXED
 # Cleanup
 rm $TEMP_CHANGELOG
 
-echo "Updated Makefile for the new version: $VERSION"
-# Update Makefile
+echo "Updated .release-version for the new version: $VERSION"
+# Update .release-version file
+echo "$MAKEFILE_VERSION" > .release-version
+
+# Also update Makefile for backward compatibility during transition
+echo "Updating Makefile for backward compatibility..."
 sed -i.bak \
     -e "s|VERSION_MAJOR ?=.*|VERSION_MAJOR ?= $VERSION_MAJOR|" \
     -e "s|VERSION_MINOR ?=.*|VERSION_MINOR ?= $VERSION_MINOR|" \

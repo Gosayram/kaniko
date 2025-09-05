@@ -23,9 +23,9 @@ import (
 	"os"
 	"path/filepath"
 
-	kConfig "github.com/GoogleContainerTools/kaniko/pkg/config"
-	"github.com/GoogleContainerTools/kaniko/pkg/constants"
-	"github.com/GoogleContainerTools/kaniko/pkg/util"
+	kConfig "github.com/Gosayram/kaniko/pkg/config"
+	"github.com/Gosayram/kaniko/pkg/constants"
+	"github.com/Gosayram/kaniko/pkg/util"
 	"github.com/sirupsen/logrus"
 )
 

@@ -1,6 +1,7 @@
-package oci // import "github.com/docker/docker/oci"
+package oci
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -21,7 +22,7 @@ func deviceCgroup(d *specs.LinuxDevice, permissions string) specs.LinuxDeviceCgr
 }
 
 // DevicesFromPath computes a list of devices and device permissions from paths (pathOnHost and pathInContainer) and cgroup permissions.
-func DevicesFromPath(pathOnHost, pathInContainer, cgroupPermissions string) (devs []specs.LinuxDevice, devPermissions []specs.LinuxDeviceCgroup, err error) {
+func DevicesFromPath(pathOnHost, pathInContainer, cgroupPermissions string) (devs []specs.LinuxDevice, devPermissions []specs.LinuxDeviceCgroup, _ error) {
 	resolvedPathOnHost := pathOnHost
 
 	// check if it is a symbolic link
@@ -40,7 +41,7 @@ func DevicesFromPath(pathOnHost, pathInContainer, cgroupPermissions string) (dev
 
 	// if the device is not a device node
 	// try to see if it's a directory holding many devices
-	if err == coci.ErrNotADevice {
+	if errors.Is(err, coci.ErrNotADevice) {
 		// check if it is a directory
 		if src, e := os.Stat(resolvedPathOnHost); e == nil && src.IsDir() {
 			// mount the internal devices recursively

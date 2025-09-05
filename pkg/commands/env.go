@@ -17,10 +17,10 @@ limitations under the License.
 package commands
 
 import (
-	"github.com/GoogleContainerTools/kaniko/pkg/dockerfile"
+	"github.com/Gosayram/kaniko/pkg/dockerfile"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 
-	"github.com/GoogleContainerTools/kaniko/pkg/util"
+	"github.com/Gosayram/kaniko/pkg/util"
 	"github.com/moby/buildkit/frontend/dockerfile/instructions"
 )
 

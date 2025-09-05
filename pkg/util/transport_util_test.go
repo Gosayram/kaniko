@@ -23,7 +23,7 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/GoogleContainerTools/kaniko/pkg/config"
+	"github.com/Gosayram/kaniko/pkg/config"
 )
 
 type mockedCertPool struct {

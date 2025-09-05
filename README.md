@@ -1,7 +1,7 @@
 # kaniko - Build Images In Kubernetes
 
 > [!IMPORTANT]
-> This repository is a **fork** of the original [GoogleContainerTools/kaniko](https://github.com/GoogleContainerTools/kaniko) project, now maintained by [Gosayram](https://github.com/Gosayram). The original Google Kaniko repository was archived on Jun 3, 2025. This fork continues development and maintenance to ensure the container image building tool remains available and functional for the community.
+> This repository is a **fork** of the original [Gosayram/kaniko](https://github.com/Gosayram/kaniko) project, now maintained by [Gosayram](https://github.com/Gosayram). The original Google Kaniko repository was archived on Jun 3, 2025. This fork continues development and maintenance to ensure the container image building tool remains available and functional for the community.
 
 [![Unit tests](https://github.com/Gosayram/kaniko/actions/workflows/unit-tests.yaml/badge.svg)](https://github.com/Gosayram/kaniko/actions/workflows/unit-tests.yaml)
 [![Integration tests](https://github.com/Gosayram/kaniko/actions/workflows/integration-tests.yaml/badge.svg)](https://github.com/Gosayram/kaniko/actions/workflows/integration-tests.yaml)

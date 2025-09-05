@@ -24,9 +24,9 @@ import (
 	"strings"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob"
-	kConfig "github.com/GoogleContainerTools/kaniko/pkg/config"
-	"github.com/GoogleContainerTools/kaniko/pkg/constants"
-	"github.com/GoogleContainerTools/kaniko/pkg/util"
+	kConfig "github.com/Gosayram/kaniko/pkg/config"
+	"github.com/Gosayram/kaniko/pkg/constants"
+	"github.com/Gosayram/kaniko/pkg/util"
 )
 
 // AzureBlob struct for Azure Blob Storage processing

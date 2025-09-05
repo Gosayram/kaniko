@@ -12,13 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Bump these on release
-VERSION_MAJOR ?= 1
-VERSION_MINOR ?= 24
-VERSION_BUILD ?= 0
+# Single source of truth for version from .release-version file
+VERSION ?= $(shell cat .release-version 2>/dev/null || echo v1.24.0)
+# Extract version components for backward compatibility
+VERSION_MAJOR ?= $(shell echo $(VERSION) | sed 's/^v//' | cut -d. -f1)
+VERSION_MINOR ?= $(shell echo $(VERSION) | sed 's/^v//' | cut -d. -f2)
+VERSION_BUILD ?= $(shell echo $(VERSION) | sed 's/^v//' | cut -d. -f3)
 
-VERSION ?= v$(VERSION_MAJOR).$(VERSION_MINOR).$(VERSION_BUILD)
-VERSION_PACKAGE = $(REPOPATH/pkg/version)
+VERSION_PACKAGE = $(REPOPATH)/internal/version
 
 SHELL := /bin/bash
 GOOS ?= $(shell go env GOOS)
@@ -28,11 +29,12 @@ PROJECT := kaniko
 REGISTRY?=gcr.io/kaniko-project
 
 REPOPATH ?= $(ORG)/$(PROJECT)
-VERSION_PACKAGE = $(REPOPATH)/pkg/version
 
 GO_FILES := $(shell find . -type f -name '*.go' -not -path "./vendor/*")
 GO_LDFLAGS := '-extldflags "-static"
-GO_LDFLAGS += -X $(VERSION_PACKAGE).version=$(VERSION)
+GO_LDFLAGS += -X $(VERSION_PACKAGE).Version=$(VERSION)
+GO_LDFLAGS += -X $(VERSION_PACKAGE).Commit=$(shell git rev-parse --short HEAD 2>/dev/null || echo "none")
+GO_LDFLAGS += -X $(VERSION_PACKAGE).Date=$(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 GO_LDFLAGS += -w -s # Drop debugging symbols.
 GO_LDFLAGS += '
 

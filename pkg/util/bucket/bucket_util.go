@@ -24,7 +24,7 @@ import (
 	"strings"
 
 	"cloud.google.com/go/storage"
-	"github.com/GoogleContainerTools/kaniko/pkg/constants"
+	"github.com/Gosayram/kaniko/pkg/constants"
 	"google.golang.org/api/option"
 )
 

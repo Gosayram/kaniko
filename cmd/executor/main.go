@@ -17,14 +17,29 @@ limitations under the License.
 package main
 
 import (
+	"flag"
+	"fmt"
 	"os"
 
-	"github.com/GoogleContainerTools/kaniko/cmd/executor/cmd"
+	"github.com/Gosayram/kaniko/cmd/executor/cmd"
+	"github.com/Gosayram/kaniko/internal/version"
 
 	"github.com/google/slowjam/pkg/stacklog"
 )
 
 func main() {
+	// Handle --version flag before cobra initialization
+	showVersion := flag.Bool("version", false, "Print version information and exit")
+	flag.Parse()
+
+	if *showVersion {
+		fmt.Printf("Kaniko Executor\n")
+		fmt.Printf("Version: %s\n", version.Version)
+		fmt.Printf("Commit: %s\n", version.Commit)
+		fmt.Printf("Build date: %s\n", version.Date)
+		os.Exit(0)
+	}
+
 	s := stacklog.MustStartFromEnv("STACKLOG_PATH")
 	defer s.Stop()
 

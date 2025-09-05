@@ -21,8 +21,8 @@ import (
 	"os"
 	"testing"
 
-	"github.com/GoogleContainerTools/kaniko/pkg/config"
-	"github.com/GoogleContainerTools/kaniko/pkg/fakes"
+	"github.com/Gosayram/kaniko/pkg/config"
+	"github.com/Gosayram/kaniko/pkg/fakes"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 )
 

@@ -21,8 +21,8 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/GoogleContainerTools/kaniko/pkg/timing"
-	"github.com/GoogleContainerTools/kaniko/pkg/util"
+	"github.com/Gosayram/kaniko/pkg/timing"
+	"github.com/Gosayram/kaniko/pkg/util"
 )
 
 type LayeredMap struct {

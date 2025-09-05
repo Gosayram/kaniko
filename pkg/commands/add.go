@@ -24,9 +24,9 @@ import (
 	"github.com/moby/buildkit/frontend/dockerfile/instructions"
 	"github.com/pkg/errors"
 
-	"github.com/GoogleContainerTools/kaniko/pkg/dockerfile"
+	"github.com/Gosayram/kaniko/pkg/dockerfile"
 
-	"github.com/GoogleContainerTools/kaniko/pkg/util"
+	"github.com/Gosayram/kaniko/pkg/util"
 	"github.com/sirupsen/logrus"
 )
 

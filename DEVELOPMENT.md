@@ -36,7 +36,7 @@ To check out this repository:
   cd ${GOPATH}/src/github.com/GoogleContainerTools
   git clone git@github.com:${YOUR_GITHUB_USERNAME}/kaniko.git
   cd kaniko
-  git remote add upstream git@github.com:GoogleContainerTools/kaniko.git
+  git remote add upstream git@github.com:Gosayram/kaniko.git
   git remote set-url --push upstream no_push
   ```
 

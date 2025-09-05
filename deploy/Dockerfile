@@ -19,6 +19,11 @@ WORKDIR /src
 ARG TARGETARCH
 ARG TARGETOS
 
+# Version injection arguments
+ARG VERSION=dev
+ARG COMMIT=none
+ARG DATE=unknown
+
 ENV GOARCH=$TARGETARCH
 ENV GOOS=$TARGETOS
 
@@ -52,6 +57,10 @@ RUN go install github.com/chrismellard/docker-credential-acr-env
 RUN \
   --mount=type=cache,target=/root/.cache/go-build \
   --mount=type=cache,target=/go/pkg \
+  GO_LDFLAGS="-X 'github.com/Gosayram/kaniko/internal/version.Version=${VERSION}' \
+              -X 'github.com/Gosayram/kaniko/internal/version.Commit=${COMMIT}' \
+              -X 'github.com/Gosayram/kaniko/internal/version.Date=${DATE}' \
+              -s -w" \
   make out/executor out/warmer
 
 # Generate latest ca-certificates

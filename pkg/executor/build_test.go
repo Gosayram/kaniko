@@ -27,12 +27,12 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/GoogleContainerTools/kaniko/pkg/cache"
-	"github.com/GoogleContainerTools/kaniko/pkg/commands"
-	"github.com/GoogleContainerTools/kaniko/pkg/config"
-	"github.com/GoogleContainerTools/kaniko/pkg/dockerfile"
-	"github.com/GoogleContainerTools/kaniko/pkg/util"
-	"github.com/GoogleContainerTools/kaniko/testutil"
+	"github.com/Gosayram/kaniko/pkg/cache"
+	"github.com/Gosayram/kaniko/pkg/commands"
+	"github.com/Gosayram/kaniko/pkg/config"
+	"github.com/Gosayram/kaniko/pkg/dockerfile"
+	"github.com/Gosayram/kaniko/pkg/util"
+	"github.com/Gosayram/kaniko/testutil"
 	"github.com/containerd/containerd/platforms"
 	"github.com/google/go-cmp/cmp"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
@@ -1627,7 +1627,7 @@ func hashCompositeKeys(t *testing.T, ck1 CompositeCache, ck2 CompositeCache) (st
 }
 
 func Test_stageBuild_populateCompositeKeyForCopyCommand(t *testing.T) {
-	// See https://github.com/GoogleContainerTools/kaniko/issues/589
+	// See https://github.com/Gosayram/kaniko/issues/589
 
 	for _, tc := range []struct {
 		description      string

@@ -74,7 +74,7 @@ GO_LDFLAGS += -X $(MODULE)/internal/version.Version=$(VERSION)
 ```bash
 # Check current module path
 go list -m
-# Expected: github.com/GoogleContainerTools/kaniko
+# Expected: github.com/Gosayram/kaniko
 ```
 
 ### Step 2: Makefile Updates
