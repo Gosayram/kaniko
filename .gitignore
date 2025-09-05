@@ -10,3 +10,4 @@ BUILD.bazel
 cosign.key
 audit-reports/*
 test-results/*
+*.backup
