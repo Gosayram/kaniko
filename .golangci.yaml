@@ -15,13 +15,10 @@ linters:
     - goconst
     - gocritic
     - gocyclo
-    - gofmt
-    - goimports
     - goprintffuncname
     - gosec
-    - interfacer
+    - govet
     - lll
-    - maligned
     - misspell
     - mnd
     - nakedret
@@ -32,9 +29,6 @@ linters:
     - whitespace
   disable:
     - depguard
-    - errcheck
-    - gas
-    - scopelint
   settings:
     dupl:
       threshold: 100
@@ -56,8 +50,7 @@ linters:
     gocyclo:
       min-complexity: 15
     govet:
-      enable:
-        - shadow
+      check-shadowing: true
     lll:
       line-length: 120
     misspell:
@@ -92,16 +85,16 @@ linters:
   exclusions:
     generated: lax
     rules:
-      - linters:
+      - path: _test\.go
+        linters:
           - funlen
           - gocognit
           - mnd
-        path: _test\.go
-      - linters:
+      - path: ^cmd/
+        linters:
           - gochecknoinits
-        path: cmd/
       - path: (.+)\.go$
-        text: Error return value of .((os\.)?std(out|err)\..*|.*Close|.*Flush|os\.Remove(All)?|.*printf?|os\.(Un)?Setenv). is not checked
+        text: "Error return value of .((os\\.)?std(out|err)\\..*|.*Close|.*Flush|os\\.Remove(All)?|.*printf?|os\\.(Un)?Setenv). is not checked"
     paths:
       - .*\.pb\.go$
       - .*_test\.go$
