@@ -17,6 +17,7 @@ limitations under the License.
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"io/fs"
 	"os"
@@ -32,6 +33,8 @@ import (
 	"github.com/Gosayram/kaniko/pkg/constants"
 	"github.com/Gosayram/kaniko/pkg/executor"
 	"github.com/Gosayram/kaniko/pkg/logging"
+	"github.com/Gosayram/kaniko/pkg/multiplatform"
+	"github.com/Gosayram/kaniko/pkg/oci"
 	"github.com/Gosayram/kaniko/pkg/timing"
 	"github.com/Gosayram/kaniko/pkg/util"
 	"github.com/Gosayram/kaniko/pkg/util/proc"
@@ -187,12 +190,20 @@ var RootCmd = &cobra.Command{
 		if err := os.Chdir("/"); err != nil {
 			exit(errors.Wrap(err, "error changing to root dir"))
 		}
-		image, err := executor.DoBuild(opts)
-		if err != nil {
-			exit(errors.Wrap(err, "error building image"))
-		}
-		if err := executor.DoPush(image, opts); err != nil {
-			exit(errors.Wrap(err, "error pushing image"))
+		// Handle multi-platform builds
+		if len(opts.MultiPlatform) > 0 {
+			if err := executeMultiPlatformBuild(opts); err != nil {
+				exit(errors.Wrap(err, "error executing multi-platform build"))
+			}
+		} else {
+			// Single platform build (legacy behavior)
+			image, err := executor.DoBuild(opts)
+			if err != nil {
+				exit(errors.Wrap(err, "error building image"))
+			}
+			if err := executor.DoPush(image, opts); err != nil {
+				exit(errors.Wrap(err, "error pushing image"))
+			}
 		}
 
 		benchmarkFile := os.Getenv("BENCHMARK_FILE")
@@ -510,4 +521,36 @@ func isURL(path string) bool {
 
 func shdSkip(path string) bool {
 	return path == "" || isURL(path) || filepath.IsAbs(path)
+}
+
+// executeMultiPlatformBuild handles multi-platform builds using the coordinator
+func executeMultiPlatformBuild(opts *config.KanikoOptions) error {
+	// Import the multiplatform package to avoid circular imports
+	coordinator, err := multiplatform.NewCoordinator(opts)
+	if err != nil {
+		return errors.Wrap(err, "failed to create multi-platform coordinator")
+	}
+
+	// Log the multi-platform configuration
+	coordinator.LogMultiPlatformConfig()
+
+	// Execute the multi-platform build
+	index, err := coordinator.Execute(context.Background())
+	if err != nil {
+		return errors.Wrap(err, "multi-platform build failed")
+	}
+
+	// Push the index if requested
+	if opts.PublishIndex && index != nil {
+		if err := oci.PushIndex(index, opts); err != nil {
+			return errors.Wrap(err, "failed to push image index")
+		}
+	}
+
+	// Cleanup
+	if err := coordinator.Cleanup(); err != nil {
+		logrus.Warnf("Multi-platform cleanup failed: %v", err)
+	}
+
+	return nil
 }

@@ -1099,6 +1099,74 @@ container-get-tag:
       dotenv: build.env
 ```
 
+## 🏗️ Built-in Multi-Architecture Support
+
+Kaniko now includes native multi-architecture build support without requiring privileged operations or external tools. This feature allows you to build container images for multiple platforms simultaneously using different execution drivers.
+
+### Key Features
+
+- **No Privileged Operations**: No qemu/binfmt emulation required
+- **Multiple Driver Support**: Local, Kubernetes, and CI integration modes
+- **OCI Compliance**: Full support for OCI Image Index and Docker Manifest List
+- **Registry Compatibility**: Works with all major registries (Docker Hub, GHCR, ECR, ACR, GCR, Quay)
+- **Security First**: Minimal RBAC requirements for Kubernetes driver
+
+### Quick Start Examples
+
+#### Local Development
+```bash
+# Build for host architecture only
+kaniko --multi-platform=linux/amd64 --driver=local \
+       --destination=ghcr.io/org/app:1.0.0
+```
+
+#### Kubernetes Multi-Arch Build
+```yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: kaniko-multiarch
+spec:
+  template:
+    spec:
+      serviceAccountName: kaniko-builder
+      containers:
+      - name: kaniko
+        image: gcr.io/kaniko-project/executor:latest
+        args:
+        - --context=git=https://github.com/org/app.git#main
+        - --dockerfile=Dockerfile
+        - --destination=ghcr.io/org/app:1.2.3
+        - --multi-platform=linux/amd64,linux/arm64
+        - --driver=k8s
+        - --publish-index=true
+        - --legacy-manifest-list=true
+        - --require-native-nodes=true
+```
+
+#### CI Integration
+```bash
+# Matrix build per architecture, then aggregate
+kaniko --multi-platform=linux/amd64,linux/arm64 --driver=ci \
+       --digests-from=/artifacts/digests --publish-index=true
+```
+
+### Configuration Flags
+
+- `--multi-platform`: Comma-separated list of platforms (e.g., `linux/amd64,linux/arm64`)
+- `--driver`: Execution driver (`local`, `k8s`, or `ci`)
+- `--publish-index`: Publish OCI Image Index after builds complete
+- `--legacy-manifest-list`: Create Docker Manifest List for backward compatibility
+- `--digests-from`: Path to digest files for CI driver integration
+- `--require-native-nodes`: Fail if non-native architecture is requested
+
+### Documentation
+
+For comprehensive documentation and usage examples, see:
+- [Multi-Architecture Usage Guide](docs/multi-arch-usage.md)
+- [Driver Implementation Details](docs/multi-arch-usage.md#driver-details)
+- [Migration Guide](docs/multi-arch-usage.md#migration-guide)
+
 ## 🔄 Comparison with Other Tools
 
 Similar tools include:

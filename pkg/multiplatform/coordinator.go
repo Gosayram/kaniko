@@ -68,6 +68,11 @@ func (c *Coordinator) Execute(ctx context.Context) (v1.ImageIndex, error) {
 		return nil, errors.New("no platforms specified for multi-platform build")
 	}
 
+	// Perform pre-flight checks
+	if err := c.preFlightChecks(platforms); err != nil {
+		return nil, errors.Wrap(err, "pre-flight checks failed")
+	}
+
 	// Validate platforms
 	if err := c.driver.ValidatePlatforms(platforms); err != nil {
 		return nil, errors.Wrap(err, "platform validation failed")
@@ -97,15 +102,75 @@ func (c *Coordinator) Cleanup() error {
 	return c.driver.Cleanup()
 }
 
+// preFlightChecks performs validation and sanity checks before starting builds
+func (c *Coordinator) preFlightChecks(platforms []string) error {
+	logrus.Info("Performing multi-platform pre-flight checks")
+	
+	// Check for duplicate platforms
+	platformSet := make(map[string]bool)
+	for _, platform := range platforms {
+		if platformSet[platform] {
+			return fmt.Errorf("duplicate platform specified: %s", platform)
+		}
+		platformSet[platform] = true
+	}
+
+	// Validate platform format
+	for _, platform := range platforms {
+		parts := strings.Split(platform, "/")
+		if len(parts) != 2 {
+			return fmt.Errorf("invalid platform format: %s (expected os/arch)", platform)
+		}
+		
+		os, arch := parts[0], parts[1]
+		if os == "" || arch == "" {
+			return fmt.Errorf("invalid platform format: %s (both os and arch must be specified)", platform)
+		}
+	}
+
+	// Validate driver-specific requirements
+	switch c.opts.Driver {
+	case "local":
+		if len(platforms) > 1 {
+			logrus.Warn("Local driver selected with multiple platforms - only host architecture will be built")
+		}
+	case "k8s":
+		if c.opts.RequireNativeNodes {
+			logrus.Info("Kubernetes driver will require native architecture nodes")
+		}
+	case "ci":
+		if c.opts.DigestsFrom == "" {
+			return errors.New("CI driver requires --digests-from path")
+		}
+	}
+
+	// Validate publish index requirements
+	if c.opts.PublishIndex && len(c.opts.Destinations) == 0 {
+		return errors.New("cannot publish index without destination registries")
+	}
+
+	// Validate cache repository suffix for multi-arch
+	if c.opts.Cache && c.opts.CacheRepo != "" && strings.Contains(c.opts.ArchCacheRepoSuffix, "${ARCH}") {
+		if len(platforms) > 1 {
+			logrus.Info("Using architecture-specific cache repositories for multi-platform build")
+		}
+	}
+
+	logrus.Info("Pre-flight checks completed successfully")
+	return nil
+}
+
 // getDriver returns the appropriate driver based on configuration
 func getDriver(opts *config.KanikoOptions) (Driver, error) {
 	switch opts.Driver {
 	case "local":
 		return NewLocalDriver(opts), nil
 	case "k8s":
-		return NewKubernetesDriver(opts), nil
+		driver, err := NewKubernetesDriver(opts)
+		return driver, err
 	case "ci":
-		return NewCIDriver(opts), nil
+		driver, err := NewCIDriver(opts)
+		return driver, err
 	default:
 		return nil, fmt.Errorf("unsupported driver: %s", opts.Driver)
 	}
