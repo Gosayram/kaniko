@@ -127,13 +127,13 @@ install-tools:
 lint: install-tools
 	@if command -v $(GOLANGCI_LINT) >/dev/null 2>&1; then \
 		echo "Running linter..."; \
-		$(GOLANGCI_LINT) run --timeout=5m; \
+		GOARCH=$(GOARCH) GOOS=$(GOOS) CGO_ENABLED=0 $(GOLANGCI_LINT) run --timeout=5m; \
 		echo "Linter completed!"; \
 	else \
 		echo "golangci-lint is not installed. Installing..."; \
 		GOFLAGS="" go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest; \
 		echo "Running linter..."; \
-		$(GOLANGCI_LINT) run --timeout=5m; \
+		GOARCH=$(GOARCH) GOOS=$(GOOS) CGO_ENABLED=0 $(GOLANGCI_LINT) run --timeout=5m; \
 		echo "Linter completed!"; \
 	fi
 
