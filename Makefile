@@ -26,6 +26,8 @@ GOOS ?= linux
 GOARCH ?= amd64
 ORG := github.com/Gosayram
 PROJECT := kaniko
+GOPATH ?= $(shell go env GOPATH)
+GOLANGCI_LINT = $(GOPATH)/bin/golangci-lint
 REGISTRY?=gcr.io/Gosayram/kaniko
 
 REPOPATH ?= $(ORG)/$(PROJECT)
@@ -113,3 +115,27 @@ push:
 	docker push $(REGISTRY)/executor:debug
 	docker push $(REGISTRY)/executor:slim
 	docker push $(REGISTRY)/warmer:latest
+
+# Code quality
+.PHONY: install-tools lint check-all
+
+install-tools:
+	@echo "Installing development tools..."
+	GOFLAGS="" go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
+	@echo "Development tools installed successfully"
+
+lint: install-tools
+	@if command -v $(GOLANGCI_LINT) >/dev/null 2>&1; then \
+		echo "Running linter..."; \
+		$(GOLANGCI_LINT) run --timeout=5m; \
+		echo "Linter completed!"; \
+	else \
+		echo "golangci-lint is not installed. Installing..."; \
+		GOFLAGS="" go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest; \
+		echo "Running linter..."; \
+		$(GOLANGCI_LINT) run --timeout=5m; \
+		echo "Linter completed!"; \
+	fi
+
+check-all: lint
+	@echo "All code quality checks completed"

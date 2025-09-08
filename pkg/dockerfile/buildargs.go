@@ -25,6 +25,8 @@ import (
 
 type BuildArgs struct {
 	d.BuildArgs
+	allowedArgs     map[string]*string
+	allowedMetaArgs map[string]*string
 }
 
 func NewBuildArgs(args []string) *BuildArgs {
@@ -38,14 +40,38 @@ func NewBuildArgs(args []string) *BuildArgs {
 		}
 	}
 	return &BuildArgs{
-		BuildArgs: *d.NewBuildArgs(argsFromOptions),
+		BuildArgs:      *d.NewBuildArgs(argsFromOptions),
+		allowedArgs:    argsFromOptions,
+		allowedMetaArgs: make(map[string]*string),
 	}
 }
 
 func (b *BuildArgs) Clone() *BuildArgs {
 	clone := b.BuildArgs.Clone()
+	allowedArgsClone := make(map[string]*string)
+	for k, v := range b.allowedArgs {
+		if v != nil {
+			sv := *v
+			cloneV := &sv
+			allowedArgsClone[k] = cloneV
+		} else {
+			allowedArgsClone[k] = nil
+		}
+	}
+	allowedMetaArgsClone := make(map[string]*string)
+	for k, v := range b.allowedMetaArgs {
+		if v != nil {
+			sv := *v
+			cloneV := &sv
+			allowedMetaArgsClone[k] = cloneV
+		} else {
+			allowedMetaArgsClone[k] = nil
+		}
+	}
 	return &BuildArgs{
-		BuildArgs: *clone,
+		BuildArgs:      *clone,
+		allowedArgs:    allowedArgsClone,
+		allowedMetaArgs: allowedMetaArgsClone,
 	}
 }
 
@@ -67,4 +93,21 @@ func (b *BuildArgs) AddMetaArgs(metaArgs []instructions.ArgCommand) {
 			b.AddMetaArg(arg.Key, v)
 		}
 	}
+}
+
+func (b *BuildArgs) FilterAllowed(envs []string) []string {
+	var filtered []string
+	for _, env := range envs {
+		parts := strings.SplitN(env, "=", 2)
+		if len(parts) >= 1 {
+			if _, ok := b.allowedArgs[parts[0]]; ok {
+				filtered = append(filtered, env)
+			}
+		}
+	}
+	return filtered
+}
+
+func (b *BuildArgs) AddMetaArg(key string, value *string) {
+	b.allowedMetaArgs[key] = value
 }

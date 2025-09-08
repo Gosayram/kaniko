@@ -14,6 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// Package oci provides functionality for building, manipulating, and pushing OCI image indices and Docker manifest lists in Kaniko.
 package oci
 
 import (
