@@ -320,7 +320,7 @@ func trySyncFs(dir *os.File) {
 	// syncfs system call numbers for different architectures
 	// These values are from the Linux kernel and may vary by architecture
 	var syncFsSyscallNum uintptr
-	
+
 	// Determine the appropriate syscall number based on architecture
 	switch runtime.GOARCH {
 	case "amd64", "386":
@@ -334,7 +334,7 @@ func trySyncFs(dir *os.File) {
 		syscall.Sync()
 		return
 	}
-	
+
 	// Try the syncfs system call
 	_, _, errno := syscall.Syscall(syncFsSyscallNum, dir.Fd(), 0, 0)
 	if errno != 0 {

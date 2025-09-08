@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"syscall"
 
@@ -74,8 +75,14 @@ func runCommandInExec(config *v1.Config, buildArgs *dockerfile.BuildArgs, cmdRun
 				continue
 			}
 			oldPath := os.Getenv("PATH")
-			defer os.Setenv("PATH", oldPath)
-			os.Setenv("PATH", entry[1])
+			defer func() {
+				if setErr := os.Setenv("PATH", oldPath); setErr != nil {
+					logrus.Warnf("Failed to restore PATH: %v", setErr)
+				}
+			}()
+			if setErr := os.Setenv("PATH", entry[1]); setErr != nil {
+				return errors.Wrap(setErr, "setting PATH")
+			}
 			path, err := exec.LookPath(newCommand[0])
 			if err == nil {
 				newCommand[0] = path
@@ -86,6 +93,24 @@ func runCommandInExec(config *v1.Config, buildArgs *dockerfile.BuildArgs, cmdRun
 	logrus.Infof("Cmd: %s", newCommand[0])
 	logrus.Infof("Args: %s", newCommand[1:])
 
+	// Validate command arguments to prevent command injection
+	for _, arg := range newCommand {
+		if strings.ContainsAny(arg, "&|;") {
+			return errors.Errorf("invalid character in command argument: %q", arg)
+		}
+	}
+	// Additional validation for command path
+	if !filepath.IsAbs(newCommand[0]) {
+		if _, err := exec.LookPath(newCommand[0]); err != nil {
+			return errors.Wrapf(err, "invalid command path: %s", newCommand[0])
+		}
+	}
+	// Additional validation for command path
+	if !filepath.IsAbs(newCommand[0]) {
+		if _, err := exec.LookPath(newCommand[0]); err != nil {
+			return errors.Wrapf(err, "invalid command path: %s", newCommand[0])
+		}
+	}
 	cmd := exec.Command(newCommand[0], newCommand[1:]...)
 
 	cmd.Dir = setWorkDirIfExists(config.WorkingDir)

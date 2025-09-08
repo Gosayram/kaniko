@@ -192,6 +192,11 @@ func ParseDockerfile(opts *config.WarmerOptions) ([]string, error) {
 		if e != nil {
 			return nil, e
 		}
+		defer func() {
+			if err := response.Body.Close(); err != nil {
+				logrus.Warnf("Failed to close response body: %v", err)
+			}
+		}()
 		d, err = io.ReadAll(response.Body)
 	} else {
 		d, err = os.ReadFile(opts.DockerfilePath)
@@ -206,12 +211,12 @@ func ParseDockerfile(opts *config.WarmerOptions) ([]string, error) {
 		return nil, errors.Wrap(err, "parsing dockerfile")
 	}
 
-	for i, s := range stages {
-		resolvedBaseName, err := util.ResolveEnvironmentReplacement(s.BaseName, opts.BuildArgs, false)
+	for i := range stages {
+		resolvedBaseName, err := util.ResolveEnvironmentReplacement(stages[i].BaseName, opts.BuildArgs, false)
 		if err != nil {
-			return nil, errors.Wrap(err, fmt.Sprintf("resolving base name %s", s.BaseName))
+			return nil, errors.Wrap(err, fmt.Sprintf("resolving base name %s", stages[i].BaseName))
 		}
-		if s.BaseName != resolvedBaseName {
+		if stages[i].BaseName != resolvedBaseName {
 			stages[i].BaseName = resolvedBaseName
 		}
 		baseNames = append(baseNames, resolvedBaseName)

@@ -40,8 +40,8 @@ func NewBuildArgs(args []string) *BuildArgs {
 		}
 	}
 	return &BuildArgs{
-		BuildArgs:      *d.NewBuildArgs(argsFromOptions),
-		allowedArgs:    argsFromOptions,
+		BuildArgs:       *d.NewBuildArgs(argsFromOptions),
+		allowedArgs:     argsFromOptions,
 		allowedMetaArgs: make(map[string]*string),
 	}
 }
@@ -69,8 +69,8 @@ func (b *BuildArgs) Clone() *BuildArgs {
 		}
 	}
 	return &BuildArgs{
-		BuildArgs:      *clone,
-		allowedArgs:    allowedArgsClone,
+		BuildArgs:       *clone,
+		allowedArgs:     allowedArgsClone,
 		allowedMetaArgs: allowedMetaArgsClone,
 	}
 }

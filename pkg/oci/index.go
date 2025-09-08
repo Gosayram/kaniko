@@ -58,7 +58,7 @@ func BuildIndex(manifests map[string]string, opts *config.KanikoOptions) (v1.Ima
 // buildOCIImageIndex creates an OCI Image Index (application/vnd.oci.image.index.v1+json)
 func buildOCIImageIndex(manifests map[string]string, opts *config.KanikoOptions) (v1.ImageIndex, error) {
 	logrus.Info("Creating OCI Image Index")
-	
+
 	// Create a simple index implementation
 	index := &simpleIndex{
 		mediaType: types.OCIImageIndex,
@@ -92,7 +92,7 @@ func buildOCIImageIndex(manifests map[string]string, opts *config.KanikoOptions)
 // buildDockerManifestList creates a Docker Manifest List (application/vnd.docker.distribution.manifest.list.v2+json)
 func buildDockerManifestList(manifests map[string]string, opts *config.KanikoOptions) (v1.ImageIndex, error) {
 	logrus.Info("Creating Docker Manifest List")
-	
+
 	// Create a simple index implementation
 	index := &simpleIndex{
 		mediaType: types.DockerManifestList,
@@ -120,8 +120,8 @@ func buildDockerManifestList(manifests map[string]string, opts *config.KanikoOpt
 
 // simpleIndex is a basic implementation of v1.ImageIndex
 type simpleIndex struct {
-	mediaType  types.MediaType
-	manifests  []v1.Descriptor
+	mediaType   types.MediaType
+	manifests   []v1.Descriptor
 	annotations map[string]string
 }
 
@@ -142,9 +142,9 @@ func (s *simpleIndex) Size() (int64, error) {
 func (s *simpleIndex) IndexManifest() (*v1.IndexManifest, error) {
 	manifest := &v1.IndexManifest{
 		SchemaVersion: 2,
-		MediaType:      s.mediaType,
-		Manifests:      s.manifests,
-		Annotations:    s.annotations,
+		MediaType:     s.mediaType,
+		Manifests:     s.manifests,
+		Annotations:   s.annotations,
 	}
 	return manifest, nil
 }
@@ -207,7 +207,7 @@ func PushIndex(index v1.ImageIndex, opts *config.KanikoOptions) error {
 		}
 
 		logrus.Infof("Pushing image index to %s", destination)
-		
+
 		// This would use the existing kaniko push infrastructure with proper authentication
 		// For now, it's a placeholder
 		if err := remote.WriteIndex(destRef, index); err != nil {

@@ -378,7 +378,7 @@ func ExtractFile(dest string, hdr *tar.Header, cleanedName string, tr io.Reader)
 			return nil
 		}
 		// The base directory for a link may not exist before it is created.
-		if err := os.MkdirAll(dir, 0o755); err != nil {
+		if err := os.MkdirAll(dir, 0o750); err != nil {
 			return err
 		}
 		// Check if something already exists at path
@@ -396,7 +396,7 @@ func ExtractFile(dest string, hdr *tar.Header, cleanedName string, tr io.Reader)
 	case tar.TypeSymlink:
 		logrus.Tracef("Symlink from %s to %s", hdr.Linkname, path)
 		// The base directory for a symlink may not exist before it is created.
-		if err := os.MkdirAll(dir, 0o755); err != nil {
+		if err := os.MkdirAll(dir, 0o750); err != nil {
 			return err
 		}
 		// Check if something already exists at path
@@ -917,7 +917,7 @@ func CreateTargetTarfile(tarpath string) (*os.File, error) {
 	baseDir := filepath.Dir(tarpath)
 	if _, err := os.Lstat(baseDir); os.IsNotExist(err) {
 		logrus.Debugf("BaseDir %s for file %s does not exist. Creating.", baseDir, tarpath)
-		if err := os.MkdirAll(baseDir, 0o755); err != nil {
+		if err := os.MkdirAll(baseDir, 0o750); err != nil {
 			return nil, err
 		}
 	}
@@ -1054,10 +1054,14 @@ func createParentDirectory(path string, uid int, gid int) error {
 			dir := dirs[i]
 
 			if _, err := os.Lstat(dir); os.IsNotExist(err) {
-				os.Mkdir(dir, 0o755)
+				if err := os.Mkdir(dir, 0o755); err != nil {
+					return errors.Wrapf(err, "failed to create directory %s", dir)
+				}
 				if uid != DoNotChangeUID {
 					if gid != DoNotChangeGID {
-						os.Chown(dir, uid, gid)
+						if err := os.Chown(dir, uid, gid); err != nil {
+							return errors.Wrapf(err, "failed to chown directory %s", dir)
+						}
 					} else {
 						return errors.New(fmt.Sprintf("UID=%d but GID=-1, i.e. it is not set for %s", uid, dir))
 					}
@@ -1163,11 +1167,13 @@ func gowalkDir(dir string, existingPaths map[string]struct{}, changeFunc func(st
 		return nil
 	}
 
-	godirwalk.Walk(dir,
+	if err := godirwalk.Walk(dir,
 		&godirwalk.Options{
 			Callback: callback,
 			Unsorted: true,
-		})
+		}); err != nil {
+		return walkFSResult{nil, deletedFiles}
+	}
 
 	return walkFSResult{foundPaths, deletedFiles}
 }
@@ -1177,7 +1183,7 @@ func GetFSInfoMap(dir string, existing map[string]os.FileInfo) (map[string]os.Fi
 	fileMap := map[string]os.FileInfo{}
 	foundPaths := []string{}
 	timer := timing.Start("Walking filesystem with Stat")
-	godirwalk.Walk(dir, &godirwalk.Options{
+	if err := godirwalk.Walk(dir, &godirwalk.Options{
 		Callback: func(path string, ent *godirwalk.Dirent) error {
 			if CheckCleanedPathAgainstIgnoreList(path) {
 				if IsDestDir(path) {
@@ -1202,8 +1208,9 @@ func GetFSInfoMap(dir string, existing map[string]os.FileInfo) (map[string]os.Fi
 			return nil
 		},
 		Unsorted: true,
-	},
-	)
+	}); err != nil {
+		return fileMap, foundPaths
+	}
 	timing.DefaultRun.Stop(timer)
 	return fileMap, foundPaths
 }

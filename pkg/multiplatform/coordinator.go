@@ -23,7 +23,7 @@ import (
 
 	"github.com/Gosayram/kaniko/pkg/config"
 	"github.com/Gosayram/kaniko/pkg/oci"
-	"github.com/google/go-containerregistry/pkg/v1"
+	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 )
@@ -39,10 +39,10 @@ type Coordinator struct {
 type Driver interface {
 	// ValidatePlatforms checks if the requested platforms are supported
 	ValidatePlatforms(platforms []string) error
-	
+
 	// ExecuteBuilds performs builds for the specified platforms
 	ExecuteBuilds(ctx context.Context, platforms []string) (map[string]string, error)
-	
+
 	// Cleanup performs any necessary cleanup after builds
 	Cleanup() error
 }
@@ -105,7 +105,7 @@ func (c *Coordinator) Cleanup() error {
 // preFlightChecks performs validation and sanity checks before starting builds
 func (c *Coordinator) preFlightChecks(platforms []string) error {
 	logrus.Info("Performing multi-platform pre-flight checks")
-	
+
 	// Check for duplicate platforms
 	platformSet := make(map[string]bool)
 	for _, platform := range platforms {
@@ -121,7 +121,7 @@ func (c *Coordinator) preFlightChecks(platforms []string) error {
 		if len(parts) != 2 {
 			return fmt.Errorf("invalid platform format: %s (expected os/arch)", platform)
 		}
-		
+
 		os, arch := parts[0], parts[1]
 		if os == "" || arch == "" {
 			return fmt.Errorf("invalid platform format: %s (both os and arch must be specified)", platform)
@@ -198,7 +198,7 @@ func (c *Coordinator) LogMultiPlatformConfig() {
 	logrus.Infof("  Legacy Manifest List: %t", c.opts.LegacyManifestList)
 	logrus.Infof("  Require Native Nodes: %t", c.opts.RequireNativeNodes)
 	logrus.Infof("  OCI Mode: %s", c.opts.OCIMode)
-	
+
 	if len(c.opts.IndexAnnotations) > 0 {
 		logrus.Infof("  Index Annotations: %v", c.opts.IndexAnnotations)
 	}

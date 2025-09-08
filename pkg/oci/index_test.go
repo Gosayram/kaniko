@@ -26,19 +26,19 @@ import (
 
 func TestBuildIndex(t *testing.T) {
 	tests := []struct {
-		name        string
-		manifests   map[string]string
-		opts        *config.KanikoOptions
-		wantErr     bool
-		expectedLen int
+		name              string
+		manifests         map[string]string
+		opts              *config.KanikoOptions
+		wantErr           bool
+		expectedLen       int
 		expectedMediaType string
 	}{
 		{
-			name:        "empty manifests",
-			manifests:   map[string]string{},
-			opts:        &config.KanikoOptions{PublishIndex: true},
-			wantErr:     true,
-			expectedLen: 0,
+			name:              "empty manifests",
+			manifests:         map[string]string{},
+			opts:              &config.KanikoOptions{PublishIndex: true},
+			wantErr:           true,
+			expectedLen:       0,
 			expectedMediaType: "",
 		},
 		{
@@ -46,9 +46,9 @@ func TestBuildIndex(t *testing.T) {
 			manifests: map[string]string{
 				"linux/amd64": "sha256:abc123def4567890123456789012345678901234567890123456789012345678",
 			},
-			opts:        &config.KanikoOptions{PublishIndex: true, LegacyManifestList: false},
-			wantErr:     false,
-			expectedLen: 1,
+			opts:              &config.KanikoOptions{PublishIndex: true, LegacyManifestList: false},
+			wantErr:           false,
+			expectedLen:       1,
 			expectedMediaType: string(types.OCIImageIndex),
 		},
 		{
@@ -57,9 +57,9 @@ func TestBuildIndex(t *testing.T) {
 				"linux/amd64": "sha256:abc123def4567890123456789012345678901234567890123456789012345678",
 				"linux/arm64": "sha256:def4567890123456789012345678901234567890123456789012345678901234",
 			},
-			opts:        &config.KanikoOptions{PublishIndex: true, LegacyManifestList: false},
-			wantErr:     false,
-			expectedLen: 2,
+			opts:              &config.KanikoOptions{PublishIndex: true, LegacyManifestList: false},
+			wantErr:           false,
+			expectedLen:       2,
 			expectedMediaType: string(types.OCIImageIndex),
 		},
 		{
@@ -67,9 +67,9 @@ func TestBuildIndex(t *testing.T) {
 			manifests: map[string]string{
 				"linux/amd64": "sha256:abc123def4567890123456789012345678901234567890123456789012345678",
 			},
-			opts:        &config.KanikoOptions{PublishIndex: true, LegacyManifestList: true},
-			wantErr:     false,
-			expectedLen: 1,
+			opts:              &config.KanikoOptions{PublishIndex: true, LegacyManifestList: true},
+			wantErr:           false,
+			expectedLen:       1,
 			expectedMediaType: string(types.DockerManifestList),
 		},
 		{
@@ -78,9 +78,9 @@ func TestBuildIndex(t *testing.T) {
 				"linux/amd64": "sha256:abc123def4567890123456789012345678901234567890123456789012345678",
 				"linux/arm64": "sha256:def4567890123456789012345678901234567890123456789012345678901234",
 			},
-			opts:        &config.KanikoOptions{PublishIndex: true, LegacyManifestList: true},
-			wantErr:     false,
-			expectedLen: 2,
+			opts:              &config.KanikoOptions{PublishIndex: true, LegacyManifestList: true},
+			wantErr:           false,
+			expectedLen:       2,
 			expectedMediaType: string(types.DockerManifestList),
 		},
 		{
@@ -88,9 +88,9 @@ func TestBuildIndex(t *testing.T) {
 			manifests: map[string]string{
 				"linux/amd64": "sha256:abc123def4567890123456789012345678901234567890123456789012345678",
 			},
-			opts:        &config.KanikoOptions{PublishIndex: false},
-			wantErr:     true,
-			expectedLen: 0,
+			opts:              &config.KanikoOptions{PublishIndex: false},
+			wantErr:           true,
+			expectedLen:       0,
 			expectedMediaType: "",
 		},
 	}
@@ -146,7 +146,7 @@ func TestBuildIndex_Annotations(t *testing.T) {
 		"linux/amd64": "sha256:abc123def4567890123456789012345678901234567890123456789012345678",
 	}
 	opts := &config.KanikoOptions{
-		PublishIndex:     true,
+		PublishIndex: true,
 		IndexAnnotations: map[string]string{
 			"key1": "value1",
 			"key2": "value2",

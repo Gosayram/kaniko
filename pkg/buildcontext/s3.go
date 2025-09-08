@@ -72,10 +72,14 @@ func (s *S3) UnpackTarFromBuildContext() (string, error) {
 	downloader := s3manager.NewDownloader(client)
 	directory := kConfig.BuildContextDir
 	tarPath := filepath.Join(directory, constants.ContextTar)
-	if err := os.MkdirAll(directory, 0750); err != nil {
+	if err := os.MkdirAll(directory, 0o750); err != nil {
 		return directory, err
 	}
-	file, err := os.Create(tarPath)
+	// Ensure tarPath stays within the intended directory
+	if !strings.HasPrefix(filepath.Clean(tarPath), directory) {
+		return directory, fmt.Errorf("potential path traversal attempt - tarPath %s not within directory %s", tarPath, directory)
+	}
+	file, err := os.Create(filepath.Clean(tarPath))
 	if err != nil {
 		return directory, err
 	}

@@ -153,8 +153,12 @@ func writeDigestFile(path string, digestByteArray []byte) error {
 			return err
 		}
 		req.Header.Set("Content-Type", "text/plain")
-		_, err = http.DefaultClient.Do(req)
-		return err
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return err
+		}
+		defer resp.Body.Close()
+		return nil
 	}
 
 	parentDir := filepath.Dir(path)
@@ -165,7 +169,7 @@ func writeDigestFile(path string, digestByteArray []byte) error {
 		}
 		logrus.Tracef("Created directory %v", parentDir)
 	}
-	return os.WriteFile(path, digestByteArray, 0644)
+	return os.WriteFile(path, digestByteArray, 0600)
 }
 
 // DoPush is responsible for pushing image to the destinations specified in opts.
@@ -173,49 +177,89 @@ func writeDigestFile(path string, digestByteArray []byte) error {
 // is not empty with empty --destinations.
 func DoPush(image v1.Image, opts *config.KanikoOptions) error {
 	t := timing.Start("Total Push Time")
-	var digestByteArray []byte
-	var builder strings.Builder
+	defer timing.DefaultRun.Stop(t)
 
 	if !opts.NoPush && len(opts.Destinations) == 0 {
 		return errors.New("must provide at least one destination to push")
 	}
 
+	digestByteArray, err := handleDigestFiles(image, opts)
+	if err != nil {
+		return err
+	}
+
+	if err := handleOCILayout(image, opts); err != nil {
+		return err
+	}
+
+	if opts.NoPush && len(opts.Destinations) == 0 && opts.TarPath != "" {
+		setDummyDestinations(opts)
+	}
+
+	destRefs, err := createDestRefs(opts, digestByteArray)
+	if err != nil {
+		return err
+	}
+
+	if err := handleTarballCreation(image, opts, destRefs); err != nil {
+		return err
+	}
+
+	if opts.NoPush {
+		logrus.Info("Skipping push to container registry due to --no-push flag")
+		return nil
+	}
+
+	if err := pushToDestinations(image, opts, destRefs); err != nil {
+		return err
+	}
+
+	return writeImageOutputs(image, destRefs)
+}
+
+func handleDigestFiles(image v1.Image, opts *config.KanikoOptions) ([]byte, error) {
+	var digestByteArray []byte
+
 	if opts.DigestFile != "" || opts.ImageNameDigestFile != "" || opts.ImageNameTagDigestFile != "" {
 		var err error
 		digestByteArray, err = getDigest(image)
 		if err != nil {
-			return errors.Wrap(err, "error fetching digest")
+			return nil, errors.Wrap(err, "error fetching digest")
 		}
 	}
 
 	if opts.DigestFile != "" {
-		err := writeDigestFile(opts.DigestFile, digestByteArray)
-		if err != nil {
-			return errors.Wrap(err, "writing digest to file failed")
+		if err := writeDigestFile(opts.DigestFile, digestByteArray); err != nil {
+			return nil, errors.Wrap(err, "writing digest to file failed")
 		}
 	}
 
-	if opts.OCILayoutPath != "" {
-		path, err := layout.Write(opts.OCILayoutPath, empty.Index)
-		if err != nil {
-			return errors.Wrap(err, "writing empty layout")
-		}
-		if err := path.AppendImage(image); err != nil {
-			return errors.Wrap(err, "appending image")
-		}
+	return digestByteArray, nil
+}
+
+func handleOCILayout(image v1.Image, opts *config.KanikoOptions) error {
+	if opts.OCILayoutPath == "" {
+		return nil
 	}
 
-	if opts.NoPush && len(opts.Destinations) == 0 {
-		if opts.TarPath != "" {
-			setDummyDestinations(opts)
-		}
+	path, err := layout.Write(opts.OCILayoutPath, empty.Index)
+	if err != nil {
+		return errors.Wrap(err, "writing empty layout")
 	}
+	if err := path.AppendImage(image); err != nil {
+		return errors.Wrap(err, "appending image")
+	}
+	return nil
+}
 
+func createDestRefs(opts *config.KanikoOptions, digestByteArray []byte) ([]name.Tag, error) {
+	var builder strings.Builder
 	destRefs := []name.Tag{}
+
 	for _, destination := range opts.Destinations {
 		destRef, err := name.NewTag(destination, name.WeakValidation)
 		if err != nil {
-			return errors.Wrap(err, "getting tag for destination")
+			return nil, errors.Wrap(err, "getting tag for destination")
 		}
 		if opts.ImageNameDigestFile != "" || opts.ImageNameTagDigestFile != "" {
 			tag := ""
@@ -230,37 +274,36 @@ func DoPush(image v1.Image, opts *config.KanikoOptions) error {
 	}
 
 	if opts.ImageNameDigestFile != "" {
-		err := writeDigestFile(opts.ImageNameDigestFile, []byte(builder.String()))
-		if err != nil {
-			return errors.Wrap(err, "writing image name with digest to file failed")
+		if err := writeDigestFile(opts.ImageNameDigestFile, []byte(builder.String())); err != nil {
+			return nil, errors.Wrap(err, "writing image name with digest to file failed")
 		}
 	}
 
 	if opts.ImageNameTagDigestFile != "" {
-		err := writeDigestFile(opts.ImageNameTagDigestFile, []byte(builder.String()))
-		if err != nil {
-			return errors.Wrap(err, "writing image name with image tag and digest to file failed")
+		if err := writeDigestFile(opts.ImageNameTagDigestFile, []byte(builder.String())); err != nil {
+			return nil, errors.Wrap(err, "writing image name with image tag and digest to file failed")
 		}
 	}
 
-	if opts.TarPath != "" {
-		tagToImage := map[name.Tag]v1.Image{}
+	return destRefs, nil
+}
 
-		for _, destRef := range destRefs {
-			tagToImage[destRef] = image
-		}
-		err := tarball.MultiWriteToFile(opts.TarPath, tagToImage)
-		if err != nil {
-			return errors.Wrap(err, "writing tarball to file failed")
-		}
-	}
-
-	if opts.NoPush {
-		logrus.Info("Skipping push to container registry due to --no-push flag")
+func handleTarballCreation(image v1.Image, opts *config.KanikoOptions, destRefs []name.Tag) error {
+	if opts.TarPath == "" {
 		return nil
 	}
 
-	// continue pushing unless an error occurs
+	tagToImage := map[name.Tag]v1.Image{}
+	for _, destRef := range destRefs {
+		tagToImage[destRef] = image
+	}
+	if err := tarball.MultiWriteToFile(opts.TarPath, tagToImage); err != nil {
+		return errors.Wrap(err, "writing tarball to file failed")
+	}
+	return nil
+}
+
+func pushToDestinations(image v1.Image, opts *config.KanikoOptions, destRefs []name.Tag) error {
 	for _, destRef := range destRefs {
 		registryName := destRef.Repository.Registry.Name()
 		if opts.Insecure || opts.InsecureRegistries.Contains(registryName) {
@@ -314,8 +357,7 @@ func DoPush(image v1.Image, opts *config.KanikoOptions) error {
 			return errors.Wrap(err, fmt.Sprintf("failed to push to destination %s", destRef))
 		}
 	}
-	timing.DefaultRun.Stop(t)
-	return writeImageOutputs(image, destRefs)
+	return nil
 }
 
 func writeImageOutputs(image v1.Image, destRefs []name.Tag) error {

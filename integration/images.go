@@ -31,6 +31,8 @@ import (
 	"time"
 
 	"cloud.google.com/go/storage"
+	"github.com/sirupsen/logrus"
+
 	"github.com/Gosayram/kaniko/pkg/timing"
 	"github.com/Gosayram/kaniko/pkg/util"
 	"github.com/Gosayram/kaniko/pkg/util/bucket"
@@ -229,7 +231,7 @@ func NewDockerFileBuilder() *DockerFileBuilder {
 }
 
 func addServiceAccountFlags(flags []string, serviceAccount string) []string {
-	if len(serviceAccount) > 0 {
+	if serviceAccount != "" {
 		flags = append(flags, "-e",
 			"GOOGLE_APPLICATION_CREDENTIALS=/secret/"+filepath.Base(serviceAccount),
 			"-v", filepath.Dir(serviceAccount)+":/secret/")
@@ -257,7 +259,9 @@ func (d *DockerFileBuilder) BuildDockerImage(t *testing.T, imageRepo, dockerfile
 	}
 
 	// build docker image
-	additionalFlags := append(buildArgs, additionalDockerFlagsMap[dockerfile]...)
+	additionalFlags := make([]string, len(buildArgs))
+	copy(additionalFlags, buildArgs)
+	additionalFlags = append(additionalFlags, additionalDockerFlagsMap[dockerfile]...)
 	dockerImage := strings.ToLower(imageRepo + dockerPrefix + dockerfile)
 
 	dockerArgs := []string{
@@ -273,7 +277,15 @@ func (d *DockerFileBuilder) BuildDockerImage(t *testing.T, imageRepo, dockerfile
 	dockerArgs = append(dockerArgs, contextDir)
 	dockerArgs = append(dockerArgs, additionalFlags...)
 
-	dockerCmd := exec.Command("docker", dockerArgs...)
+	// Validate dockerArgs to prevent command injection
+	sanitizedArgs := make([]string, 0, len(dockerArgs))
+	for _, arg := range dockerArgs {
+		if strings.Contains(arg, "&") || strings.Contains(arg, "|") || strings.Contains(arg, ";") {
+			return fmt.Errorf("invalid character in docker argument: %q", arg)
+		}
+		sanitizedArgs = append(sanitizedArgs, arg)
+	}
+	dockerCmd := exec.Command("docker", sanitizedArgs...)
 	if env, ok := envsMap[dockerfile]; ok {
 		dockerCmd.Env = append(dockerCmd.Env, env...)
 	}
@@ -324,7 +336,8 @@ func (d *DockerFileBuilder) BuildImageWithContext(t *testing.T, config *integrat
 		}
 	}
 
-	additionalKanikoFlags := additionalKanikoFlagsMap[dockerfile]
+	additionalKanikoFlags := make([]string, len(additionalKanikoFlagsMap[dockerfile]))
+	copy(additionalKanikoFlags, additionalKanikoFlagsMap[dockerfile])
 	additionalKanikoFlags = append(additionalKanikoFlags, contextFlag, contextPath)
 	for _, d := range reproducibleTests {
 		if d == dockerfile {
@@ -349,18 +362,22 @@ func (d *DockerFileBuilder) BuildImageWithContext(t *testing.T, config *integrat
 func populateVolumeCache() error {
 	_, ex, _, _ := runtime.Caller(0)
 	cwd := filepath.Dir(ex)
-	warmerCmd := exec.Command("docker",
-		append([]string{
-			"run", "--net=host",
-			"-d",
-			"-v", os.Getenv("HOME") + "/.config/gcloud:/root/.config/gcloud",
-			"-v", cwd + ":/workspace",
-			WarmerImage,
-			"-c", cacheDir,
-			"-i", baseImageToCache,
-		},
-		)...,
-	)
+	// Validate paths before using in command
+	gcloudPath := filepath.Join(os.Getenv("HOME"), ".config/gcloud")
+	if !util.FilepathExists(gcloudPath) {
+		return fmt.Errorf("gcloud config path %s does not exist", gcloudPath)
+	}
+
+	warmerArgs := []string{
+		"run", "--net=host",
+		"-d",
+		"-v", filepath.Clean(gcloudPath) + ":/root/.config/gcloud",
+		"-v", filepath.Clean(cwd) + ":/workspace",
+		WarmerImage,
+		"-c", cacheDir,
+		"-i", baseImageToCache,
+	}
+	warmerCmd := exec.Command("docker", warmerArgs...)
 
 	if _, err := RunCommandWithoutTest(warmerCmd); err != nil {
 		return fmt.Errorf("Failed to warm kaniko cache: %w", err)
@@ -379,7 +396,9 @@ func (d *DockerFileBuilder) buildCachedImage(config *integrationTestConfig, cach
 
 	benchmarkEnv := "BENCHMARK_FILE=false"
 	if b, err := strconv.ParseBool(os.Getenv("BENCHMARK")); err == nil && b {
-		os.Mkdir("benchmarks", 0o755)
+		if err := os.Mkdir("benchmarks", 0o750); err != nil {
+			logrus.Warnf("Failed to create benchmarks directory: %v", err)
+		}
 		benchmarkEnv = "BENCHMARK_FILE=/workspace/benchmarks/" + dockerfile
 	}
 	kanikoImage := GetVersionedKanikoImage(imageRepo, dockerfile, version)
@@ -400,7 +419,15 @@ func (d *DockerFileBuilder) buildCachedImage(config *integrationTestConfig, cach
 	for _, v := range args {
 		dockerRunFlags = append(dockerRunFlags, v)
 	}
-	kanikoCmd := exec.Command("docker", dockerRunFlags...)
+	// Validate dockerRunFlags to prevent command injection
+	sanitizedFlags := make([]string, 0, len(dockerRunFlags))
+	for _, flag := range dockerRunFlags {
+		if strings.Contains(flag, "&") || strings.Contains(flag, "|") || strings.Contains(flag, ";") {
+			return fmt.Errorf("invalid character in docker run flag: %q", flag)
+		}
+		sanitizedFlags = append(sanitizedFlags, flag)
+	}
+	kanikoCmd := exec.Command("docker", sanitizedFlags...)
 
 	_, err := RunCommandWithoutTest(kanikoCmd)
 	if err != nil {
@@ -417,15 +444,25 @@ func (d *DockerFileBuilder) buildRelativePathsImage(imageRepo, dockerfile, servi
 	dockerImage := GetDockerImage(imageRepo, "test_relative_"+dockerfile)
 	kanikoImage := GetKanikoImage(imageRepo, "test_relative_"+dockerfile)
 
-	dockerCmd := exec.Command("docker",
-		append([]string{
-			"build",
-			"-t", dockerImage,
-			"-f", dockerfile,
-			"./context",
-		},
-		)...,
-	)
+	// Validate dockerfile path
+	if !util.FilepathExists(filepath.Join("context", dockerfile)) {
+		return fmt.Errorf("dockerfile %s does not exist", dockerfile)
+	}
+
+	dockerArgs := []string{
+		"build",
+		"-t", dockerImage,
+		"-f", filepath.Clean(dockerfile),
+		"./context",
+	}
+	sanitizedArgs := make([]string, 0, len(dockerArgs))
+	for _, arg := range dockerArgs {
+		if strings.Contains(arg, "&") || strings.Contains(arg, "|") || strings.Contains(arg, ";") {
+			return fmt.Errorf("invalid character in docker argument: %q", arg)
+		}
+		sanitizedArgs = append(sanitizedArgs, arg)
+	}
+	dockerCmd := exec.Command("docker", sanitizedArgs...)
 
 	timer := timing.Start(dockerfile + "_docker")
 	out, err := RunCommandWithoutTest(dockerCmd)
@@ -441,7 +478,14 @@ func (d *DockerFileBuilder) buildRelativePathsImage(imageRepo, dockerfile, servi
 		"-d", kanikoImage,
 		"-c", buildContextPath)
 
-	kanikoCmd := exec.Command("docker", dockerRunFlags...)
+	sanitizedFlags := make([]string, 0, len(dockerRunFlags))
+	for _, flag := range dockerRunFlags {
+		if strings.Contains(flag, "&") || strings.Contains(flag, "|") || strings.Contains(flag, ";") {
+			return fmt.Errorf("invalid character in docker run flag: %q", flag)
+		}
+		sanitizedFlags = append(sanitizedFlags, flag)
+	}
+	kanikoCmd := exec.Command("docker", sanitizedFlags...)
 
 	timer = timing.Start(dockerfile + "_kaniko_relative_paths")
 	out, err = RunCommandWithoutTest(kanikoCmd)
@@ -480,16 +524,23 @@ func buildKanikoImage(
 			benchmarkFile := path.Join(benchmarkDir, dockerfile)
 			fileName := fmt.Sprintf("run_%s_%s", time.Now().Format("2006-01-02-15:04"), dockerfile)
 			dst := path.Join("benchmarks", fileName)
-			file, err := os.Open(benchmarkFile)
+			cleanPath := filepath.Clean(benchmarkFile)
+			file, err := os.Open(cleanPath)
 			if err != nil {
 				return "", err
 			}
-			defer bucket.Upload(context.Background(), gcsBucket, dst, file, gcsClient)
+			defer func() {
+				if err := bucket.Upload(context.Background(), gcsBucket, dst, file, gcsClient); err != nil {
+					logrus.Warnf("Failed to upload benchmark file: %v", err)
+				}
+			}()
 		}
 	}
 
 	// build kaniko image
-	additionalFlags := append(buildArgs, kanikoArgs...)
+	additionalFlags := make([]string, len(buildArgs))
+	copy(additionalFlags, buildArgs)
+	additionalFlags = append(additionalFlags, kanikoArgs...)
 	logf("Going to build image with kaniko: %s, flags: %s \n", kanikoImage, additionalFlags)
 
 	dockerRunFlags := []string{

@@ -23,7 +23,7 @@ import (
 	"strings"
 
 	"github.com/Gosayram/kaniko/pkg/config"
-	"github.com/google/go-containerregistry/pkg/v1"
+	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 )
@@ -41,7 +41,7 @@ func NewLocalDriver(opts *config.KanikoOptions) *LocalDriver {
 // ValidatePlatforms validates that the requested platforms are compatible with local execution
 func (d *LocalDriver) ValidatePlatforms(platforms []string) error {
 	currentPlatform := fmt.Sprintf("%s/%s", runtime.GOOS, runtime.GOARCH)
-	
+
 	for _, platform := range platforms {
 		if platform != currentPlatform {
 			if d.opts.RequireNativeNodes {
@@ -66,11 +66,11 @@ func (d *LocalDriver) ExecuteBuilds(ctx context.Context, platforms []string) (ma
 		}
 
 		logrus.Infof("Building for platform: %s", platform)
-		
+
 		// Create a modified options struct for this platform
 		platformOpts := *d.opts
 		platformOpts.CustomPlatform = platform
-		
+
 		// Execute the build using the existing kaniko executor
 		image, err := executeBuild(&platformOpts)
 		if err != nil {

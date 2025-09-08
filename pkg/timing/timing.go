@@ -19,6 +19,7 @@ package timing
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"sync"
 	"text/template"
 	"time"
@@ -88,7 +89,9 @@ func (tr *TimedRun) Summary() string {
 
 	tr.cl.Lock()
 	defer tr.cl.Unlock()
-	DefaultFormat.Execute(&b, tr.categories)
+	if err := DefaultFormat.Execute(&b, tr.categories); err != nil {
+		return fmt.Sprintf("error generating timing summary: %v", err)
+	}
 	return b.String()
 }
 

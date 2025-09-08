@@ -22,7 +22,7 @@ import (
 	"github.com/Gosayram/kaniko/pkg/config"
 	"github.com/Gosayram/kaniko/pkg/multiplatform"
 	"github.com/Gosayram/kaniko/pkg/oci"
-	"github.com/google/go-containerregistry/pkg/v1"
+	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 )
@@ -58,14 +58,14 @@ func executeBuild(opts *config.KanikoOptions) (v1.Image, error) {
 	// This function integrates with the existing kaniko build system
 	// For multi-platform builds, we need to modify the platform-specific options
 	// before calling the standard build process
-	
+
 	logrus.Infof("Building image for platform: %s", opts.CustomPlatform)
-	
+
 	// Call the standard build process
 	image, err := DoBuild(opts)
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to build image")
 	}
-	
+
 	return image, nil
 }

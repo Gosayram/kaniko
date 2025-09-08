@@ -24,16 +24,17 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Gosayram/kaniko/pkg/cache"
-	"github.com/Gosayram/kaniko/pkg/config"
-	"github.com/Gosayram/kaniko/pkg/logging"
-	"github.com/Gosayram/kaniko/pkg/util"
 	"github.com/containerd/containerd/platforms"
 	"github.com/google/go-containerregistry/pkg/name"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
+
+	"github.com/Gosayram/kaniko/pkg/cache"
+	"github.com/Gosayram/kaniko/pkg/config"
+	"github.com/Gosayram/kaniko/pkg/logging"
+	"github.com/Gosayram/kaniko/pkg/util"
 )
 
 var (
@@ -64,11 +65,15 @@ var RootCmd = &cobra.Command{
 		// TODO may need all executors validation in here
 
 		if val, ok := os.LookupEnv("KANIKO_REGISTRY_MAP"); ok {
-			opts.RegistryMaps.Set(val)
+			if err := opts.RegistryMaps.Set(val); err != nil {
+				logrus.Warnf("Failed to set registry map: %v", err)
+			}
 		}
 
 		for _, target := range opts.RegistryMirrors {
-			opts.RegistryMaps.Set(fmt.Sprintf("%s=%s", name.DefaultRegistry, target))
+			if err := opts.RegistryMaps.Set(fmt.Sprintf("%s=%s", name.DefaultRegistry, target)); err != nil {
+				logrus.Warnf("Failed to set registry map for mirror: %v", err)
+			}
 		}
 
 		if len(opts.RegistryMaps) > 0 {
@@ -91,7 +96,7 @@ var RootCmd = &cobra.Command{
 	},
 	Run: func(cmd *cobra.Command, args []string) {
 		if _, err := os.Stat(opts.CacheDir); os.IsNotExist(err) {
-			err = os.MkdirAll(opts.CacheDir, 0755)
+			err = os.MkdirAll(opts.CacheDir, 0750)
 			if err != nil {
 				exit(errors.Wrap(err, "Failed to create cache directory"))
 			}
@@ -136,7 +141,9 @@ func addKanikoOptionsFlags() {
 
 // addHiddenFlags marks certain flags as hidden from the executor help text
 func addHiddenFlags() {
-	RootCmd.PersistentFlags().MarkHidden("azure-container-registry-config")
+	if err := RootCmd.PersistentFlags().MarkHidden("azure-container-registry-config"); err != nil {
+		logrus.Warnf("Failed to hide flag: %v", err)
+	}
 }
 
 func validateDockerfilePath() error {

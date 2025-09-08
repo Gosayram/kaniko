@@ -84,7 +84,7 @@ func TestNewCoordinator(t *testing.T) {
 
 func TestCoordinator_Execute_NoPlatforms(t *testing.T) {
 	opts := &config.KanikoOptions{
-		Driver:       "local",
+		Driver:        "local",
 		MultiPlatform: []string{},
 	}
 
@@ -143,7 +143,7 @@ func TestCoordinator_Execute_PreFlightChecks(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			opts := &config.KanikoOptions{
-				Driver:       "local",
+				Driver:        "local",
 				MultiPlatform: tt.platforms,
 			}
 
@@ -250,9 +250,9 @@ func TestCoordinator_GetDigests(t *testing.T) {
 func TestPreFlightChecks_CI_Driver_Requirements(t *testing.T) {
 	coordinator := &Coordinator{
 		opts: &config.KanikoOptions{
-			Driver:       "ci",
+			Driver:        "ci",
 			MultiPlatform: []string{"linux/amd64"},
-			DigestsFrom:  "", // Missing required field
+			DigestsFrom:   "", // Missing required field
 		},
 	}
 
@@ -302,13 +302,13 @@ func TestCoordinator_Cleanup(t *testing.T) {
 func TestCoordinator_LogMultiPlatformConfig(t *testing.T) {
 	coordinator := &Coordinator{
 		opts: &config.KanikoOptions{
-			Driver:              "k8s",
-			MultiPlatform:       []string{"linux/amd64", "linux/arm64"},
-			PublishIndex:        true,
-			LegacyManifestList:  true,
-			RequireNativeNodes:  true,
+			Driver:             "k8s",
+			MultiPlatform:      []string{"linux/amd64", "linux/arm64"},
+			PublishIndex:       true,
+			LegacyManifestList: true,
+			RequireNativeNodes: true,
 			OCIMode:            "auto",
-			IndexAnnotations:    map[string]string{"key": "value"},
+			IndexAnnotations:   map[string]string{"key": "value"},
 		},
 	}
 

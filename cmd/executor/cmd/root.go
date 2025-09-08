@@ -28,6 +28,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/containerd/containerd/platforms"
+	"github.com/google/go-containerregistry/pkg/name"
+	v1 "github.com/google/go-containerregistry/pkg/v1"
+	"github.com/pkg/errors"
+	"github.com/sirupsen/logrus"
+	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
+
 	"github.com/Gosayram/kaniko/pkg/buildcontext"
 	"github.com/Gosayram/kaniko/pkg/config"
 	"github.com/Gosayram/kaniko/pkg/constants"
@@ -38,13 +46,6 @@ import (
 	"github.com/Gosayram/kaniko/pkg/timing"
 	"github.com/Gosayram/kaniko/pkg/util"
 	"github.com/Gosayram/kaniko/pkg/util/proc"
-	"github.com/containerd/containerd/platforms"
-	"github.com/google/go-containerregistry/pkg/name"
-	v1 "github.com/google/go-containerregistry/pkg/v1"
-	"github.com/pkg/errors"
-	"github.com/sirupsen/logrus"
-	"github.com/spf13/cobra"
-	"github.com/spf13/pflag"
 )
 
 var (
@@ -65,7 +66,9 @@ func init() {
 	addKanikoOptionsFlags()
 	addHiddenFlags(RootCmd)
 	RootCmd.PersistentFlags().BoolVarP(&opts.IgnoreVarRun, "whitelist-var-run", "", true, "Ignore /var/run directory when taking image snapshot. Set it to false to preserve /var/run/ in destination image.")
-	RootCmd.PersistentFlags().MarkDeprecated("whitelist-var-run", "Please use ignore-var-run instead.")
+	if err := RootCmd.PersistentFlags().MarkDeprecated("whitelist-var-run", "Please use ignore-var-run instead."); err != nil {
+		logrus.Warnf("Failed to mark flag as deprecated: %v", err)
+	}
 }
 
 func validateFlags() {
@@ -80,18 +83,22 @@ func validateFlags() {
 	if val, ok := os.LookupEnv("KANIKO_NO_PUSH"); ok {
 		valBoolean, err := strconv.ParseBool(val)
 		if err != nil {
-			errors.New("invalid value (true/false) for KANIKO_NO_PUSH environment variable")
+			logrus.Warnf("invalid value (true/false) for KANIKO_NO_PUSH environment variable: %v", val)
 		}
 		opts.NoPush = valBoolean
 	}
 
 	// Allow setting --registry-maps using an environment variable.
 	if val, ok := os.LookupEnv("KANIKO_REGISTRY_MAP"); ok {
-		opts.RegistryMaps.Set(val)
+		if err := opts.RegistryMaps.Set(val); err != nil {
+			logrus.Warnf("Failed to set registry map: %v", err)
+		}
 	}
 
 	for _, target := range opts.RegistryMirrors {
-		opts.RegistryMaps.Set(fmt.Sprintf("%s=%s", name.DefaultRegistry, target))
+		if err := opts.RegistryMaps.Set(fmt.Sprintf("%s=%s", name.DefaultRegistry, target)); err != nil {
+			logrus.Warnf("Failed to set registry map for mirror: %v", err)
+		}
 	}
 
 	if len(opts.RegistryMaps) > 0 {
@@ -221,13 +228,20 @@ var RootCmd = &cobra.Command{
 				}
 				logrus.Infof("Benchmark file written at %s", benchmarkFile)
 			} else {
-				f, err := os.Create(benchmarkFile)
+				// Sanitize path to prevent directory traversal
+				cleanPath := filepath.Clean(benchmarkFile)
+				if filepath.IsAbs(cleanPath) {
+					cleanPath = filepath.Base(cleanPath) // Only allow writing to current directory
+				}
+				f, err := os.Create(cleanPath)
 				if err != nil {
 					logrus.Warnf("Unable to create benchmarking file %s: %s", benchmarkFile, err)
 					return
 				}
 				defer f.Close()
-				f.WriteString(s)
+				if _, err := f.WriteString(s); err != nil {
+					logrus.Warnf("Failed to write benchmark data: %v", err)
+				}
 				logrus.Infof("Benchmark file written at %s", benchmarkFile)
 			}
 		}
@@ -313,15 +327,19 @@ func addKanikoOptionsFlags() {
 // addHiddenFlags marks certain flags as hidden from the executor help text
 func addHiddenFlags(cmd *cobra.Command) {
 	// This flag is added in a vendored directory, hide so that it doesn't come up via --help
-	pflag.CommandLine.MarkHidden("azure-container-registry-config")
+	if err := pflag.CommandLine.MarkHidden("azure-container-registry-config"); err != nil {
+		logrus.Warnf("Failed to hide flag: %v", err)
+	}
 	// Hide this flag as we want to encourage people to use the --context flag instead
-	cmd.PersistentFlags().MarkHidden("bucket")
+	if err := cmd.PersistentFlags().MarkHidden("bucket"); err != nil {
+		logrus.Warnf("Failed to hide flag: %v", err)
+	}
 }
 
 // checkKanikoDir will check whether the executor is operating in the default '/kaniko' directory,
 // conducting the relevant operations if it is not
 func checkKanikoDir(dir string) error {
-	if dir != constants.DefaultKanikoPath {
+	if dir != filepath.Clean(constants.DefaultKanikoPath) {
 
 		// The destination directory may be across a different partition, so we cannot simply rename/move the directory in this case.
 		if _, err := util.CopyDir(constants.DefaultKanikoPath, dir, util.FileContext{}, util.DoNotChangeUID, util.DoNotChangeGID, fs.FileMode(0o600), true); err != nil {
@@ -332,7 +350,7 @@ func checkKanikoDir(dir string) error {
 			return err
 		}
 		// After remove DefaultKankoPath, the DOKCER_CONFIG env will point to a non-exist dir, so we should update DOCKER_CONFIG env to new dir
-		if err := os.Setenv("DOCKER_CONFIG", filepath.Join(dir, "/.docker")); err != nil {
+		if err := os.Setenv("DOCKER_CONFIG", filepath.Join(dir, ".docker")); err != nil {
 			return err
 		}
 	}
