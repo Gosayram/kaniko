@@ -48,6 +48,10 @@ BUILD_ARG ?=
 export GO111MODULE = on
 export GOFLAGS = -mod=vendor
 
+clean:
+	@echo "Cleaning up..."
+	rm -rf out/
+	@echo "Done."
 
 out/executor: $(GO_FILES)
 	GOARCH=$(GOARCH) GOOS=$(GOOS) CGO_ENABLED=0 go build -ldflags $(GO_LDFLAGS) -o $@ $(EXECUTOR_PACKAGE)
