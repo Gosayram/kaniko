@@ -91,6 +91,17 @@ type KanikoOptions struct {
 	ForceBuildMetadata       bool
 	InitialFSUnpacked        bool
 	SkipPushPermissionCheck  bool
+	
+	// Multi-platform build options
+	MultiPlatform         multiArg        // --multi-platform=linux/amd64,linux/arm64
+	PublishIndex          bool            // --publish-index[=true|false]
+	LegacyManifestList    bool            // --legacy-manifest-list[=true|false]
+	IndexAnnotations      multiKeyValueArg // --index-annotations=key=value,...
+	ArchCacheRepoSuffix   string          // --arch-cache-repo-suffix=-${ARCH}
+	Driver                string          // --driver=[local|k8s|ci]
+	DigestsFrom           string          // --digests-from=/path
+	RequireNativeNodes    bool            // --require-native-nodes=true
+	OCIMode               string          // --oci-mode=[oci|auto]
 }
 
 type KanikoGitOptions struct {

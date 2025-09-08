@@ -269,6 +269,7 @@ func addKanikoOptionsFlags() {
 	opts.RegistryMaps = make(map[string][]string)
 	RootCmd.PersistentFlags().VarP(&opts.RegistryMaps, "registry-map", "", "Registry map of mirror to use as pull-through cache instead. Expected format is 'orignal.registry=new.registry;other-original.registry=other-remap.registry'")
 	RootCmd.PersistentFlags().VarP(&opts.RegistryMirrors, "registry-mirror", "", "Registry mirror to use as pull-through cache instead of docker.io. Set it repeatedly for multiple mirrors.")
+	opts.IndexAnnotations = make(map[string]string)
 	RootCmd.PersistentFlags().BoolVarP(&opts.SkipDefaultRegistryFallback, "skip-default-registry-fallback", "", false, "If an image is not found on any mirrors (defined with registry-mirror) do not fallback to the default registry. If registry-mirror is not defined, this flag is ignored.")
 	RootCmd.PersistentFlags().BoolVarP(&opts.IgnoreVarRun, "ignore-var-run", "", true, "Ignore /var/run directory when taking image snapshot. Set it to false to preserve /var/run/ in destination image.")
 	RootCmd.PersistentFlags().VarP(&opts.Labels, "label", "", "Set metadata for an image. Set it repeatedly for multiple labels.")
@@ -280,6 +281,17 @@ func addKanikoOptionsFlags() {
 	RootCmd.PersistentFlags().VarP(&opts.IgnorePaths, "ignore-path", "", "Ignore these paths when taking a snapshot. Set it repeatedly for multiple paths.")
 	RootCmd.PersistentFlags().BoolVarP(&opts.ForceBuildMetadata, "force-build-metadata", "", false, "Force add metadata layers to build image")
 	RootCmd.PersistentFlags().BoolVarP(&opts.SkipPushPermissionCheck, "skip-push-permission-check", "", false, "Skip check of the push permission")
+
+	// Multi-platform build flags
+	RootCmd.PersistentFlags().VarP(&opts.MultiPlatform, "multi-platform", "", "Platforms to build for (comma-separated), e.g. linux/amd64,linux/arm64")
+	RootCmd.PersistentFlags().BoolVar(&opts.PublishIndex, "publish-index", false, "Publish OCI Image Index or Docker Manifest List after building all platforms")
+	RootCmd.PersistentFlags().BoolVar(&opts.LegacyManifestList, "legacy-manifest-list", false, "Create Docker Manifest List instead of OCI Image Index for backward compatibility")
+	RootCmd.PersistentFlags().VarP(&opts.IndexAnnotations, "index-annotations", "", "Annotations for the image index (comma-separated key=value pairs)")
+	RootCmd.PersistentFlags().StringVar(&opts.ArchCacheRepoSuffix, "arch-cache-repo-suffix", "-${ARCH}", "Suffix pattern for architecture-specific cache repositories")
+	RootCmd.PersistentFlags().StringVar(&opts.Driver, "driver", "local", "Multi-platform driver to use: local, k8s, or ci")
+	RootCmd.PersistentFlags().StringVar(&opts.DigestsFrom, "digests-from", "", "Path to read digests from for CI driver mode")
+	RootCmd.PersistentFlags().BoolVar(&opts.RequireNativeNodes, "require-native-nodes", true, "Require native architecture nodes for Kubernetes driver")
+	RootCmd.PersistentFlags().StringVar(&opts.OCIMode, "oci-mode", "auto", "OCI compliance mode: oci, docker, or auto")
 
 	// Deprecated flags.
 	RootCmd.PersistentFlags().StringVarP(&opts.SnapshotModeDeprecated, "snapshotMode", "", "", "This flag is deprecated. Please use '--snapshot-mode'.")

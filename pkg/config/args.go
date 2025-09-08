@@ -125,3 +125,46 @@ func (c *multiKeyMultiValueArg) Set(value string) error {
 func (c *multiKeyMultiValueArg) Type() string {
 	return "key-multi-value-arg type"
 }
+
+// This type is used to supported passing in multiple key=value flags with comma-separated values
+type multiKeyValueArg map[string]string
+
+// Now, for our new type, implement the two methods of
+// the flag.Value interface...
+// The first method is String() string
+func (a *multiKeyValueArg) String() string {
+	var result []string
+	for key := range *a {
+		result = append(result, fmt.Sprintf("%s=%s", key, (*a)[key]))
+	}
+	return strings.Join(result, ",")
+}
+
+// The second method is Set(value string) error
+func (a *multiKeyValueArg) Set(value string) error {
+	if value == "" {
+		return nil
+	}
+	if strings.Contains(value, ",") {
+		kvpairs := strings.Split(value, ",")
+		for _, kv := range kvpairs {
+			valueSplit := strings.SplitN(kv, "=", 2)
+			if len(valueSplit) < 2 {
+				return fmt.Errorf("invalid argument value. expect key=value, got %s", kv)
+			}
+			(*a)[valueSplit[0]] = valueSplit[1]
+		}
+		return nil
+	}
+	valueSplit := strings.SplitN(value, "=", 2)
+	if len(valueSplit) < 2 {
+		return fmt.Errorf("invalid argument value. expect key=value, got %s", value)
+	}
+	(*a)[valueSplit[0]] = valueSplit[1]
+	return nil
+}
+
+// The third is Type() string
+func (a *multiKeyValueArg) Type() string {
+	return "multi-key-value-arg type"
+}
