@@ -22,8 +22,8 @@ VERSION_BUILD ?= $(shell echo $(VERSION) | sed 's/^v//' | cut -d. -f3)
 VERSION_PACKAGE = $(REPOPATH)/internal/version
 
 SHELL := /bin/bash
-GOOS ?= $(shell go env GOOS)
-GOARCH ?= $(shell go env GOARCH)
+GOOS ?= linux
+GOARCH ?= amd64
 ORG := github.com/Gosayram
 PROJECT := kaniko
 REGISTRY?=gcr.io/Gosayram/kaniko
@@ -93,15 +93,10 @@ integration-test-misc:
 	$(eval RUN_ARG=$(shell ./scripts/misc-integration-test.sh))
 	@ ./scripts/integration-test.sh -run "$(RUN_ARG)"
 
-.PHONY: k8s-executor-build-push
-k8s-executor-build-push:
-	DOCKER_BUILDKIT=1 docker build ${BUILD_ARG} --build-arg=GOARCH=$(GOARCH) --build-arg=TARGETOS=linux -t $(REGISTRY)/executor:latest -f deploy/Dockerfile --target kaniko-executor .
-	docker push $(REGISTRY)/executor:latest
-
-
 .PHONY: images
 images: DOCKER_BUILDKIT=1
 images:
+	@echo "Building Docker images..."
 	docker build ${BUILD_ARG} --build-arg=TARGETARCH=$(GOARCH) --build-arg=TARGETOS=linux -t $(REGISTRY)/executor:latest -f deploy/Dockerfile --target kaniko-executor .
 	docker build ${BUILD_ARG} --build-arg=TARGETARCH=$(GOARCH) --build-arg=TARGETOS=linux -t $(REGISTRY)/executor:debug -f deploy/Dockerfile --target kaniko-debug .
 	docker build ${BUILD_ARG} --build-arg=TARGETARCH=$(GOARCH) --build-arg=TARGETOS=linux -t $(REGISTRY)/executor:slim -f deploy/Dockerfile --target kaniko-slim .
@@ -109,6 +104,7 @@ images:
 
 .PHONY: push
 push:
+	@echo "Pushing Docker images..."
 	docker push $(REGISTRY)/executor:latest
 	docker push $(REGISTRY)/executor:debug
 	docker push $(REGISTRY)/executor:slim
