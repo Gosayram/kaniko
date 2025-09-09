@@ -52,20 +52,3 @@ func DoMultiPlatformBuild(opts *config.KanikoOptions) (v1.ImageIndex, error) {
 
 	return index, nil
 }
-
-// executeBuild is a wrapper around the existing DoBuild function for multi-platform integration
-func executeBuild(opts *config.KanikoOptions) (v1.Image, error) {
-	// This function integrates with the existing kaniko build system
-	// For multi-platform builds, we need to modify the platform-specific options
-	// before calling the standard build process
-
-	logrus.Infof("Building image for platform: %s", opts.CustomPlatform)
-
-	// Call the standard build process
-	image, err := DoBuild(opts)
-	if err != nil {
-		return nil, errors.Wrap(err, "failed to build image")
-	}
-
-	return image, nil
-}

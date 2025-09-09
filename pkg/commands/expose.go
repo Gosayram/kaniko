@@ -50,7 +50,7 @@ func (r *ExposeCommand) ExecuteCommand(config *v1.Config, buildArgs *dockerfile.
 		}
 		// Add the default protocol if one isn't specified
 		if !strings.Contains(p, "/") {
-			p = p + "/tcp"
+			p += "/tcp"
 		}
 		protocol := strings.Split(p, "/")[1]
 		if !validProtocol(protocol) {

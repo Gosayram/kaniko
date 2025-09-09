@@ -188,7 +188,12 @@ func ParseDockerfile(opts *config.WarmerOptions) ([]string, error) {
 	var baseNames []string
 	match, _ := regexp.MatchString("^https?://", opts.DockerfilePath)
 	if match {
-		response, e := http.Get(opts.DockerfilePath) //nolint:noctx
+		client := &http.Client{
+			CheckRedirect: func(req *http.Request, via []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		}
+		response, e := client.Get(opts.DockerfilePath)
 		if e != nil {
 			return nil, e
 		}

@@ -49,7 +49,12 @@ func (h *HTTPSTar) UnpackTarFromBuildContext() (directory string, err error) {
 
 	// Download tar file from remote https server
 	// and save it into the target tar file
-	resp, err := http.Get(h.context) //nolint:noctx
+	client := &http.Client{
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	resp, err := client.Get(h.context)
 	if err != nil {
 		return
 	}

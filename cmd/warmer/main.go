@@ -20,9 +20,15 @@ import (
 	"os"
 
 	"github.com/Gosayram/kaniko/cmd/warmer/cmd"
+	"github.com/Gosayram/kaniko/pkg/config"
+	"github.com/Gosayram/kaniko/pkg/util"
 )
 
 func main() {
+	// Initialize configuration
+	config.Initialize()
+	util.Initialize()
+
 	if err := cmd.RootCmd.Execute(); err != nil {
 		os.Exit(1)
 	}

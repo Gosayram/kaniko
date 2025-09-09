@@ -52,7 +52,7 @@ func (w *WorkdirCommand) ExecuteCommand(config *v1.Config, buildArgs *dockerfile
 		if config.WorkingDir != "" {
 			config.WorkingDir = filepath.Join(config.WorkingDir, resolvedWorkingDir)
 		} else {
-			config.WorkingDir = filepath.Join("/", resolvedWorkingDir)
+			config.WorkingDir = "/" + resolvedWorkingDir
 		}
 	}
 	logrus.Infof("Changed working directory to %s", config.WorkingDir)
@@ -72,7 +72,7 @@ func (w *WorkdirCommand) ExecuteCommand(config *v1.Config, buildArgs *dockerfile
 
 		logrus.Infof("Creating directory %s with uid %d and gid %d", config.WorkingDir, uid, gid)
 		w.snapshotFiles = append(w.snapshotFiles, config.WorkingDir)
-		if err := mkdirAllWithPermissions(config.WorkingDir, 0755, uid, gid); err != nil {
+		if err := mkdirAllWithPermissions(config.WorkingDir, 0o755, uid, gid); err != nil {
 			return errors.Wrapf(err, "creating workdir %s", config.WorkingDir)
 		}
 	}

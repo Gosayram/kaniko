@@ -363,7 +363,7 @@ func populateVolumeCache() error {
 	_, ex, _, _ := runtime.Caller(0)
 	cwd := filepath.Dir(ex)
 	// Validate paths before using in command
-	gcloudPath := filepath.Join(os.Getenv("HOME"), ".config/gcloud")
+	gcloudPath := filepath.Join(os.Getenv("HOME"), ".config", "gcloud")
 	if !util.FilepathExists(gcloudPath) {
 		return fmt.Errorf("gcloud config path %s does not exist", gcloudPath)
 	}

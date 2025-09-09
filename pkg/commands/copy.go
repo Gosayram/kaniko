@@ -51,80 +51,136 @@ func (c *CopyCommand) ExecuteCommand(config *v1.Config, buildArgs *dockerfile.Bu
 		c.fileContext = util.FileContext{Root: filepath.Join(kConfig.KanikoDir, c.cmd.From)}
 	}
 
+	// Setup environment and permissions
 	replacementEnvs := buildArgs.ReplacementEnvs(config.Env)
-	uid, gid, err := getUserGroup(c.cmd.Chown, replacementEnvs)
-	logrus.Debugf("found uid %v and gid %v for chown string %v", uid, gid, c.cmd.Chown)
+	uid, gid, err := c.setupUserGroup(replacementEnvs)
 	if err != nil {
-		return errors.Wrap(err, "getting user group from chown")
+		return err
 	}
 
-	// sources from the Copy command are resolved with wildcards {*?[}
-	srcs, dest, err := util.ResolveEnvAndWildcards(c.cmd.SourcesAndDest, c.fileContext, replacementEnvs)
+	// Resolve sources and destination
+	srcs, dest, err := c.resolveSourcesAndDest(replacementEnvs)
 	if err != nil {
-		return errors.Wrap(err, "resolving src")
+		return err
 	}
 
+	// Get file permissions
 	chmod, useDefaultChmod, err := util.GetChmod(c.cmd.Chmod, replacementEnvs)
 	if err != nil {
 		return errors.Wrap(err, "getting permissions from chmod")
 	}
 
-	// For each source, iterate through and copy it over
+	// Copy each source
+	return c.copySources(srcs, dest, config, uid, gid, chmod, useDefaultChmod)
+}
+
+// setupUserGroup sets up the user and group for the copy operation
+func (c *CopyCommand) setupUserGroup(replacementEnvs []string) (int64, int64, error) {
+	uid, gid, err := getUserGroup(c.cmd.Chown, replacementEnvs)
+	logrus.Debugf("found uid %v and gid %v for chown string %v", uid, gid, c.cmd.Chown)
+	if err != nil {
+		return 0, 0, errors.Wrap(err, "getting user group from chown")
+	}
+	return uid, gid, nil
+}
+
+// resolveSourcesAndDest resolves sources and destination paths
+func (c *CopyCommand) resolveSourcesAndDest(replacementEnvs []string) ([]string, string, error) {
+	// sources from the Copy command are resolved with wildcards {*?[}
+	srcs, dest, err := util.ResolveEnvAndWildcards(c.cmd.SourcesAndDest, c.fileContext, replacementEnvs)
+	if err != nil {
+		return nil, "", errors.Wrap(err, "resolving src")
+	}
+	return srcs, dest, nil
+}
+
+// copySources copies each source to the destination
+func (c *CopyCommand) copySources(srcs []string, dest string, config *v1.Config, uid, gid int64, chmod os.FileMode, useDefaultChmod bool) error {
 	for _, src := range srcs {
-		fullPath := filepath.Join(c.fileContext.Root, src)
-
-		fi, err := os.Lstat(fullPath)
-		if err != nil {
-			return errors.Wrap(err, "could not copy source")
-		}
-		if fi.IsDir() && !strings.HasSuffix(fullPath, string(os.PathSeparator)) {
-			fullPath += "/"
-		}
-		cwd := config.WorkingDir
-		if cwd == "" {
-			cwd = kConfig.RootDir
-		}
-
-		destPath, err := util.DestinationFilepath(fullPath, dest, cwd)
-		if err != nil {
-			return errors.Wrap(err, "find destination path")
-		}
-
-		// If the destination dir is a symlink we need to resolve the path and use
-		// that instead of the symlink path
-		destPath, err = resolveIfSymlink(destPath)
-		if err != nil {
-			return errors.Wrap(err, "resolving dest symlink")
-		}
-
-		if fi.IsDir() {
-			copiedFiles, err := util.CopyDir(fullPath, destPath, c.fileContext, uid, gid, chmod, useDefaultChmod)
-			if err != nil {
-				return errors.Wrap(err, "copying dir")
-			}
-			c.snapshotFiles = append(c.snapshotFiles, copiedFiles...)
-		} else if util.IsSymlink(fi) {
-			// If file is a symlink, we want to copy the target file to destPath
-			exclude, err := util.CopySymlink(fullPath, destPath, c.fileContext)
-			if err != nil {
-				return errors.Wrap(err, "copying symlink")
-			}
-			if exclude {
-				continue
-			}
-			c.snapshotFiles = append(c.snapshotFiles, destPath)
-		} else {
-			// ... Else, we want to copy over a file
-			exclude, err := util.CopyFile(fullPath, destPath, c.fileContext, uid, gid, chmod, useDefaultChmod)
-			if err != nil {
-				return errors.Wrap(err, "copying file")
-			}
-			if exclude {
-				continue
-			}
-			c.snapshotFiles = append(c.snapshotFiles, destPath)
+		if err := c.copySingleSource(src, dest, config, uid, gid, chmod, useDefaultChmod); err != nil {
+			return err
 		}
 	}
+	return nil
+}
+
+// copySingleSource copies a single source to the destination
+func (c *CopyCommand) copySingleSource(src, dest string, config *v1.Config, uid, gid int64, chmod os.FileMode, useDefaultChmod bool) error {
+	fullPath := filepath.Join(c.fileContext.Root, src)
+
+	fi, err := os.Lstat(fullPath)
+	if err != nil {
+		return errors.Wrap(err, "could not copy source")
+	}
+	if fi.IsDir() && !strings.HasSuffix(fullPath, string(os.PathSeparator)) {
+		fullPath += "/"
+	}
+	cwd := config.WorkingDir
+	if cwd == "" {
+		cwd = kConfig.RootDir
+	}
+
+	destPath, err := util.DestinationFilepath(fullPath, dest, cwd)
+	if err != nil {
+		return errors.Wrap(err, "find destination path")
+	}
+
+	// If the destination dir is a symlink we need to resolve the path and use
+	// that instead of the symlink path
+	destPath, err = resolveIfSymlink(destPath)
+	if err != nil {
+		return errors.Wrap(err, "resolving dest symlink")
+	}
+
+	return c.copyFileOrDir(fullPath, destPath, fi, uid, gid, chmod, useDefaultChmod)
+}
+
+// copyFileOrDir copies a file or directory based on the file info
+func (c *CopyCommand) copyFileOrDir(fullPath, destPath string, fi os.FileInfo, uid, gid int64, chmod os.FileMode, useDefaultChmod bool) error {
+	if fi.IsDir() {
+		return c.copyDirectory(fullPath, destPath, uid, gid, chmod, useDefaultChmod)
+	} else if util.IsSymlink(fi) {
+		return c.copySymlink(fullPath, destPath)
+	} else {
+		return c.copyRegularFile(fullPath, destPath, uid, gid, chmod, useDefaultChmod)
+	}
+}
+
+// copyDirectory copies a directory
+func (c *CopyCommand) copyDirectory(fullPath, destPath string, uid, gid int64, chmod os.FileMode, useDefaultChmod bool) error {
+	copiedFiles, err := util.CopyDir(fullPath, destPath, c.fileContext, uid, gid, chmod, useDefaultChmod)
+	if err != nil {
+		return errors.Wrap(err, "copying dir")
+	}
+	c.snapshotFiles = append(c.snapshotFiles, copiedFiles...)
+	return nil
+}
+
+// copySymlink copies a symlink
+func (c *CopyCommand) copySymlink(fullPath, destPath string) error {
+	// If file is a symlink, we want to copy the target file to destPath
+	exclude, err := util.CopySymlink(fullPath, destPath, c.fileContext)
+	if err != nil {
+		return errors.Wrap(err, "copying symlink")
+	}
+	if exclude {
+		return nil
+	}
+	c.snapshotFiles = append(c.snapshotFiles, destPath)
+	return nil
+}
+
+// copyRegularFile copies a regular file
+func (c *CopyCommand) copyRegularFile(fullPath, destPath string, uid, gid int64, chmod os.FileMode, useDefaultChmod bool) error {
+	// ... Else, we want to copy over a file
+	exclude, err := util.CopyFile(fullPath, destPath, c.fileContext, uid, gid, chmod, useDefaultChmod)
+	if err != nil {
+		return errors.Wrap(err, "copying file")
+	}
+	if exclude {
+		return nil
+	}
+	c.snapshotFiles = append(c.snapshotFiles, destPath)
 	return nil
 }
 

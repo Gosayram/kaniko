@@ -39,7 +39,7 @@ func (b *AzureBlob) UnpackTarFromBuildContext() (string, error) {
 
 	// Get Azure_STORAGE_ACCESS_KEY from environment variables
 	accountKey := os.Getenv("AZURE_STORAGE_ACCESS_KEY")
-	if len(accountKey) == 0 {
+	if accountKey == "" {
 		return "", errors.New("AZURE_STORAGE_ACCESS_KEY environment variable is not set")
 	}
 

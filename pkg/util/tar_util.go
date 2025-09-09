@@ -111,7 +111,7 @@ func (t *Tar) AddFileToTar(p string) error {
 		hdr.Name = strings.TrimLeft(hdr.Name, "/")
 	}
 	if hdr.Typeflag == tar.TypeDir && !strings.HasSuffix(hdr.Name, "/") {
-		hdr.Name = hdr.Name + "/"
+		hdr.Name += "/"
 	}
 	// rootfs may not have been extracted when using cache, preventing uname/gname from resolving
 	// this makes this layer unnecessarily differ from a cached layer which does contain this information

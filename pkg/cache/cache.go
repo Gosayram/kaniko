@@ -78,7 +78,7 @@ func (rc *RegistryCache) RetrieveLayer(ck string) (v1.Image, error) {
 		return nil, err
 	}
 
-	if err = verifyImage(img, rc.Opts.CacheTTL, cache); err != nil {
+	if err := verifyImage(img, rc.Opts.CacheTTL, cache); err != nil {
 		return nil, err
 	}
 	return img, nil
@@ -121,17 +121,17 @@ func (lc *LayoutCache) RetrieveLayer(ck string) (v1.Image, error) {
 		return nil, errors.Wrap(err, "locating cache image")
 	}
 
-	if err = verifyImage(img, lc.Opts.CacheTTL, cache); err != nil {
+	if err := verifyImage(img, lc.Opts.CacheTTL, cache); err != nil {
 		return nil, err
 	}
 	return img, nil
 }
 
-func locateImage(path string) (v1.Image, error) {
+func locateImage(imagePath string) (v1.Image, error) {
 	var img v1.Image
-	layoutPath, err := layout.FromPath(path)
+	layoutPath, err := layout.FromPath(imagePath)
 	if err != nil {
-		return nil, errors.Wrap(err, fmt.Sprintf("constructing layout path from %s", path))
+		return nil, errors.Wrap(err, fmt.Sprintf("constructing layout path from %s", imagePath))
 	}
 	index, err := layoutPath.ImageIndex()
 	if err != nil {
@@ -141,7 +141,8 @@ func locateImage(path string) (v1.Image, error) {
 	if err != nil {
 		return nil, errors.Wrap(err, fmt.Sprintf("retrieving manifest file for %s", layoutPath))
 	}
-	for _, m := range manifest.Manifests {
+	for i := range manifest.Manifests {
+		m := &manifest.Manifests[i]
 		// assume there is only one image
 		img, err = layoutPath.Image(m.Digest)
 		if err != nil {
@@ -176,9 +177,9 @@ func LocalSource(opts *config.CacheOptions, cacheKey string) (v1.Image, error) {
 		return nil, nil
 	}
 
-	path := path.Join(cache, cacheKey)
+	cachePath := path.Join(cache, cacheKey)
 
-	fi, err := os.Stat(path)
+	fi, err := os.Stat(cachePath)
 	if err != nil {
 		msg := fmt.Sprintf("No file found for cache key %v %v", cacheKey, err)
 		logrus.Debug(msg)
@@ -194,7 +195,7 @@ func LocalSource(opts *config.CacheOptions, cacheKey string) (v1.Image, error) {
 	}
 
 	logrus.Infof("Found %s in local cache", cacheKey)
-	return cachedImageFromPath(path)
+	return cachedImageFromPath(cachePath)
 }
 
 // cachedImage represents a v1.Tarball that is cached locally in a CAS.

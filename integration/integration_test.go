@@ -252,13 +252,7 @@ func testGitBuildcontextHelper(t *testing.T, repo string) {
 
 	// Build with docker
 	dockerImage := GetDockerImage(config.imageRepo, "Dockerfile_test_git")
-	dockerCmd := exec.Command("docker",
-		append([]string{
-			"build",
-			"-t", dockerImage,
-			"-f", dockerfile,
-			repo,
-		})...)
+	dockerCmd := exec.Command("docker", "build", "-t", dockerImage, "-f", dockerfile, repo)
 	out, err := RunCommandWithoutTest(dockerCmd)
 	if err != nil {
 		t.Errorf("Failed to build image %s with docker command %q: %s %s", dockerImage, dockerCmd.Args, err, string(out))
@@ -320,13 +314,7 @@ func TestGitBuildcontextSubPath(t *testing.T) {
 
 	// Build with docker
 	dockerImage := GetDockerImage(config.imageRepo, "Dockerfile_test_git")
-	dockerCmd := exec.Command("docker",
-		append([]string{
-			"build",
-			"-t", dockerImage,
-			"-f", filepath.Join(integrationPath, dockerfilesPath, dockerfile),
-			repo,
-		})...)
+	dockerCmd := exec.Command("docker", "build", "-t", dockerImage, "-f", filepath.Join(integrationPath, dockerfilesPath, dockerfile), repo)
 	out, err := RunCommandWithoutTest(dockerCmd)
 	if err != nil {
 		t.Errorf("Failed to build image %s with docker command %q: %s %s", dockerImage, dockerCmd.Args, err, string(out))
@@ -364,13 +352,7 @@ func TestBuildViaRegistryMirrors(t *testing.T) {
 
 	// Build with docker
 	dockerImage := GetDockerImage(config.imageRepo, "Dockerfile_registry_mirror")
-	dockerCmd := exec.Command("docker",
-		append([]string{
-			"build",
-			"-t", dockerImage,
-			"-f", dockerfile,
-			repo,
-		})...)
+	dockerCmd := exec.Command("docker", "build", "-t", dockerImage, "-f", dockerfile, repo)
 	out, err := RunCommandWithoutTest(dockerCmd)
 	if err != nil {
 		t.Errorf("Failed to build image %s with docker command %q: %s %s", dockerImage, dockerCmd.Args, err, string(out))
@@ -406,13 +388,7 @@ func TestBuildViaRegistryMap(t *testing.T) {
 
 	// Build with docker
 	dockerImage := GetDockerImage(config.imageRepo, "Dockerfile_registry_mirror")
-	dockerCmd := exec.Command("docker",
-		append([]string{
-			"build",
-			"-t", dockerImage,
-			"-f", dockerfile,
-			repo,
-		})...)
+	dockerCmd := exec.Command("docker", "build", "-t", dockerImage, "-f", dockerfile, repo)
 	out, err := RunCommandWithoutTest(dockerCmd)
 	if err != nil {
 		t.Errorf("Failed to build image %s with docker command %q: %s %s", dockerImage, dockerCmd.Args, err, string(out))
@@ -472,13 +448,7 @@ func TestKanikoDir(t *testing.T) {
 
 	// Build with docker
 	dockerImage := GetDockerImage(config.imageRepo, "Dockerfile_registry_mirror")
-	dockerCmd := exec.Command("docker",
-		append([]string{
-			"build",
-			"-t", dockerImage,
-			"-f", dockerfile,
-			repo,
-		})...)
+	dockerCmd := exec.Command("docker", "build", "-t", dockerImage, "-f", dockerfile, repo)
 	out, err := RunCommandWithoutTest(dockerCmd)
 	if err != nil {
 		t.Errorf("Failed to build image %s with docker command %q: %s %s", dockerImage, dockerCmd.Args, err, string(out))
@@ -515,14 +485,7 @@ func TestBuildWithLabels(t *testing.T) {
 
 	// Build with docker
 	dockerImage := GetDockerImage(config.imageRepo, "Dockerfile_test_label:mylabel")
-	dockerCmd := exec.Command("docker",
-		append([]string{
-			"build",
-			"-t", dockerImage,
-			"-f", dockerfile,
-			"--label", testLabel,
-			repo,
-		})...)
+	dockerCmd := exec.Command("docker", "build", "-t", dockerImage, "-f", dockerfile, "--label", testLabel, repo)
 	out, err := RunCommandWithoutTest(dockerCmd)
 	if err != nil {
 		t.Errorf("Failed to build image %s with docker command %q: %s %s", dockerImage, dockerCmd.Args, err, string(out))
@@ -558,13 +521,7 @@ func TestBuildWithHTTPError(t *testing.T) {
 
 	// Build with docker
 	dockerImage := GetDockerImage(config.imageRepo, "Dockerfile_test_add_404")
-	dockerCmd := exec.Command("docker",
-		append([]string{
-			"build",
-			"-t", dockerImage,
-			"-f", dockerfile,
-			repo,
-		})...)
+	dockerCmd := exec.Command("docker", "build", "-t", dockerImage, "-f", dockerfile, repo)
 	out, err := RunCommandWithoutTest(dockerCmd)
 	if err == nil {
 		t.Errorf("an error was expected, got %s", string(out))

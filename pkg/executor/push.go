@@ -163,13 +163,13 @@ func writeDigestFile(path string, digestByteArray []byte) error {
 
 	parentDir := filepath.Dir(path)
 	if _, err := os.Stat(parentDir); os.IsNotExist(err) {
-		if err := os.MkdirAll(parentDir, 0700); err != nil {
+		if err := os.MkdirAll(parentDir, 0o700); err != nil {
 			logrus.Debugf("Error creating %s, %s", parentDir, err)
 			return err
 		}
 		logrus.Tracef("Created directory %v", parentDir)
 	}
-	return os.WriteFile(path, digestByteArray, 0600)
+	return os.WriteFile(path, digestByteArray, 0o600)
 }
 
 // DoPush is responsible for pushing image to the destinations specified in opts.

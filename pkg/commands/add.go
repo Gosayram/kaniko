@@ -74,7 +74,8 @@ func (a *AddCommand) ExecuteCommand(config *v1.Config, buildArgs *dockerfile.Bui
 	// Else, add to the list of unresolved sources
 	for _, src := range srcs {
 		fullPath := filepath.Join(a.fileContext.Root, src)
-		if util.IsSrcRemoteFileURL(src) {
+		switch {
+		case util.IsSrcRemoteFileURL(src):
 			urlDest, err := util.URLDestinationFilepath(src, dest, config.WorkingDir, replacementEnvs)
 			if err != nil {
 				return err
@@ -84,7 +85,7 @@ func (a *AddCommand) ExecuteCommand(config *v1.Config, buildArgs *dockerfile.Bui
 				return errors.Wrap(err, "downloading remote source file")
 			}
 			a.snapshotFiles = append(a.snapshotFiles, urlDest)
-		} else if util.IsFileLocalTarArchive(fullPath) {
+		case util.IsFileLocalTarArchive(fullPath):
 			tarDest, err := util.DestinationFilepath("", dest, config.WorkingDir)
 			if err != nil {
 				return errors.Wrap(err, "determining dest for tar")
@@ -96,7 +97,7 @@ func (a *AddCommand) ExecuteCommand(config *v1.Config, buildArgs *dockerfile.Bui
 			}
 			logrus.Debugf("Added %v from local tar archive %s", extractedFiles, src)
 			a.snapshotFiles = append(a.snapshotFiles, extractedFiles...)
-		} else {
+		default:
 			unresolvedSrcs = append(unresolvedSrcs, src)
 		}
 	}

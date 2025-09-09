@@ -23,11 +23,17 @@ import (
 
 	"github.com/Gosayram/kaniko/cmd/executor/cmd"
 	"github.com/Gosayram/kaniko/internal/version"
+	"github.com/Gosayram/kaniko/pkg/config"
+	"github.com/Gosayram/kaniko/pkg/util"
 
 	"github.com/google/slowjam/pkg/stacklog"
 )
 
 func main() {
+	// Initialize configuration
+	config.Initialize()
+	util.Initialize()
+
 	// Handle --version flag before cobra initialization
 	showVersion := flag.Bool("version", false, "Print version information and exit")
 	flag.Parse()
@@ -46,5 +52,4 @@ func main() {
 		s.Stop()
 		os.Exit(1)
 	}
-	defer s.Stop()
 }

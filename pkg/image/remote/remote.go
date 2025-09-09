@@ -170,7 +170,7 @@ func parseRegistryMapping(regMapping string) (string, string) {
 
 	// Normalize with a trailing slash if not empty
 	if repositoryPrefix != "" && !strings.HasSuffix(repositoryPrefix, "/") {
-		repositoryPrefix = repositoryPrefix + "/"
+		repositoryPrefix += "/"
 	}
 
 	return regURL, repositoryPrefix

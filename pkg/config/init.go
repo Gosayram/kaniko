@@ -46,7 +46,8 @@ var KanikoIntermediateStagesDir = fmt.Sprintf("%s/stages/", KanikoDir)
 
 var MountInfoPath string
 
-func init() {
+// Initialize initializes the configuration variables
+func Initialize() {
 	RootDir = constants.RootDir
 	MountInfoPath = constants.MountInfoPath
 }

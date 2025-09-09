@@ -625,7 +625,12 @@ func AddVolumePathToIgnoreList(path string) {
 //     - destination will have permissions of 0600 by default if not specified with chmod
 //     - If remote file has HTTP Last-Modified header, we set the mtime of the file to that timestamp
 func DownloadFileToDest(rawurl, dest string, uid, gid int64, chmod fs.FileMode) error {
-	resp, err := http.Get(rawurl) //nolint:noctx
+	client := &http.Client{
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	resp, err := client.Get(rawurl)
 	if err != nil {
 		return err
 	}
@@ -635,6 +640,10 @@ func DownloadFileToDest(rawurl, dest string, uid, gid int64, chmod fs.FileMode) 
 		return fmt.Errorf("invalid response status %d", resp.StatusCode)
 	}
 
+	// Check for integer overflow before conversion
+	if uid > math.MaxUint32 || gid > math.MaxUint32 {
+		return fmt.Errorf("UID or GID value too large for uint32 conversion")
+	}
 	if err := CreateFile(dest, resp.Body, chmod, uint32(uid), uint32(gid)); err != nil {
 		return err
 	}
@@ -759,6 +768,10 @@ func CopyFile(src, dest string, context FileContext, uid, gid int64, chmod fs.Fi
 	mode := chmod
 	if useDefaultChmod {
 		mode = fi.Mode()
+	}
+	// Check for integer overflow before conversion
+	if uid > math.MaxUint32 || gid > math.MaxUint32 {
+		return false, fmt.Errorf("UID or GID value too large for uint32 conversion")
 	}
 	return false, CreateFile(dest, srcFile, mode, uint32(uid), uint32(gid))
 }

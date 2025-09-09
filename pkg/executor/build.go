@@ -798,43 +798,6 @@ func calculateStageDependencies(
 	return crossStageDependencies, nil
 }
 
-func buildStages(
-	kanikoStages []config.KanikoStage,
-	opts *config.KanikoOptions,
-	stageNameToIdx map[string]string,
-	fileContext util.FileContext,
-	crossStageDependencies map[int][]string,
-	t *timing.Timer,
-) (v1.Image, error) {
-	digestToCacheKey := make(map[string]string)
-	stageIdxToDigest := make(map[string]string)
-	var args *dockerfile.BuildArgs
-
-	for index, stage := range kanikoStages {
-		sourceImage, err := buildStage(
-			index, stage, opts, args,
-			crossStageDependencies,
-			digestToCacheKey,
-			stageIdxToDigest,
-			stageNameToIdx,
-			fileContext,
-		)
-		if err != nil {
-			return nil, err
-		}
-
-		if stage.Final {
-			return handleFinalImage(sourceImage, opts, t)
-		}
-
-		if err := handleNonFinalStage(index, stage, sourceImage, crossStageDependencies); err != nil {
-			return nil, err
-		}
-	}
-
-	return nil, nil
-}
-
 func buildStage(
 	index int,
 	stage config.KanikoStage,
@@ -861,7 +824,6 @@ func buildStage(
 	logrus.Infof("Building stage '%v' [idx: '%v', base-idx: '%v']",
 		stage.BaseName, stage.Index, stage.BaseImageIndex)
 
-	args = sb.args
 	if err := sb.build(); err != nil {
 		return nil, errors.Wrap(err, "error building stage")
 	}
@@ -946,7 +908,7 @@ func handleNonFinalStage(
 	}
 
 	dstDir := filepath.Join(config.KanikoDir, strconv.Itoa(index))
-	if err := os.MkdirAll(dstDir, 0750); err != nil {
+	if err := os.MkdirAll(dstDir, 0o750); err != nil {
 		return errors.Wrap(err,
 			fmt.Sprintf("to create workspace for stage %d", index))
 	}
@@ -1096,7 +1058,7 @@ func extractImageToDependencyDir(name string, image v1.Image) error {
 	t := timing.Start("Extracting Image to Dependency Dir")
 	defer timing.DefaultRun.Stop(t)
 	dependencyDir := filepath.Join(config.KanikoDir, name)
-	if err := os.MkdirAll(dependencyDir, 0750); err != nil {
+	if err := os.MkdirAll(dependencyDir, 0o750); err != nil {
 		return err
 	}
 	logrus.Debugf("Trying to extract to %s", dependencyDir)
@@ -1113,7 +1075,7 @@ func saveStageAsTarball(path string, image v1.Image) error {
 	}
 	tarPath := filepath.Join(config.KanikoIntermediateStagesDir, path)
 	logrus.Infof("Storing source image from stage %s at path %s", path, tarPath)
-	if err := os.MkdirAll(filepath.Dir(tarPath), 0750); err != nil {
+	if err := os.MkdirAll(filepath.Dir(tarPath), 0o750); err != nil {
 		return err
 	}
 	return tarball.WriteToFile(tarPath, destRef, image)

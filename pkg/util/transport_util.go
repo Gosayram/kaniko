@@ -66,7 +66,8 @@ func (p *X509KeyPairLoader) load(certFile, keyFile string) (tls.Certificate, err
 
 var systemKeyPairLoader KeyPairLoader
 
-func init() {
+// Initialize initializes the transport utilities
+func Initialize() {
 	systemCertPool, err := x509.SystemCertPool()
 	if err != nil {
 		logrus.Warn("Failed to load system cert pool. Loading empty one instead.")

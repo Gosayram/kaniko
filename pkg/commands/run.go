@@ -75,8 +75,10 @@ func runCommandInExec(config *v1.Config, buildArgs *dockerfile.BuildArgs, cmdRun
 				continue
 			}
 			oldPath := os.Getenv("PATH")
+			// Store old path to restore later
+			oldPathValue := oldPath
 			defer func() {
-				if setErr := os.Setenv("PATH", oldPath); setErr != nil {
+				if setErr := os.Setenv("PATH", oldPathValue); setErr != nil {
 					logrus.Warnf("Failed to restore PATH: %v", setErr)
 				}
 			}()
@@ -117,7 +119,10 @@ func runCommandInExec(config *v1.Config, buildArgs *dockerfile.BuildArgs, cmdRun
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	replacementEnvs := buildArgs.ReplacementEnvs(config.Env)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	// Set process group ID to ensure proper cleanup of child processes
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		Setpgid: true,
+	}
 
 	u := config.User
 	userAndGroup := strings.Split(u, ":")
@@ -154,7 +159,7 @@ func runCommandInExec(config *v1.Config, buildArgs *dockerfile.BuildArgs, cmdRun
 		return errors.Wrap(err, "waiting for process to exit")
 	}
 
-	//it's not an error if there are no grandchildren
+	// it's not an error if there are no grandchildren
 	if err := syscall.Kill(-pgid, syscall.SIGKILL); err != nil && err.Error() != "no such process" {
 		return err
 	}

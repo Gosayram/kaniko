@@ -19,11 +19,9 @@ package multiplatform
 import (
 	"context"
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/Gosayram/kaniko/pkg/config"
-	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 )
 
@@ -73,24 +71,4 @@ func (d *KubernetesDriver) Cleanup() error {
 	// No cleanup needed for placeholder implementation
 	logrus.Info("Kubernetes driver cleanup completed")
 	return nil
-}
-
-// getKubernetesConfig returns Kubernetes configuration (placeholder)
-func getKubernetesConfig() (interface{}, error) {
-	return nil, errors.New("Kubernetes client dependencies not available")
-}
-
-// getCurrentNamespace gets the current namespace (placeholder)
-func getCurrentNamespace() string {
-	// Try to read from service account namespace file
-	if data, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/namespace"); err == nil {
-		return string(data)
-	}
-
-	// Fall back to environment variable
-	if ns := os.Getenv("KUBERNETES_NAMESPACE"); ns != "" {
-		return ns
-	}
-
-	return "default"
 }

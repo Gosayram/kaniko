@@ -137,7 +137,7 @@ func TestSnapshotFSChangePermissions(t *testing.T) {
 	// Change permissions on a file
 	batPath := filepath.Join(testDir, "bar/bat")
 	batPathWithoutLeadingSlash := filepath.Join(testDirWithoutLeadingSlash, "bar/bat")
-	if err := os.Chmod(batPath, 0600); err != nil {
+	if err := os.Chmod(batPath, 0o600); err != nil {
 		t.Fatalf("Error changing permissions on %s: %v", batPath, err)
 	}
 	// Take another snapshot

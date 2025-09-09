@@ -65,26 +65,53 @@ type DockerCommand interface {
 }
 
 func GetCommand(cmd instructions.Command, fileContext util.FileContext, useNewRun bool, cacheCopy bool, cacheRun bool) (DockerCommand, error) {
-	switch c := cmd.(type) {
-	case *instructions.RunCommand:
+	if command, err := createRunCommand(cmd, useNewRun, cacheRun); err == nil {
+		return command, nil
+	}
+	if command, err := createCopyCommand(cmd, fileContext, cacheCopy); err == nil {
+		return command, nil
+	}
+	if command, err := createMetadataCommand(cmd); err == nil {
+		return command, nil
+	}
+	if command, err := createBuildCommand(cmd, fileContext); err == nil {
+		return command, nil
+	}
+	if _, ok := cmd.(*instructions.MaintainerCommand); ok {
+		logrus.Warnf("%s is deprecated, skipping", cmd.Name())
+		return nil, nil
+	}
+	return nil, errors.Errorf("%s is not a supported command", cmd.Name())
+}
+
+// createRunCommand creates a run command
+func createRunCommand(cmd instructions.Command, useNewRun bool, cacheRun bool) (DockerCommand, error) {
+	if runCmd, ok := cmd.(*instructions.RunCommand); ok {
 		if useNewRun {
-			return &RunMarkerCommand{cmd: c, shdCache: cacheRun}, nil
+			return &RunMarkerCommand{cmd: runCmd, shdCache: cacheRun}, nil
 		}
-		return &RunCommand{cmd: c, shdCache: cacheRun}, nil
-	case *instructions.CopyCommand:
-		return &CopyCommand{cmd: c, fileContext: fileContext, shdCache: cacheCopy}, nil
+		return &RunCommand{cmd: runCmd, shdCache: cacheRun}, nil
+	}
+	return nil, errors.New("not a run command")
+}
+
+// createCopyCommand creates a copy command
+func createCopyCommand(cmd instructions.Command, fileContext util.FileContext, cacheCopy bool) (DockerCommand, error) {
+	if copyCmd, ok := cmd.(*instructions.CopyCommand); ok {
+		return &CopyCommand{cmd: copyCmd, fileContext: fileContext, shdCache: cacheCopy}, nil
+	}
+	return nil, errors.New("not a copy command")
+}
+
+// createMetadataCommand creates metadata commands
+func createMetadataCommand(cmd instructions.Command) (DockerCommand, error) {
+	switch c := cmd.(type) {
 	case *instructions.ExposeCommand:
 		return &ExposeCommand{cmd: c}, nil
 	case *instructions.EnvCommand:
 		return &EnvCommand{cmd: c}, nil
 	case *instructions.WorkdirCommand:
 		return &WorkdirCommand{cmd: c}, nil
-	case *instructions.AddCommand:
-		return &AddCommand{cmd: c, fileContext: fileContext}, nil
-	case *instructions.CmdCommand:
-		return &CmdCommand{cmd: c}, nil
-	case *instructions.EntrypointCommand:
-		return &EntrypointCommand{cmd: c}, nil
 	case *instructions.LabelCommand:
 		return &LabelCommand{cmd: c}, nil
 	case *instructions.UserCommand:
@@ -101,9 +128,19 @@ func GetCommand(cmd instructions.Command, fileContext util.FileContext, useNewRu
 		return &ShellCommand{cmd: c}, nil
 	case *instructions.HealthCheckCommand:
 		return &HealthCheckCommand{cmd: c}, nil
-	case *instructions.MaintainerCommand:
-		logrus.Warnf("%s is deprecated, skipping", cmd.Name())
-		return nil, nil
 	}
-	return nil, errors.Errorf("%s is not a supported command", cmd.Name())
+	return nil, errors.New("not a metadata command")
+}
+
+// createBuildCommand creates build commands
+func createBuildCommand(cmd instructions.Command, fileContext util.FileContext) (DockerCommand, error) {
+	switch c := cmd.(type) {
+	case *instructions.AddCommand:
+		return &AddCommand{cmd: c, fileContext: fileContext}, nil
+	case *instructions.CmdCommand:
+		return &CmdCommand{cmd: c}, nil
+	case *instructions.EntrypointCommand:
+		return &EntrypointCommand{cmd: c}, nil
+	}
+	return nil, errors.New("not a build command")
 }

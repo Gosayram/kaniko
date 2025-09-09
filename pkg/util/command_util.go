@@ -81,7 +81,7 @@ func ResolveEnvironmentReplacement(value string, envs []string, isFilepath bool)
 	isDir := strings.HasSuffix(fp, pathSeparator)
 	fp = filepath.Clean(fp)
 	if isDir && !strings.HasSuffix(fp, pathSeparator) {
-		fp = fp + pathSeparator
+		fp += pathSeparator
 	}
 	return fp, nil
 }
@@ -202,7 +202,7 @@ func DestinationFilepath(src, dest, cwd string) (string, error) {
 		newDest = filepath.Join(newDest, srcFileName)
 	}
 
-	if len(srcFileName) <= 0 && !strings.HasSuffix(newDest, pathSeparator) {
+	if srcFileName == "" && !strings.HasSuffix(newDest, pathSeparator) {
 		newDest += pathSeparator
 	}
 
