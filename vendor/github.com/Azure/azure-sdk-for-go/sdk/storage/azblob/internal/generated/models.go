@@ -8,9 +8,8 @@ package generated
 
 import (
 	"encoding/xml"
-	"net/url"
-
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/to"
+	"net/url"
 )
 
 type TransactionalContentSetter interface {

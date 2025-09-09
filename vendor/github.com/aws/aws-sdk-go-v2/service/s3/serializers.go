@@ -6,10 +6,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"net/http"
-	"strconv"
-	"strings"
-
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	smithy "github.com/aws/smithy-go"
 	"github.com/aws/smithy-go/encoding/httpbinding"
@@ -18,6 +14,9 @@ import (
 	smithytime "github.com/aws/smithy-go/time"
 	"github.com/aws/smithy-go/tracing"
 	smithyhttp "github.com/aws/smithy-go/transport/http"
+	"net/http"
+	"strconv"
+	"strings"
 )
 
 type awsRestxml_serializeOpAbortMultipartUpload struct {

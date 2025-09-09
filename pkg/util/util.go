@@ -17,14 +17,16 @@ limitations under the License.
 package util
 
 import (
-	"crypto/md5"
+	"crypto/md5" //nolint:gosec // MD5 used for non-cryptographic purposes (file change detection)
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"io"
 	"math"
 	"os"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -62,7 +64,12 @@ func Hasher() func(string) (string, error) {
 			if capability != nil {
 				h.Write(capability)
 			}
-			f, err := os.Open(p)
+			// Validate the file path to prevent directory traversal
+			cleanPath := filepath.Clean(p)
+			if strings.Contains(cleanPath, "..") || strings.HasPrefix(cleanPath, "/") {
+				return "", fmt.Errorf("invalid file path: potential directory traversal detected")
+			}
+			f, err := os.Open(cleanPath)
 			if err != nil {
 				return "", err
 			}
@@ -88,7 +95,9 @@ func Hasher() func(string) (string, error) {
 // CacheHasher takes into account everything the regular hasher does except for mtime
 func CacheHasher() func(string) (string, error) {
 	hasher := func(p string) (string, error) {
-		h := md5.New()
+		// MD5 is used here for non-cryptographic purposes (file change detection)
+		// The hash is only used internally for caching, not for security-sensitive operations
+		h := md5.New() //nolint:gosec // MD5 acceptable for internal non-crypto use
 		fi, err := os.Lstat(p)
 		if err != nil {
 			return "", err
@@ -100,7 +109,12 @@ func CacheHasher() func(string) (string, error) {
 		h.Write([]byte(strconv.FormatUint(uint64(fi.Sys().(*syscall.Stat_t).Gid), 36)))
 
 		if fi.Mode().IsRegular() {
-			f, err := os.Open(p)
+			// Validate the file path to prevent directory traversal
+			cleanPath := filepath.Clean(p)
+			if strings.Contains(cleanPath, "..") || strings.HasPrefix(cleanPath, "/") {
+				return "", fmt.Errorf("invalid file path: potential directory traversal detected")
+			}
+			f, err := os.Open(cleanPath)
 			if err != nil {
 				return "", err
 			}
@@ -125,7 +139,9 @@ func CacheHasher() func(string) (string, error) {
 // Note that the mtime can lag, so it's possible that a file will have changed but the mtime may look the same.
 func MtimeHasher() func(string) (string, error) {
 	hasher := func(p string) (string, error) {
-		h := md5.New()
+		// MD5 is used here for non-cryptographic purposes (mtime-based change detection)
+		// The hash is only used internally for performance optimization, not security
+		h := md5.New() //nolint:gosec // MD5 acceptable for internal non-crypto use
 		fi, err := os.Lstat(p)
 		if err != nil {
 			return "", err
@@ -140,7 +156,9 @@ func MtimeHasher() func(string) (string, error) {
 // Note that the mtime can lag, so it's possible that a file will have changed but the mtime may look the same.
 func RedoHasher() func(string) (string, error) {
 	hasher := func(p string) (string, error) {
-		h := md5.New()
+		// MD5 is used here for non-cryptographic purposes (file metadata hashing)
+		// The hash is only used internally for redo logging, not for security purposes
+		h := md5.New() //nolint:gosec // MD5 acceptable for internal non-crypto use
 		fi, err := os.Lstat(p)
 		if err != nil {
 			return "", err

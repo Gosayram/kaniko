@@ -40,7 +40,7 @@ type S3 struct {
 
 // UnpackTarFromBuildContext download and untar a file from s3
 func (s *S3) UnpackTarFromBuildContext() (string, error) {
-	bucket, item, err := bucket.GetNameAndFilepathFromURI(s.context)
+	bucketName, item, err := bucket.GetNameAndFilepathFromURI(s.context)
 	if err != nil {
 		return "", fmt.Errorf("getting bucketname and filepath from context: %w", err)
 	}
@@ -62,7 +62,7 @@ func (s *S3) UnpackTarFromBuildContext() (string, error) {
 
 	cfg, err := config.LoadDefaultConfig(context.TODO(), config.WithEndpointResolverWithOptions(customResolver))
 	if err != nil {
-		return bucket, err
+		return bucketName, err
 	}
 	client := s3.NewFromConfig(cfg, func(options *s3.Options) {
 		if endpoint != "" {
@@ -85,7 +85,7 @@ func (s *S3) UnpackTarFromBuildContext() (string, error) {
 	}
 	_, err = downloader.Download(context.TODO(), file,
 		&s3.GetObjectInput{
-			Bucket: aws.String(bucket),
+			Bucket: aws.String(bucketName),
 			Key:    aws.String(item),
 		})
 	if err != nil {

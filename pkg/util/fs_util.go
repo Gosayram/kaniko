@@ -326,7 +326,9 @@ func ExtractFile(dest string, hdr *tar.Header, cleanedName string, tr io.Reader)
 		if os.IsNotExist(err) || !fi.IsDir() {
 			logrus.Debugf("Base %s for file %s does not exist. Creating.", base, path)
 
-			if err := os.MkdirAll(dir, 0o755); err != nil {
+			// 0o755 permissions are intentional here for directory creation during tar extraction
+			// This allows read/execute for others which is standard for many Linux directories
+			if err := os.MkdirAll(dir, 0o755); err != nil { //nolint:gosec // intentional permissions for tar extraction
 				return err
 			}
 		}
@@ -339,7 +341,12 @@ func ExtractFile(dest string, hdr *tar.Header, cleanedName string, tr io.Reader)
 			}
 		}
 
-		currFile, err := os.Create(path)
+		// Validate the file path to prevent directory traversal
+		cleanPath := filepath.Clean(path)
+		if strings.Contains(cleanPath, "..") || strings.HasPrefix(cleanPath, "/") {
+			return fmt.Errorf("invalid file path: potential directory traversal detected")
+		}
+		currFile, err := os.Create(cleanPath)
 		if err != nil {
 			return err
 		}
@@ -360,7 +367,9 @@ func ExtractFile(dest string, hdr *tar.Header, cleanedName string, tr io.Reader)
 			return err
 		}
 
-		currFile.Close()
+		if err := currFile.Close(); err != nil {
+			logrus.Debugf("Error closing file: %v", err)
+		}
 	case tar.TypeDir:
 		logrus.Tracef("Creating dir %s", path)
 		if err := MkdirAllWithPermissions(path, mode, int64(uid), int64(gid)); err != nil {
@@ -389,6 +398,18 @@ func ExtractFile(dest string, hdr *tar.Header, cleanedName string, tr io.Reader)
 			}
 		}
 		link := filepath.Clean(filepath.Join(dest, hdr.Linkname))
+		// Validate the link path to prevent directory traversal
+		absLink, err := filepath.Abs(link)
+		if err != nil {
+			return fmt.Errorf("failed to get absolute path for link: %w", err)
+		}
+		absDest, err := filepath.Abs(dest)
+		if err != nil {
+			return fmt.Errorf("failed to get absolute path for destination: %w", err)
+		}
+		if !strings.HasPrefix(absLink+string(filepath.Separator), absDest+string(filepath.Separator)) {
+			return fmt.Errorf("potential directory traversal attempt - link path %s not within destination %s", link, dest)
+		}
 		if err := os.Link(link, path); err != nil {
 			return err
 		}
@@ -461,7 +482,12 @@ func checkIgnoreListRoot(root string) bool {
 // From: https://www.kernel.org/doc/Documentation/filesystems/proc.txt
 func DetectFilesystemIgnoreList(path string) error {
 	logrus.Trace("Detecting filesystem ignore list")
-	f, err := os.Open(path)
+	// Validate the file path to prevent directory traversal
+	cleanPath := filepath.Clean(path)
+	if strings.Contains(cleanPath, "..") || strings.HasPrefix(cleanPath, "/") {
+		return fmt.Errorf("invalid file path: potential directory traversal detected")
+	}
+	f, err := os.Open(cleanPath)
 	if err != nil {
 		return err
 	}
@@ -598,7 +624,12 @@ func CreateFile(path string, reader io.Reader, perm os.FileMode, uid uint32, gid
 		}
 	}
 
-	dest, err := os.Create(path)
+	// Validate the file path to prevent directory traversal
+	cleanPath := filepath.Clean(path)
+	if strings.Contains(cleanPath, "..") || strings.HasPrefix(cleanPath, "/") {
+		return fmt.Errorf("invalid file path: potential directory traversal detected")
+	}
+	dest, err := os.Create(cleanPath)
 	if err != nil {
 		return errors.Wrap(err, "creating file")
 	}
@@ -641,8 +672,8 @@ func DownloadFileToDest(rawurl, dest string, uid, gid int64, chmod fs.FileMode) 
 	}
 
 	// Check for integer overflow before conversion
-	if uid > math.MaxUint32 || gid > math.MaxUint32 {
-		return fmt.Errorf("UID or GID value too large for uint32 conversion")
+	if uid < 0 || uid > math.MaxUint32 || gid < 0 || gid > math.MaxUint32 {
+		return fmt.Errorf("UID or GID value out of range for uint32 conversion: uid=%d, gid=%d", uid, gid)
 	}
 	if err := CreateFile(dest, resp.Body, chmod, uint32(uid), uint32(gid)); err != nil {
 		return err
@@ -758,7 +789,12 @@ func CopyFile(src, dest string, context FileContext, uid, gid int64, chmod fs.Fi
 		return false, err
 	}
 	logrus.Debugf("Copying file %s to %s", src, dest)
-	srcFile, err := os.Open(src)
+	// Validate the source file path to prevent directory traversal
+	cleanSrc := filepath.Clean(src)
+	if strings.Contains(cleanSrc, "..") || strings.HasPrefix(cleanSrc, "/") {
+		return false, fmt.Errorf("invalid source file path: potential directory traversal detected")
+	}
+	srcFile, err := os.Open(cleanSrc)
 	if err != nil {
 		return false, err
 	}
@@ -770,8 +806,8 @@ func CopyFile(src, dest string, context FileContext, uid, gid int64, chmod fs.Fi
 		mode = fi.Mode()
 	}
 	// Check for integer overflow before conversion
-	if uid > math.MaxUint32 || gid > math.MaxUint32 {
-		return false, fmt.Errorf("UID or GID value too large for uint32 conversion")
+	if uid < 0 || uid > math.MaxUint32 || gid < 0 || gid > math.MaxUint32 {
+		return false, fmt.Errorf("UID or GID value out of range for uint32 conversion: uid=%d, gid=%d", uid, gid)
 	}
 	return false, CreateFile(dest, srcFile, mode, uint32(uid), uint32(gid))
 }
@@ -796,7 +832,12 @@ func getExcludedFiles(dockerfilePath, buildcontext string) ([]string, error) {
 		return nil, nil
 	}
 	logrus.Infof("Using dockerignore file: %v", path)
-	contents, err := os.ReadFile(path)
+	// Validate the file path to prevent directory traversal
+	cleanPath := filepath.Clean(path)
+	if strings.Contains(cleanPath, "..") || strings.HasPrefix(cleanPath, "/") {
+		return nil, fmt.Errorf("invalid file path: potential directory traversal detected")
+	}
+	contents, err := os.ReadFile(cleanPath)
 	if err != nil {
 		return nil, errors.Wrap(err, "parsing .dockerignore")
 	}
@@ -934,7 +975,12 @@ func CreateTargetTarfile(tarpath string) (*os.File, error) {
 			return nil, err
 		}
 	}
-	return os.Create(tarpath)
+	// Validate the tar path to prevent directory traversal
+	cleanTarPath := filepath.Clean(tarpath)
+	if strings.Contains(cleanTarPath, "..") || strings.HasPrefix(cleanTarPath, "/") {
+		return nil, fmt.Errorf("invalid tar path: potential directory traversal detected")
+	}
+	return os.Create(cleanTarPath)
 }
 
 // Returns true if a file is a symlink
@@ -1067,7 +1113,9 @@ func createParentDirectory(path string, uid int, gid int) error {
 			dir := dirs[i]
 
 			if _, err := os.Lstat(dir); os.IsNotExist(err) {
-				if err := os.Mkdir(dir, 0o755); err != nil {
+				// 0o755 permissions are intentional here for parent directory creation
+				// This allows read/execute for others which is standard for many Linux directories
+				if err := os.Mkdir(dir, 0o755); err != nil { //nolint:gosec // intentional permissions for directory creation
 					return errors.Wrapf(err, "failed to create directory %s", dir)
 				}
 				if uid != DoNotChangeUID {

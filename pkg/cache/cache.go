@@ -220,7 +220,12 @@ func (c *cachedImage) Manifest() (*v1.Manifest, error) {
 }
 
 func mfstFromPath(p string) (*v1.Manifest, error) {
-	f, err := os.Open(p)
+	// Validate the file path to prevent directory traversal
+	cleanPath := filepath.Clean(p)
+	if strings.Contains(cleanPath, "..") || strings.HasPrefix(cleanPath, "/") {
+		return nil, fmt.Errorf("invalid file path: potential directory traversal detected")
+	}
+	f, err := os.Open(cleanPath)
 	if err != nil {
 		return nil, err
 	}

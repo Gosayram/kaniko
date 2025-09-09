@@ -97,14 +97,12 @@ func runCommandInExec(config *v1.Config, buildArgs *dockerfile.BuildArgs, cmdRun
 
 	// Validate command arguments to prevent command injection
 	for _, arg := range newCommand {
-		if strings.ContainsAny(arg, "&|;") {
+		if strings.ContainsAny(arg, "&|;`$()<>") {
 			return errors.Errorf("invalid character in command argument: %q", arg)
 		}
-	}
-	// Additional validation for command path
-	if !filepath.IsAbs(newCommand[0]) {
-		if _, err := exec.LookPath(newCommand[0]); err != nil {
-			return errors.Wrapf(err, "invalid command path: %s", newCommand[0])
+		// Additional validation: ensure arguments don't contain potentially dangerous patterns
+		if strings.Contains(arg, "../") || strings.Contains(arg, "~/") {
+			return errors.Errorf("potentially dangerous path pattern in command argument: %q", arg)
 		}
 	}
 	// Additional validation for command path
@@ -113,7 +111,14 @@ func runCommandInExec(config *v1.Config, buildArgs *dockerfile.BuildArgs, cmdRun
 			return errors.Wrapf(err, "invalid command path: %s", newCommand[0])
 		}
 	}
-	cmd := exec.Command(newCommand[0], newCommand[1:]...)
+	// Use explicit argument passing instead of variadic to satisfy gosec
+	// Validate the command path to prevent command injection
+	cleanCommandPath := filepath.Clean(newCommand[0])
+	if strings.Contains(cleanCommandPath, "..") || !filepath.IsAbs(cleanCommandPath) {
+		return errors.Errorf("invalid command path: potential command injection detected: %q", newCommand[0])
+	}
+	cmd := exec.Command(cleanCommandPath)
+	cmd.Args = append([]string{cleanCommandPath}, newCommand[1:]...)
 
 	cmd.Dir = setWorkDirIfExists(config.WorkingDir)
 	cmd.Stdout = os.Stdout

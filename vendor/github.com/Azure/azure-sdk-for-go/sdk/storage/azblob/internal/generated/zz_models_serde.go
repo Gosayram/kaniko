@@ -9,11 +9,10 @@ import (
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
-	"reflect"
-	"time"
-
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/runtime"
+	"reflect"
+	"time"
 )
 
 // MarshalXML implements the xml.Marshaller interface for type AccessPolicy.

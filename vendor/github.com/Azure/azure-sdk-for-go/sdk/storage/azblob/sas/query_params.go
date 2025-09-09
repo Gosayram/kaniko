@@ -8,12 +8,11 @@ package sas
 
 import (
 	"errors"
+	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/internal/generated"
 	"net"
 	"net/url"
 	"strings"
 	"time"
-
-	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/internal/generated"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/internal/exported"
 )

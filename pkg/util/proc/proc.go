@@ -21,6 +21,7 @@ package proc
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 )
@@ -200,7 +201,17 @@ func readFile(file string) []byte {
 		return nil
 	}
 
-	b, _ := os.ReadFile(file)
+	// Validate that the file path is within the /proc filesystem or other expected locations
+	cleanFile := filepath.Clean(file)
+	if !strings.HasPrefix(cleanFile, "/proc/") &&
+		!strings.HasPrefix(cleanFile, "/run/systemd/container") &&
+		cleanFile != "/.dockerenv" &&
+		cleanFile != "/run/.containerenv" &&
+		!strings.HasPrefix(cleanFile, "/var/run/secrets/kubernetes.io/serviceaccount") {
+		return nil
+	}
+
+	b, _ := os.ReadFile(cleanFile)
 	return b
 }
 

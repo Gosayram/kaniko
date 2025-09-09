@@ -72,7 +72,9 @@ func CreateTarballOfDirectory(pathToDir string, f io.Writer) error {
 
 // Close will close any open streams used by Tar.
 func (t *Tar) Close() {
-	t.w.Close()
+	if err := t.w.Close(); err != nil {
+		logrus.Debugf("Error closing tar writer: %v", err)
+	}
 }
 
 // AddFileToTar adds the file at path p to the tar
@@ -84,7 +86,12 @@ func (t *Tar) AddFileToTar(p string) error {
 	linkDst := ""
 	if i.Mode()&os.ModeSymlink != 0 {
 		var err error
-		linkDst, err = os.Readlink(p)
+		// Validate the file path to prevent directory traversal
+		cleanPath := filepath.Clean(p)
+		if strings.Contains(cleanPath, "..") || strings.HasPrefix(cleanPath, "/") {
+			return fmt.Errorf("invalid file path: potential directory traversal detected")
+		}
+		linkDst, err = os.Readlink(cleanPath)
 		if err != nil {
 			return err
 		}
@@ -132,7 +139,12 @@ func (t *Tar) AddFileToTar(p string) error {
 	if !(i.Mode().IsRegular()) || hardlink {
 		return nil
 	}
-	r, err := os.Open(p)
+	// Validate the file path to prevent directory traversal
+	cleanPath := filepath.Clean(p)
+	if strings.Contains(cleanPath, "..") || strings.HasPrefix(cleanPath, "/") {
+		return fmt.Errorf("invalid file path: potential directory traversal detected")
+	}
+	r, err := os.Open(cleanPath)
 	if err != nil {
 		return err
 	}
@@ -229,7 +241,12 @@ func getSyscallStatT(i os.FileInfo) *syscall.Stat_t {
 func UnpackLocalTarArchive(path, dest string) ([]string, error) {
 	// First, we need to check if the path is a local tar archive
 	if compressed, compressionLevel := fileIsCompressedTar(path); compressed {
-		file, err := os.Open(path)
+		// Validate the file path to prevent directory traversal
+		cleanPath := filepath.Clean(path)
+		if strings.Contains(cleanPath, "..") || strings.HasPrefix(cleanPath, "/") {
+			return nil, fmt.Errorf("invalid file path: potential directory traversal detected")
+		}
+		file, err := os.Open(cleanPath)
 		if err != nil {
 			return nil, err
 		}
@@ -247,7 +264,12 @@ func UnpackLocalTarArchive(path, dest string) ([]string, error) {
 		}
 	}
 	if fileIsUncompressedTar(path) {
-		file, err := os.Open(path)
+		// Validate the file path to prevent directory traversal
+		cleanPath := filepath.Clean(path)
+		if strings.Contains(cleanPath, "..") || strings.HasPrefix(cleanPath, "/") {
+			return nil, fmt.Errorf("invalid file path: potential directory traversal detected")
+		}
+		file, err := os.Open(cleanPath)
 		if err != nil {
 			return nil, err
 		}
@@ -265,7 +287,12 @@ func IsFileLocalTarArchive(src string) bool {
 }
 
 func fileIsCompressedTar(src string) (bool, archive.Compression) {
-	r, err := os.Open(src)
+	// Validate the source path to prevent directory traversal
+	cleanSrc := filepath.Clean(src)
+	if strings.Contains(cleanSrc, "..") || strings.HasPrefix(cleanSrc, "/") {
+		return false, -1
+	}
+	r, err := os.Open(cleanSrc)
 	if err != nil {
 		return false, -1
 	}
@@ -279,12 +306,22 @@ func fileIsCompressedTar(src string) (bool, archive.Compression) {
 }
 
 func fileIsUncompressedTar(src string) bool {
-	r, err := os.Open(src)
+	// Validate the source path to prevent directory traversal
+	cleanSrc := filepath.Clean(src)
+	if strings.Contains(cleanSrc, "..") || strings.HasPrefix(cleanSrc, "/") {
+		return false
+	}
+	r, err := os.Open(cleanSrc)
 	if err != nil {
 		return false
 	}
 	defer r.Close()
-	fi, err := os.Lstat(src)
+	// Validate the source path to prevent directory traversal
+	validatedSrc := filepath.Clean(src)
+	if strings.Contains(validatedSrc, "..") || strings.HasPrefix(validatedSrc, "/") {
+		return false
+	}
+	fi, err := os.Lstat(validatedSrc)
 	if err != nil {
 		return false
 	}
@@ -301,7 +338,12 @@ func fileIsUncompressedTar(src string) bool {
 
 // UnpackCompressedTar unpacks the compressed tar at path to dir
 func UnpackCompressedTar(path, dir string) error {
-	file, err := os.Open(path)
+	// Validate the file path to prevent directory traversal
+	cleanPath := filepath.Clean(path)
+	if strings.Contains(cleanPath, "..") || strings.HasPrefix(cleanPath, "/") {
+		return fmt.Errorf("invalid file path: potential directory traversal detected")
+	}
+	file, err := os.Open(cleanPath)
 	if err != nil {
 		return err
 	}

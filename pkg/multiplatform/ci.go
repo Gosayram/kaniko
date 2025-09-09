@@ -78,9 +78,14 @@ func (d *CIDriver) readDigestForPlatform(platform string) (string, error) {
 	safePlatform := strings.ReplaceAll(platform, "/", "-")
 	digestFile := filepath.Join(d.opts.DigestsFrom, safePlatform+".digest")
 
-	data, err := os.ReadFile(digestFile)
+	// Validate the file path to prevent directory traversal
+	cleanDigestFile := filepath.Clean(digestFile)
+	if !strings.HasPrefix(cleanDigestFile, d.opts.DigestsFrom) {
+		return "", errors.Errorf("invalid file path: potential directory traversal detected")
+	}
+	data, err := os.ReadFile(cleanDigestFile)
 	if err != nil {
-		return "", errors.Wrapf(err, "failed to read digest file %s", digestFile)
+		return "", errors.Wrapf(err, "failed to read digest file %s", cleanDigestFile)
 	}
 
 	digest := strings.TrimSpace(string(data))

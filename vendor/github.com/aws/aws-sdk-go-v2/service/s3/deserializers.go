@@ -8,12 +8,6 @@ import (
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
-	"io"
-	"io/ioutil"
-	"strconv"
-	"strings"
-	"time"
-
 	awsmiddleware "github.com/aws/aws-sdk-go-v2/aws/middleware"
 	"github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream"
 	"github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream/eventstreamapi"
@@ -28,6 +22,11 @@ import (
 	smithytime "github.com/aws/smithy-go/time"
 	"github.com/aws/smithy-go/tracing"
 	smithyhttp "github.com/aws/smithy-go/transport/http"
+	"io"
+	"io/ioutil"
+	"strconv"
+	"strings"
+	"time"
 )
 
 func deserializeS3Expires(v string) (*time.Time, error) {

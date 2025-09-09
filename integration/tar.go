@@ -21,6 +21,8 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/Gosayram/kaniko/pkg/util"
@@ -39,8 +41,13 @@ func CreateIntegrationTarball() (string, error) {
 		return "", fmt.Errorf("Failed to create temporary directory to hold tarball: %w", err)
 	}
 	contextFilePath := fmt.Sprintf("%s/context_%d.tar.gz", tempDir, time.Now().UnixNano())
+	// Validate the file path to prevent directory traversal
+	cleanContextFilePath := filepath.Clean(contextFilePath)
+	if !strings.HasPrefix(cleanContextFilePath, tempDir) {
+		return "", fmt.Errorf("invalid file path: potential directory traversal detected")
+	}
 
-	file, err := os.OpenFile(contextFilePath, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0o644)
+	file, err := os.OpenFile(cleanContextFilePath, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0o600)
 	if err != nil {
 		return "", err
 	}

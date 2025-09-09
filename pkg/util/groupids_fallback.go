@@ -23,9 +23,11 @@ package util
 import (
 	"bufio"
 	"bytes"
+	"fmt"
 	"io"
 	"os"
 	"os/user"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -50,7 +52,12 @@ func groupIDs(u *user.User) ([]string, error) {
 		return []string{}, nil
 	}
 
-	f, err := os.Open(groupFile)
+	// Validate that the group file path is within expected system directories
+	cleanGroupFile := filepath.Clean(groupFile)
+	if cleanGroupFile != "/etc/group" && cleanGroupFile != "/etc/passwd" {
+		return nil, fmt.Errorf("invalid group file path: %s", cleanGroupFile)
+	}
+	f, err := os.Open(cleanGroupFile)
 	if err != nil {
 		return nil, errors.Wrap(err, "open")
 	}

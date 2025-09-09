@@ -21,6 +21,7 @@ import (
 	"crypto/x509"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"net/http"
@@ -43,7 +44,12 @@ func (p *X509CertPool) value() *x509.CertPool {
 }
 
 func (p *X509CertPool) append(path string) error {
-	pem, err := os.ReadFile(path)
+	// Validate the file path to prevent directory traversal
+	cleanPath := filepath.Clean(path)
+	if strings.Contains(cleanPath, "..") || strings.HasPrefix(cleanPath, "/") {
+		return fmt.Errorf("invalid certificate path: potential directory traversal detected")
+	}
+	pem, err := os.ReadFile(cleanPath)
 	if err != nil {
 		return err
 	}
@@ -84,15 +90,19 @@ func MakeTransport(opts config.RegistryOptions, registryName string) (http.Round
 	// Create a transport to set our user-agent.
 	var tr http.RoundTripper = http.DefaultTransport.(*http.Transport).Clone()
 	if opts.SkipTLSVerify || opts.SkipTLSVerifyRegistries.Contains(registryName) {
+		// InsecureSkipVerify is intentionally set to true to allow connections to
+		// registries with self-signed certificates or other TLS issues.
+		// This is a user-controlled option for development/testing environments.
 		tr.(*http.Transport).TLSClientConfig = &tls.Config{
-			InsecureSkipVerify: true,
+			InsecureSkipVerify: true, //nolint:gosec // intentionally allowing insecure connections for development/testing
 		}
 	} else if certificatePath := opts.RegistriesCertificates[registryName]; certificatePath != "" {
 		if err := systemCertLoader.append(certificatePath); err != nil {
 			return nil, fmt.Errorf("failed to load certificate %s for %s: %w", certificatePath, registryName, err)
 		}
 		tr.(*http.Transport).TLSClientConfig = &tls.Config{
-			RootCAs: systemCertLoader.value(),
+			RootCAs:    systemCertLoader.value(),
+			MinVersion: tls.VersionTLS12, // Set minimum TLS version to 1.2 for security
 		}
 	}
 
