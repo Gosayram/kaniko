@@ -89,7 +89,11 @@ func ResolveEnvironmentReplacement(value string, envs []string, isFilepath bool)
 }
 
 // ResolveEnvAndWildcards resolves environment variables and wildcards in source paths.
-func ResolveEnvAndWildcards(sd instructions.SourcesAndDest, fileContext FileContext, envs []string) ([]string, string, error) {
+func ResolveEnvAndWildcards(
+	sd instructions.SourcesAndDest,
+	fileContext FileContext,
+	envs []string,
+) (resolvedSources []string, destPath string, err error) {
 	// First, resolve any environment replacement
 	resolvedEnvs, err := ResolveEnvironmentReplacementList(sd.SourcePaths, envs, true)
 	if err != nil {
@@ -240,6 +244,11 @@ func URLDestinationFilepath(rawurl, dest, cwd string, envs []string) (string, er
 	return destPath, nil
 }
 
+// IsSrcsValid validates that source and destination paths are compatible for COPY operations.
+// It checks:
+// - Non-wildcard sources with file destinations
+// - Single directory sources
+// - Total file count compatibility with destination type
 func IsSrcsValid(srcsAndDest instructions.SourcesAndDest, resolvedSources []string, fileContext FileContext) error {
 	srcs := srcsAndDest.SourcePaths
 	dest := srcsAndDest.DestPath
@@ -343,7 +352,7 @@ func IsSrcRemoteFileURL(rawurl string) bool {
 }
 
 // UpdateConfigEnv updates the container configuration environment variables.
-func UpdateConfigEnv(envVars []instructions.KeyValuePair, config *v1.Config, replacementEnvs []string) error {
+func UpdateConfigEnv(envVars []instructions.KeyValuePair, containerConfig *v1.Config, replacementEnvs []string) error {
 	newEnvs := make([]instructions.KeyValuePair, len(envVars))
 	for index, pair := range envVars {
 		expandedKey, err := ResolveEnvironmentReplacement(pair.Key, replacementEnvs, false)
@@ -362,7 +371,7 @@ func UpdateConfigEnv(envVars []instructions.KeyValuePair, config *v1.Config, rep
 
 	// First, convert config.Env array to []instruction.KeyValuePair
 	var kvps []instructions.KeyValuePair
-	for _, env := range config.Env {
+	for _, env := range containerConfig.Env {
 		entry := strings.SplitN(env, "=", maxEnvSplitParts)
 		kvps = append(kvps, instructions.KeyValuePair{
 			Key:   entry[0],
@@ -390,12 +399,12 @@ Loop:
 		entry := kvp.Key + "=" + kvp.Value
 		envArray = append(envArray, entry)
 	}
-	config.Env = envArray
+	containerConfig.Env = envArray
 	return nil
 }
 
 // GetUserGroup resolves user and group information from a chown string.
-func GetUserGroup(chownStr string, env []string) (int64, int64, error) {
+func GetUserGroup(chownStr string, env []string) (uid, gid int64, err error) {
 	if chownStr == "" {
 		return DoNotChangeUID, DoNotChangeGID, nil
 	}
@@ -444,7 +453,7 @@ func getUIDAndGIDFromString(userGroupString string) (uid, gid uint32, err error)
 	return getUIDAndGIDFunc(userStr, groupStr)
 }
 
-func getUIDAndGID(userStr, groupStr string) (uint32, uint32, error) {
+func getUIDAndGID(userStr, groupStr string) (uid, gid uint32, err error) {
 	userObj, err := LookupUser(userStr)
 	if err != nil {
 		return 0, 0, err
