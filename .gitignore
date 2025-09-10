@@ -6,7 +6,7 @@ BUILD.bazel
 *.iml
 .vagrant
 .vscode/
-*-docs.md
+*-docs.*
 cosign.key
 audit-reports/*
 test-results/*
