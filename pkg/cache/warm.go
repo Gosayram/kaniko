@@ -126,7 +126,7 @@ func warmToFile(cacheDir, img string, opts *config.WarmerOptions) error {
 // FetchRemoteImage retrieves a Docker image manifest from a remote source.
 // github.com/Gosayram/kaniko/image/remote.RetrieveRemoteImage can be used as
 // this type.
-type FetchRemoteImage func(image string, opts config.RegistryOptions, customPlatform string) (v1.Image, error)
+type FetchRemoteImage func(image string, opts *config.RegistryOptions, customPlatform string) (v1.Image, error)
 
 // FetchLocalSource retrieves a Docker image manifest from a local source.
 // github.com/Gosayram/kaniko/cache.LocalSource can be used as
@@ -149,7 +149,7 @@ func (w *Warmer) Warm(image string, opts *config.WarmerOptions) (v1.Hash, error)
 		return v1.Hash{}, errors.Wrapf(err, "Failed to verify image name: %s", image)
 	}
 
-	img, err := w.Remote(image, opts.RegistryOptions, opts.CustomPlatform)
+	img, err := w.Remote(image, &opts.RegistryOptions, opts.CustomPlatform)
 	if err != nil || img == nil {
 		return v1.Hash{}, errors.Wrapf(err, "Failed to retrieve image: %s", image)
 	}
