@@ -19,12 +19,13 @@ package executor
 import (
 	"context"
 
-	"github.com/Gosayram/kaniko/pkg/config"
-	"github.com/Gosayram/kaniko/pkg/multiplatform"
-	"github.com/Gosayram/kaniko/pkg/oci"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
+
+	"github.com/Gosayram/kaniko/pkg/config"
+	"github.com/Gosayram/kaniko/pkg/multiplatform"
+	"github.com/Gosayram/kaniko/pkg/oci"
 )
 
 // DoMultiPlatformBuild executes multi-platform builds using the specified driver

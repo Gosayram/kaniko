@@ -24,15 +24,16 @@ import (
 	"path"
 	"regexp"
 
-	"github.com/Gosayram/kaniko/pkg/config"
-	"github.com/Gosayram/kaniko/pkg/dockerfile"
-	"github.com/Gosayram/kaniko/pkg/image/remote"
-	"github.com/Gosayram/kaniko/pkg/util"
 	"github.com/google/go-containerregistry/pkg/name"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/tarball"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
+
+	"github.com/Gosayram/kaniko/pkg/config"
+	"github.com/Gosayram/kaniko/pkg/dockerfile"
+	"github.com/Gosayram/kaniko/pkg/image/remote"
+	"github.com/Gosayram/kaniko/pkg/util"
 )
 
 // WarmCache populates the cache

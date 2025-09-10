@@ -22,12 +22,13 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/sirupsen/logrus"
+	"golang.org/x/net/context"
+
 	kConfig "github.com/Gosayram/kaniko/pkg/config"
 	"github.com/Gosayram/kaniko/pkg/constants"
 	"github.com/Gosayram/kaniko/pkg/util"
 	"github.com/Gosayram/kaniko/pkg/util/bucket"
-	"github.com/sirupsen/logrus"
-	"golang.org/x/net/context"
 )
 
 // GCS struct for Google Cloud Storage processing

@@ -19,9 +19,10 @@ package oci
 import (
 	"testing"
 
-	"github.com/Gosayram/kaniko/pkg/config"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/types"
+
+	"github.com/Gosayram/kaniko/pkg/config"
 )
 
 func TestBuildIndex(t *testing.T) {

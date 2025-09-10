@@ -22,13 +22,14 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/Gosayram/kaniko/pkg/config"
 	"github.com/google/go-containerregistry/pkg/name"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 	"github.com/google/go-containerregistry/pkg/v1/types"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
+
+	"github.com/Gosayram/kaniko/pkg/config"
 )
 
 // BuildIndex creates an OCI Image Index or Docker Manifest List from platform digests

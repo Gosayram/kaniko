@@ -20,10 +20,11 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/Gosayram/kaniko/pkg/config"
-	"github.com/Gosayram/kaniko/pkg/util"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
+
+	"github.com/Gosayram/kaniko/pkg/config"
+	"github.com/Gosayram/kaniko/pkg/util"
 )
 
 // ResolvePaths takes a slice of file paths and a list of skipped file paths. It resolve each

@@ -20,12 +20,13 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/Gosayram/kaniko/pkg/dockerfile"
-	"github.com/Gosayram/kaniko/pkg/util"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/moby/buildkit/frontend/dockerfile/instructions"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
+
+	"github.com/Gosayram/kaniko/pkg/dockerfile"
+	"github.com/Gosayram/kaniko/pkg/util"
 )
 
 type UserCommand struct {

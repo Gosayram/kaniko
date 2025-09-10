@@ -20,12 +20,14 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/Gosayram/kaniko/pkg/dockerfile"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 
-	"github.com/Gosayram/kaniko/pkg/util"
+	"github.com/Gosayram/kaniko/pkg/dockerfile"
+
 	"github.com/moby/buildkit/frontend/dockerfile/instructions"
 	"github.com/sirupsen/logrus"
+
+	"github.com/Gosayram/kaniko/pkg/util"
 )
 
 type ExposeCommand struct {

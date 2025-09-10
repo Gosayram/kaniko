@@ -26,15 +26,16 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/Gosayram/kaniko/pkg/config"
-	"github.com/Gosayram/kaniko/pkg/util"
-	"github.com/Gosayram/kaniko/testutil"
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
 	"github.com/google/go-containerregistry/pkg/v1/layout"
 	"github.com/google/go-containerregistry/pkg/v1/random"
 	"github.com/google/go-containerregistry/pkg/v1/validate"
 	"github.com/spf13/afero"
+
+	"github.com/Gosayram/kaniko/pkg/config"
+	"github.com/Gosayram/kaniko/pkg/util"
+	"github.com/Gosayram/kaniko/testutil"
 )
 
 func mustTag(t *testing.T, s string) name.Tag {

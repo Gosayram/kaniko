@@ -27,12 +27,6 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/Gosayram/kaniko/pkg/cache"
-	"github.com/Gosayram/kaniko/pkg/commands"
-	"github.com/Gosayram/kaniko/pkg/config"
-	"github.com/Gosayram/kaniko/pkg/dockerfile"
-	"github.com/Gosayram/kaniko/pkg/util"
-	"github.com/Gosayram/kaniko/testutil"
 	"github.com/containerd/containerd/platforms"
 	"github.com/google/go-cmp/cmp"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
@@ -41,6 +35,13 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/partial"
 	"github.com/google/go-containerregistry/pkg/v1/types"
 	"github.com/moby/buildkit/frontend/dockerfile/instructions"
+
+	"github.com/Gosayram/kaniko/pkg/cache"
+	"github.com/Gosayram/kaniko/pkg/commands"
+	"github.com/Gosayram/kaniko/pkg/config"
+	"github.com/Gosayram/kaniko/pkg/dockerfile"
+	"github.com/Gosayram/kaniko/pkg/util"
+	"github.com/Gosayram/kaniko/testutil"
 )
 
 func Test_reviewConfig(t *testing.T) {

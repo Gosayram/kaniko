@@ -20,11 +20,12 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/Gosayram/kaniko/pkg/config"
 	"github.com/google/go-containerregistry/pkg/name"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 	"github.com/google/go-containerregistry/pkg/v1/types"
+
+	"github.com/Gosayram/kaniko/pkg/config"
 )
 
 const image string = "debian"

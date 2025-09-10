@@ -19,8 +19,9 @@ package multiplatform
 import (
 	"fmt"
 
-	"github.com/Gosayram/kaniko/pkg/config"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
+
+	"github.com/Gosayram/kaniko/pkg/config"
 )
 
 // BuildFunc is a function type that can build an image with given options

@@ -21,10 +21,11 @@ import (
 	"fmt"
 	"os"
 
-	kConfig "github.com/Gosayram/kaniko/pkg/config"
-	"github.com/Gosayram/kaniko/pkg/util"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
+
+	kConfig "github.com/Gosayram/kaniko/pkg/config"
+	"github.com/Gosayram/kaniko/pkg/util"
 )
 
 // Tar unifies calls to download and unpack the build context.

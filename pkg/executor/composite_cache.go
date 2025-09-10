@@ -23,8 +23,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/Gosayram/kaniko/pkg/util"
 	"github.com/pkg/errors"
+
+	"github.com/Gosayram/kaniko/pkg/util"
 )
 
 // NewCompositeCache returns an initialized composite cache object.

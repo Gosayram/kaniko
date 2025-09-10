@@ -26,13 +26,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Gosayram/kaniko/pkg/cache"
-	"github.com/Gosayram/kaniko/pkg/config"
-	"github.com/Gosayram/kaniko/pkg/constants"
-	"github.com/Gosayram/kaniko/pkg/creds"
-	"github.com/Gosayram/kaniko/pkg/timing"
-	"github.com/Gosayram/kaniko/pkg/util"
-	"github.com/Gosayram/kaniko/pkg/version"
 	"github.com/google/go-containerregistry/pkg/name"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/empty"
@@ -45,6 +38,14 @@ import (
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/afero"
+
+	"github.com/Gosayram/kaniko/pkg/cache"
+	"github.com/Gosayram/kaniko/pkg/config"
+	"github.com/Gosayram/kaniko/pkg/constants"
+	"github.com/Gosayram/kaniko/pkg/creds"
+	"github.com/Gosayram/kaniko/pkg/timing"
+	"github.com/Gosayram/kaniko/pkg/util"
+	"github.com/Gosayram/kaniko/pkg/version"
 )
 
 type withUserAgent struct {

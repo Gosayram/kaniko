@@ -37,6 +37,8 @@ import (
 	"github.com/sirupsen/logrus"
 	"golang.org/x/sync/errgroup"
 
+	"github.com/google/go-containerregistry/pkg/v1/partial"
+
 	"github.com/Gosayram/kaniko/pkg/cache"
 	"github.com/Gosayram/kaniko/pkg/commands"
 	"github.com/Gosayram/kaniko/pkg/config"
@@ -47,7 +49,6 @@ import (
 	"github.com/Gosayram/kaniko/pkg/snapshot"
 	"github.com/Gosayram/kaniko/pkg/timing"
 	"github.com/Gosayram/kaniko/pkg/util"
-	"github.com/google/go-containerregistry/pkg/v1/partial"
 )
 
 // This is the size of an empty tar in Go
@@ -838,7 +839,7 @@ func buildStage(
 	fileContext util.FileContext,
 ) (v1.Image, error) {
 	sb, err := newStageBuilder(
-	args, opts, stage,
+		args, opts, stage,
 		crossStageDependencies,
 		digestToCacheKey,
 		stageIdxToDigest,

@@ -24,8 +24,9 @@ import (
 	"strings"
 
 	"cloud.google.com/go/storage"
-	"github.com/Gosayram/kaniko/pkg/constants"
 	"google.golang.org/api/option"
+
+	"github.com/Gosayram/kaniko/pkg/constants"
 )
 
 // Upload uploads everything from Reader to the bucket under path

@@ -26,8 +26,9 @@ import (
 
 	"net/http"
 
-	"github.com/Gosayram/kaniko/pkg/config"
 	"github.com/sirupsen/logrus"
+
+	"github.com/Gosayram/kaniko/pkg/config"
 )
 
 type CertPool interface {

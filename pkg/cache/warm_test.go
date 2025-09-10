@@ -21,9 +21,10 @@ import (
 	"os"
 	"testing"
 
+	v1 "github.com/google/go-containerregistry/pkg/v1"
+
 	"github.com/Gosayram/kaniko/pkg/config"
 	"github.com/Gosayram/kaniko/pkg/fakes"
-	v1 "github.com/google/go-containerregistry/pkg/v1"
 )
 
 const (

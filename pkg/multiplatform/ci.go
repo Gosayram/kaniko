@@ -22,9 +22,10 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/Gosayram/kaniko/pkg/config"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
+
+	"github.com/Gosayram/kaniko/pkg/config"
 )
 
 // CIDriver implements the Driver interface for CI/CD system integration

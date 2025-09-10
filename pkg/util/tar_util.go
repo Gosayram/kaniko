@@ -28,11 +28,12 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/Gosayram/kaniko/pkg/config"
 	"github.com/docker/docker/pkg/archive"
 	"github.com/docker/docker/pkg/system"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
+
+	"github.com/Gosayram/kaniko/pkg/config"
 )
 
 // Tar knows how to write files to a tar file.

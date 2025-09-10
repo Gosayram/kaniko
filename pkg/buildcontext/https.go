@@ -23,10 +23,11 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/sirupsen/logrus"
+
 	kConfig "github.com/Gosayram/kaniko/pkg/config"
 	"github.com/Gosayram/kaniko/pkg/constants"
 	"github.com/Gosayram/kaniko/pkg/util"
-	"github.com/sirupsen/logrus"
 )
 
 // HTTPSTar struct for https tar.gz files processing

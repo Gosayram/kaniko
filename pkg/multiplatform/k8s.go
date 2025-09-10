@@ -21,8 +21,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/Gosayram/kaniko/pkg/config"
 	"github.com/sirupsen/logrus"
+
+	"github.com/Gosayram/kaniko/pkg/config"
 )
 
 // KubernetesDriver implements the Driver interface for Kubernetes-based multi-platform builds

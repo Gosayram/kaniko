@@ -26,8 +26,9 @@ import (
 
 	"github.com/Gosayram/kaniko/pkg/dockerfile"
 
-	"github.com/Gosayram/kaniko/pkg/util"
 	"github.com/sirupsen/logrus"
+
+	"github.com/Gosayram/kaniko/pkg/util"
 )
 
 type AddCommand struct {

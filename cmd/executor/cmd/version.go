@@ -19,8 +19,9 @@ package cmd
 import (
 	"fmt"
 
-	"github.com/Gosayram/kaniko/internal/version"
 	"github.com/spf13/cobra"
+
+	"github.com/Gosayram/kaniko/internal/version"
 )
 
 func init() {
