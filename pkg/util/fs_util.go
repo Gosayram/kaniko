@@ -97,6 +97,7 @@ var volumes = []string{}
 // skipKanikoDir opts to skip the '/kaniko' dir for otiai10.copy which should be ignored in root
 var skipKanikoDir = otiai10Cpy.Options{
 	Skip: func(_ os.FileInfo, src, dest string) (bool, error) {
+		_ = dest // unused parameter
 		return strings.HasSuffix(src, "/kaniko"), nil
 	},
 }
@@ -185,72 +186,100 @@ func GetFSFromLayers(root string, layers []v1.Layer, opts ...FSOpt) ([]string, e
 		return nil, errors.New("must supply an extract function")
 	}
 
-	extractedFiles := []string{}
-	for i, l := range layers {
-		if mediaType, err := l.MediaType(); err == nil {
-			logrus.Tracef("Extracting layer %d of media type %s", i, mediaType)
-		} else {
-			logrus.Tracef("Extracting layer %d", i)
-		}
+	return extractLayers(root, layers, cfg)
+}
 
-		r, err := l.Uncompressed()
+func extractLayers(root string, layers []v1.Layer, cfg *FSConfig) ([]string, error) {
+	var extractedFiles []string
+	for i, l := range layers {
+		layerFiles, err := extractSingleLayer(root, l, i, cfg)
+		if err != nil {
+			return nil, err
+		}
+		extractedFiles = append(extractedFiles, layerFiles...)
+	}
+	return extractedFiles, nil
+}
+
+func extractSingleLayer(root string, layer v1.Layer, index int, cfg *FSConfig) ([]string, error) {
+	var mediaType string
+	if mt, err := layer.MediaType(); err == nil {
+		mediaType = string(mt)
+	}
+	logrus.Tracef("Extracting layer %d of media type %s", index, mediaType)
+
+	r, err := layer.Uncompressed()
+	if err != nil {
+		return nil, err
+	}
+	defer r.Close()
+
+	return extractTarEntries(root, r, cfg)
+}
+
+func extractTarEntries(root string, r io.ReadCloser, cfg *FSConfig) ([]string, error) {
+	var extractedFiles []string
+	tr := tar.NewReader(r)
+	
+	for {
+		hdr, err := tr.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
 		if err != nil {
 			return nil, err
 		}
 
-		func() {
-			defer r.Close()
-			tr := tar.NewReader(r)
-			for {
-				hdr, err := tr.Next()
-				if errors.Is(err, io.EOF) {
-					break
-				}
+		cleanedName := filepath.Clean(hdr.Name)
+		path := filepath.Join(root, cleanedName)
+		
+		if err := processTarEntry(root, hdr, cleanedName, tr, cfg); err != nil {
+			return nil, err
+		}
 
-				if err != nil {
-					return //nolint:errcheck // error is handled by the outer function
-				}
-
-				cleanedName := filepath.Clean(hdr.Name)
-				path := filepath.Join(root, cleanedName)
-				base := filepath.Base(path)
-				dir := filepath.Dir(path)
-
-				if strings.HasPrefix(base, archive.WhiteoutPrefix) {
-					logrus.Tracef("Whiting out %s", path)
-
-					name := strings.TrimPrefix(base, archive.WhiteoutPrefix)
-					path := filepath.Join(dir, name)
-
-					if CheckCleanedPathAgainstIgnoreList(path) {
-						logrus.Tracef("Not deleting %s, as it's ignored", path)
-						continue
-					}
-					if childDirInIgnoreList(path) {
-						logrus.Tracef("Not deleting %s, as it contains a ignored path", path)
-						continue
-					}
-
-					if err := os.RemoveAll(path); err != nil {
-						return //nolint:errcheck // error is handled by the outer function
-					}
-
-					if !cfg.includeWhiteout {
-						logrus.Trace("Not including whiteout files")
-						continue
-					}
-
-				}
-
-				if err := cfg.extractFunc(root, hdr, cleanedName, tr); err != nil {
-					return //nolint:errcheck // error is handled by the outer function
-				}
-
-				extractedFiles = append(extractedFiles, filepath.Join(root, cleanedName))
-			}
-		}()
+		extractedFiles = append(extractedFiles, path)
 	}
+	
 	return extractedFiles, nil
+}
+
+func processTarEntry(root string, hdr *tar.Header, cleanedName string, tr io.Reader, cfg *FSConfig) error {
+	path := filepath.Join(root, cleanedName)
+	base := filepath.Base(path)
+	dir := filepath.Dir(path)
+
+	if strings.HasPrefix(base, archive.WhiteoutPrefix) {
+		return processWhiteoutFile(dir, base, path, cfg)
+	}
+
+	return cfg.extractFunc(root, hdr, cleanedName, tr)
+}
+
+func processWhiteoutFile(dir, base, path string, cfg *FSConfig) error {
+	logrus.Tracef("Whiting out %s", path)
+
+	name := strings.TrimPrefix(base, archive.WhiteoutPrefix)
+	whiteoutPath := filepath.Join(dir, name)
+
+	if CheckCleanedPathAgainstIgnoreList(whiteoutPath) {
+		logrus.Tracef("Not deleting %s, as it's ignored", whiteoutPath)
+		return nil
+	}
+	if childDirInIgnoreList(whiteoutPath) {
+		logrus.Tracef("Not deleting %s, as it contains a ignored path", whiteoutPath)
+		return nil
+	}
+
+	if err := os.RemoveAll(whiteoutPath); err != nil {
+		return err
+	}
+
+	if !cfg.includeWhiteout {
+		logrus.Trace("Not including whiteout files")
+		return nil
+	}
+
+	return nil
 }
 
 // DeleteFilesystem deletes the extracted image file system
@@ -315,10 +344,11 @@ func UnTar(r io.Reader, dest string) ([]string, error) {
 			return nil, err
 		}
 		cleanedName := filepath.Clean(hdr.Name)
+		path := filepath.Join(dest, cleanedName)
 		if err := ExtractFile(dest, hdr, cleanedName, tr); err != nil {
 			return nil, err
 		}
-		extractedFiles = append(extractedFiles, filepath.Join(dest, cleanedName))
+		extractedFiles = append(extractedFiles, path)
 	}
 	return extractedFiles, nil
 }
@@ -431,6 +461,18 @@ func extractHardLink(dest, path string, hdr *tar.Header) error {
 	if strings.Contains(link, "..") || strings.HasPrefix(link, "/") {
 		return fmt.Errorf("invalid link path: potential directory traversal detected")
 	}
+	// Additional security check: ensure the link destination is within the destination directory
+	absDest, err := filepath.Abs(dest)
+	if err != nil {
+		return fmt.Errorf("failed to get absolute destination path: %w", err)
+	}
+	absLink, err := filepath.Abs(link)
+	if err != nil {
+		return fmt.Errorf("failed to get absolute link path: %w", err)
+	}
+	if !strings.HasPrefix(absLink, absDest) {
+		return fmt.Errorf("link destination %s is outside destination directory %s", link, dest)
+	}
 	if err := validateLinkPath(link, dest); err != nil {
 		return err
 	}
@@ -505,8 +547,9 @@ func IsInIgnoreList(path string) bool {
 
 // CheckCleanedPathAgainstProvidedIgnoreList checks if a cleaned path matches ignore list entries
 func CheckCleanedPathAgainstProvidedIgnoreList(path string, wl []IgnoreListEntry) bool {
-	for _, wl := range ignorelist {
-		if hasCleanedFilepathPrefix(path, wl.Path, wl.PrefixMatchOnly) {
+	_ = wl // unused parameter
+	for _, entry := range wl {
+		if hasCleanedFilepathPrefix(path, entry.Path, entry.PrefixMatchOnly) {
 			return true
 		}
 	}
@@ -607,10 +650,7 @@ func RelativeFiles(fp, root string) ([]string, error) {
 func ParentDirectories(path string) []string {
 	dir := filepath.Clean(path)
 	var paths []string
-	for {
-		if dir == filepath.Clean(config.RootDir) || dir == "" || dir == "." {
-			break
-		}
+	for dir != filepath.Clean(config.RootDir) && dir != "" && dir != "." {
 		dir, _ = filepath.Split(dir)
 		dir = filepath.Clean(dir)
 		paths = append([]string{dir}, paths...)
@@ -970,8 +1010,8 @@ func MkdirAllWithPermissions(path string, mode os.FileMode, uid, gid int64) erro
 	info, err := os.Stat(path)
 	if err == nil && !info.IsDir() {
 		logrus.Tracef("Removing file because it needs to be a directory %s", path)
-		if err := os.Remove(path); err != nil {
-			return errors.Wrapf(err, "error removing %s to make way for new directory", path)
+		if removeErr := os.Remove(path); removeErr != nil {
+			return errors.Wrapf(removeErr, "error removing %s to make way for new directory", path)
 		}
 	}
 	if err != nil && !os.IsNotExist(err) {
@@ -1086,9 +1126,9 @@ func getSymlink(path string) error {
 	return nil
 }
 
-// For cross stage dependencies kaniko must persist the referenced path so that it can be used in
-// the dependent stage. For symlinks we copy the target path because copying the symlink would
-// result in a dead link
+// CopyFileOrSymlink copies files or symlinks for cross-stage dependencies.
+// For symlinks, it copies the target path to avoid creating dead links.
+// It preserves file permissions and ownership.
 func CopyFileOrSymlink(src, destDir, root string) error {
 	destFile := filepath.Join(destDir, src)
 	src = filepath.Join(root, src)
@@ -1172,10 +1212,7 @@ func createParentDirectory(path string, uid, gid int) error {
 
 		dir := baseDir
 		dirs := []string{baseDir}
-		for {
-			if dir == "/" || dir == "." || dir == "" {
-				break
-			}
+		for dir != "/" && dir != "." && dir != "" {
 			dir = filepath.Dir(dir)
 			dirs = append(dirs, dir)
 		}
@@ -1186,13 +1223,14 @@ func createParentDirectory(path string, uid, gid int) error {
 			if _, err := os.Lstat(dir); os.IsNotExist(err) {
 				// 0o755 permissions are intentional here for parent directory creation
 				// This allows read/execute for others which is standard for many Linux directories
-				if err := os.Mkdir(dir, 0o755); err != nil { //nolint:gosec // intentional permissions for directory creation
-					return errors.Wrapf(err, "failed to create directory %s", dir)
+				if mkdirErr := os.Mkdir(dir, 0o755); mkdirErr != nil { //nolint:gosec // intentional
+					// permissions for directory creation
+					return errors.Wrapf(mkdirErr, "failed to create directory %s", dir)
 				}
 				if uid != DoNotChangeUID {
 					if gid != DoNotChangeGID {
-						if err := os.Chown(dir, uid, gid); err != nil {
-							return errors.Wrapf(err, "failed to chown directory %s", dir)
+						if chownErr := os.Chown(dir, uid, gid); chownErr != nil {
+							return errors.Wrapf(chownErr, "failed to chown directory %s", dir)
 						}
 					} else {
 						return fmt.Errorf("UID=%d but GID=-1, i.e. it is not set for %s", uid, dir)
@@ -1277,6 +1315,7 @@ func gowalkDir(dir string, existingPaths map[string]struct{}, changeFunc func(st
 	deletedFiles := existingPaths // Make a reference.
 
 	callback := func(path string, ent *godirwalk.Dirent) error {
+		_ = ent // unused parameter
 		logrus.Tracef("Analyzing path '%s'", path)
 
 		if IsInIgnoreList(path) {
@@ -1317,6 +1356,7 @@ func GetFSInfoMap(dir string, existing map[string]os.FileInfo) (fileMap map[stri
 	timer := timing.Start("Walking filesystem with Stat")
 	if err := godirwalk.Walk(dir, &godirwalk.Options{
 		Callback: func(path string, ent *godirwalk.Dirent) error {
+			_ = ent // unused parameter
 			if CheckCleanedPathAgainstIgnoreList(path) {
 				if IsDestDir(path) {
 					logrus.Tracef("Skipping paths under %s, as it is a ignored directory", path)

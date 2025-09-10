@@ -69,7 +69,7 @@ func (rc *RegistryCache) RetrieveLayer(ck string) (v1.Image, error) {
 		}
 	}
 
-	tr, err := util.MakeTransport(rc.Opts.RegistryOptions, registryName)
+	tr, err := util.MakeTransport(&rc.Opts.RegistryOptions, registryName)
 	if err != nil {
 		return nil, errors.Wrapf(err, "making transport for registry %q", registryName)
 	}

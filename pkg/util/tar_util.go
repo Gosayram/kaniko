@@ -296,14 +296,14 @@ func UnpackLocalTarArchive(path, dest string) ([]string, error) {
 		}
 		defer file.Close()
 		switch compressionLevel {
-		case archive.Gzip:
+		case int(archive.Gzip):
 			gzr, err := gzip.NewReader(file)
 			if err != nil {
 				return nil, err
 			}
 			defer gzr.Close()
 			return UnTar(gzr, dest)
-		case archive.Bzip2:
+		case int(archive.Bzip2):
 			bzr := bzip2.NewReader(file)
 			return UnTar(bzr, dest)
 		}
@@ -331,7 +331,7 @@ func IsFileLocalTarArchive(src string) bool {
 	return compressed || uncompressed
 }
 
-func fileIsCompressedTar(src string) (isCompressed bool, compressionType archive.Compression) {
+func fileIsCompressedTar(src string) (isCompressed bool, compressionType int) {
 	// Validate the source path to prevent directory traversal
 	cleanSrc := filepath.Clean(src)
 	if strings.Contains(cleanSrc, "..") || strings.HasPrefix(cleanSrc, "/") {
@@ -347,7 +347,7 @@ func fileIsCompressedTar(src string) (isCompressed bool, compressionType archive
 		return false, -1
 	}
 	compressionLevel := compression.Detect(buf)
-	return (compressionLevel > 0), compressionLevel
+	return (compressionLevel > 0), int(compressionLevel)
 }
 
 func fileIsUncompressedTar(src string) bool {

@@ -215,7 +215,9 @@ type retryFunc func() error
 func Retry(operation retryFunc, retryCount, initialDelayMilliseconds int) error {
 	err := operation()
 	for i := 0; err != nil && i < retryCount; i++ {
-		sleepDuration := time.Millisecond * time.Duration(int(math.Pow(exponentialBackoffBase, float64(i)))*initialDelayMilliseconds)
+		sleepDuration := time.Millisecond * time.Duration(
+			int(math.Pow(exponentialBackoffBase, float64(i)))*initialDelayMilliseconds,
+		)
 		logrus.Warnf("Retrying operation after %s due to %v", sleepDuration, err)
 		time.Sleep(sleepDuration)
 		err = operation()
@@ -225,13 +227,18 @@ func Retry(operation retryFunc, retryCount, initialDelayMilliseconds int) error 
 }
 
 // RetryWithResult retries an operation with a return value
-func RetryWithResult[T any](operation func() (T, error), retryCount, initialDelayMilliseconds int) (result T, err error) {
+func RetryWithResult[T any](
+	operation func() (T, error),
+	retryCount, initialDelayMilliseconds int,
+) (result T, err error) {
 	result, err = operation()
 	if err == nil {
 		return result, nil
 	}
 	for i := 0; i < retryCount; i++ {
-		sleepDuration := time.Millisecond * time.Duration(int(math.Pow(exponentialBackoffBase, float64(i)))*initialDelayMilliseconds)
+		sleepDuration := time.Millisecond * time.Duration(
+			int(math.Pow(exponentialBackoffBase, float64(i)))*initialDelayMilliseconds,
+		)
 		logrus.Warnf("Retrying operation after %s due to %v", sleepDuration, err)
 		time.Sleep(sleepDuration)
 
@@ -244,7 +251,9 @@ func RetryWithResult[T any](operation func() (T, error), retryCount, initialDela
 	return result, fmt.Errorf("unable to complete operation after %d attempts, last error: %w", retryCount, err)
 }
 
-func Lgetxattr(path string, attr string) ([]byte, error) {
+// Lgetxattr retrieves extended attribute values for a file path.
+// It handles buffer sizing automatically and returns the attribute value as bytes.
+func Lgetxattr(path, attr string) ([]byte, error) {
 	// Start with a 128 length byte array
 	dest := make([]byte, initialXattrBufferSize)
 	sz, errno := unix.Lgetxattr(path, attr, dest)

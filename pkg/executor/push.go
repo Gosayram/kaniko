@@ -126,7 +126,7 @@ func CheckPushPermissions(opts *config.KanikoOptions) error {
 			}
 			destRef.Repository.Registry = newReg
 		}
-		rt, err := util.MakeTransport(opts.RegistryOptions, registryName)
+		rt, err := util.MakeTransport(&opts.RegistryOptions, registryName)
 		if err != nil {
 			return errors.Wrapf(err, "making transport for registry %q", registryName)
 		}
@@ -321,7 +321,7 @@ func pushToDestinations(image v1.Image, opts *config.KanikoOptions, destRefs []n
 			return errors.Wrap(err, "resolving pushAuth")
 		}
 
-		localRt, err := util.MakeTransport(opts.RegistryOptions, registryName)
+		localRt, err := util.MakeTransport(&opts.RegistryOptions, registryName)
 		if err != nil {
 			return errors.Wrapf(err, "making transport for registry %q", registryName)
 		}

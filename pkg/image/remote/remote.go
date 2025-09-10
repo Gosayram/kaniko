@@ -145,7 +145,7 @@ func setNewRegistry(ref name.Reference, newReg name.Registry) name.Reference {
 }
 
 func remoteOptions(registryName string, opts *config.RegistryOptions, customPlatform string) []remote.Option {
-	tr, err := util.MakeTransport(*opts, registryName)
+	tr, err := util.MakeTransport(opts, registryName)
 
 	// The MakeTransport function will only return errors if there was a problem
 	// with registry certificates (Verification or mTLS)

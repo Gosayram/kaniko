@@ -163,7 +163,7 @@ func Test_makeTransport(t *testing.T) {
 		systemCertLoader = certPool
 		systemKeyPairLoader = &mockedKeyPairLoader{}
 		t.Run(tt.name, func(t *testing.T) {
-			tr, err := MakeTransport(tt.opts, registryName)
+			tr, err := MakeTransport(&tt.opts, registryName)
 			var tlsConfig *tls.Config
 			if err == nil {
 				tlsConfig = tr.(*http.Transport).TLSClientConfig

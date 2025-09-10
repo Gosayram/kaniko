@@ -92,7 +92,7 @@ func Initialize() {
 }
 
 // MakeTransport creates an HTTP transport with TLS configuration based on registry options
-func MakeTransport(opts config.RegistryOptions, registryName string) (http.RoundTripper, error) {
+func MakeTransport(opts *config.RegistryOptions, registryName string) (http.RoundTripper, error) {
 	// Create a transport to set our user-agent.
 	var tr http.RoundTripper = http.DefaultTransport.(*http.Transport).Clone()
 	if opts.SkipTLSVerify || opts.SkipTLSVerifyRegistries.Contains(registryName) {

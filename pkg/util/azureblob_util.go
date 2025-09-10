@@ -14,6 +14,8 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// Package util provides utility functions for various operations including
+// Azure Blob Storage validation, filesystem operations, and other common utilities.
 package util
 
 import (
