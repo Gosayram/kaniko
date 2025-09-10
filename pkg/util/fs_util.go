@@ -83,7 +83,7 @@ var defaultIgnoreList = []IgnoreListEntry{
 		PrefixMatchOnly: false,
 	},
 	{
-		// we ingore /tmp/apt-key-gpghome, since the apt keys are added temporarily in this directory.
+		// we ignore /tmp/apt-key-gpghome, since the apt keys are added temporarily in this directory.
 		// from the base image
 		Path:            "/tmp/apt-key-gpghome",
 		PrefixMatchOnly: true,
@@ -885,7 +885,7 @@ func CopyFile(src, dest string, context FileContext, uid, gid int64,
 	if src == dest {
 		// This is a no-op. Move on, but don't list it as ignored.
 		// We have to make sure we do this so we don't overwrite our own file.
-		// See iusse #904 for an example.
+		// See issue #904 for an example.
 		return false, nil
 	}
 	fi, err := os.Stat(src)
