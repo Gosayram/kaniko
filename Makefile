@@ -139,33 +139,39 @@ lint: install-tools
 		exit 1; \
 	fi
 
-# --- goimports formatting (ignore vendor) ------------------------------------
-# Use your repo path as the local prefix so internal imports form a separate group.
+# --- formatting (gofmt + goimports, ignore vendor) ----------------------------
 LOCAL_PREFIX ?= $(REPOPATH)
 
 .PHONY: fmt
 fmt: install-tools
+	@echo "Running gofmt (excluding vendor/)..."
+	@files=$$(git ls-files -- '*.go' ':(exclude)vendor/**'); \
+	if [ -n "$$files" ]; then \
+		gofmt -s -w $$files; \
+	fi
 	@echo "Running goimports (excluding vendor/)..."
 	@files=$$(git ls-files -- '*.go' ':(exclude)vendor/**'); \
 	if [ -n "$$files" ]; then \
 		echo "$$files" | xargs -n 50 $(GOIMPORTS) -w -local $(LOCAL_PREFIX); \
 	fi
-	@echo "goimports formatting done."
+	@echo "Formatting completed."
 
 .PHONY: fmt-check
 fmt-check: install-tools
 	@files=$$(git ls-files -- '*.go' ':(exclude)vendor/**'); \
 	if [ -n "$$files" ]; then \
-		out=$$($(GOIMPORTS) -l -local $(LOCAL_PREFIX) $$files); \
-		if [ -n "$$out" ]; then \
-			echo "The following files are not goimports-formatted:"; \
-			echo "$$out"; \
+		bad_fmt=$$(gofmt -l $$files); \
+		bad_imports=$$($(GOIMPORTS) -l -local $(LOCAL_PREFIX) $$files); \
+		if [ -n "$$bad_fmt$$bad_imports" ]; then \
+			echo "The following files are not properly formatted:"; \
+			echo "$$bad_fmt"; \
+			echo "$$bad_imports"; \
 			echo ""; \
 			echo "=> Run: make fmt"; \
 			exit 1; \
 		fi; \
 	fi; \
-	echo "goimports check passed."
+	echo "All files are properly formatted."
 
 .PHONY: check-all
 check-all: fmt-check lint
