@@ -12,6 +12,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# -------------------------- Project metadata --------------------------
+SHELL := /bin/bash
+
+GOOS  ?= linux
+GOARCH ?= amd64
+
+ORG     := github.com/Gosayram
+PROJECT := kaniko
+REPOPATH ?= $(ORG)/$(PROJECT)
+
+VERSION_PACKAGE = $(REPOPATH)/internal/version
+
 # Single source of truth for version from .release-version file
 VERSION ?= $(shell cat .release-version 2>/dev/null || echo v1.24.0)
 # Extract version components for backward compatibility
@@ -19,65 +31,63 @@ VERSION_MAJOR ?= $(shell echo $(VERSION) | sed 's/^v//' | cut -d. -f1)
 VERSION_MINOR ?= $(shell echo $(VERSION) | sed 's/^v//' | cut -d. -f2)
 VERSION_BUILD ?= $(shell echo $(VERSION) | sed 's/^v//' | cut -d. -f3)
 
-VERSION_PACKAGE = $(REPOPATH)/internal/version
-
-SHELL := /bin/bash
-GOOS ?= linux
-GOARCH ?= amd64
-ORG := github.com/Gosayram
-PROJECT := kaniko
 GOPATH ?= $(shell go env GOPATH)
 GOLANGCI_LINT = $(GOPATH)/bin/golangci-lint
-REGISTRY?=gcr.io/Gosayram/kaniko
+GOIMPORTS     = $(GOPATH)/bin/goimports
 
-REPOPATH ?= $(ORG)/$(PROJECT)
+REGISTRY ?= gcr.io/Gosayram/kaniko
 
+EXECUTOR_PACKAGE = $(REPOPATH)/cmd/executor
+WARMER_PACKAGE   = $(REPOPATH)/cmd/warmer
+KANIKO_PROJECT   = $(REPOPATH)/kaniko
+
+BUILD_ARG ?=
+
+# Force using Go Modules and always read dependencies from vendor folder.
+export GO111MODULE = on
+export GOFLAGS     = -mod=vendor
+
+# All Go source files excluding vendor/
 GO_FILES := $(shell find . -type f -name '*.go' -not -path "./vendor/*")
-GO_LDFLAGS := '-extldflags "-static"
+
+# Linker flags (static linking + version metadata)
+GO_LDFLAGS := -extldflags "-static"
 GO_LDFLAGS += -X $(VERSION_PACKAGE).Version=$(VERSION)
 GO_LDFLAGS += -X $(VERSION_PACKAGE).Commit=$(shell git rev-parse --short HEAD 2>/dev/null || echo "none")
 GO_LDFLAGS += -X $(VERSION_PACKAGE).Date=$(shell date -u +%Y-%m-%dT%H:%M:%SZ)
-GO_LDFLAGS += -w -s # Drop debugging symbols.
-GO_LDFLAGS += '
+GO_LDFLAGS += -w -s  # Drop debugging symbols.
 
-EXECUTOR_PACKAGE = $(REPOPATH)/cmd/executor
-WARMER_PACKAGE = $(REPOPATH)/cmd/warmer
-KANIKO_PROJECT = $(REPOPATH)/kaniko
-BUILD_ARG ?=
-
-# Force using Go Modules and always read the dependencies from
-# the `vendor` folder.
-export GO111MODULE = on
-export GOFLAGS = -mod=vendor
-
+# ------------------------------ Binaries ------------------------------
+.PHONY: clean
 clean:
 	@echo "Cleaning up..."
 	rm -rf out/
 	@echo "Done."
 
 out/executor: $(GO_FILES)
-	GOARCH=$(GOARCH) GOOS=$(GOOS) CGO_ENABLED=0 go build -ldflags $(GO_LDFLAGS) -o $@ $(EXECUTOR_PACKAGE)
+	GOARCH=$(GOARCH) GOOS=$(GOOS) CGO_ENABLED=0 go build -ldflags '$(GO_LDFLAGS)' -o $@ $(EXECUTOR_PACKAGE)
 
 out/warmer: $(GO_FILES)
-	GOARCH=$(GOARCH) GOOS=$(GOOS) CGO_ENABLED=0 go build -ldflags $(GO_LDFLAGS) -o $@ $(WARMER_PACKAGE)
+	GOARCH=$(GOARCH) GOOS=$(GOOS) CGO_ENABLED=0 go build -ldflags '$(GO_LDFLAGS)' -o $@ $(WARMER_PACKAGE)
 
-.PHONY: install-container-diff
-install-container-diff:
-	@ curl -LO https://github.com/Gosayram/container-diff/releases/download/v0.17.0/container-diff-$(GOOS)-amd64 && \
-		chmod +x container-diff-$(GOOS)-amd64 && sudo mv container-diff-$(GOOS)-amd64 /usr/local/bin/container-diff
+# ------------------------------ Tools ------------------------------
+.PHONY: install-tools
+install-tools:
+	@echo "Installing development tools..."
+	GOFLAGS="" go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
+	GOFLAGS="" go install golang.org/x/tools/cmd/goimports@latest
+	@echo "Development tools installed successfully"
 
-.PHONY: k3s-setup
-k3s-setup:
-	@ ./scripts/k3s-setup.sh
-
+# ------------------------------ Tests ------------------------------
 .PHONY: test
 test: out/executor
 	@ ./scripts/test.sh
 
+.PHONY: test-with-coverage
 test-with-coverage: test
 	go tool cover -html=out/coverage.out
 
-
+# --------------------------- Integration ---------------------------
 .PHONY: integration-test
 integration-test:
 	@ ./scripts/integration-test.sh
@@ -99,14 +109,15 @@ integration-test-misc:
 	$(eval RUN_ARG=$(shell ./scripts/misc-integration-test.sh))
 	@ ./scripts/integration-test.sh -run "$(RUN_ARG)"
 
+# ------------------------------ Images ------------------------------
 .PHONY: images
 images: DOCKER_BUILDKIT=1
 images:
 	@echo "Building Docker images..."
 	docker build ${BUILD_ARG} --build-arg=TARGETARCH=$(GOARCH) --build-arg=TARGETOS=linux -t $(REGISTRY)/executor:latest -f deploy/Dockerfile --target kaniko-executor .
-	docker build ${BUILD_ARG} --build-arg=TARGETARCH=$(GOARCH) --build-arg=TARGETOS=linux -t $(REGISTRY)/executor:debug -f deploy/Dockerfile --target kaniko-debug .
-	docker build ${BUILD_ARG} --build-arg=TARGETARCH=$(GOARCH) --build-arg=TARGETOS=linux -t $(REGISTRY)/executor:slim -f deploy/Dockerfile --target kaniko-slim .
-	docker build ${BUILD_ARG} --build-arg=TARGETARCH=$(GOARCH) --build-arg=TARGETOS=linux -t $(REGISTRY)/warmer:latest -f deploy/Dockerfile --target kaniko-warmer .
+	docker build ${BUILD_ARG} --build-arg=TARGETARCH=$(GOARCH) --build-arg=TARGETOS=linux -t $(REGISTRY)/executor:debug  -f deploy/Dockerfile --target kaniko-debug .
+	docker build ${BUILD_ARG} --build-arg=TARGETARCH=$(GOARCH) --build-arg=TARGETOS=linux -t $(REGISTRY)/executor:slim   -f deploy/Dockerfile --target kaniko-slim .
+	docker build ${BUILD_ARG} --build-arg=TARGETARCH=$(GOARCH) --build-arg=TARGETOS=linux -t $(REGISTRY)/warmer:latest   -f deploy/Dockerfile --target kaniko-warmer .
 
 .PHONY: push
 push:
@@ -116,26 +127,56 @@ push:
 	docker push $(REGISTRY)/executor:slim
 	docker push $(REGISTRY)/warmer:latest
 
-# Code quality
-.PHONY: install-tools lint check-all
-
-install-tools:
-	@echo "Installing development tools..."
-	GOFLAGS="" go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
-	@echo "Development tools installed successfully"
-
+# --------------------------- Code quality ---------------------------
+.PHONY: lint
 lint: install-tools
 	@if command -v $(GOLANGCI_LINT) >/dev/null 2>&1; then \
 		echo "Running linter..."; \
 		GOARCH=$(GOARCH) GOOS=$(GOOS) CGO_ENABLED=0 $(GOLANGCI_LINT) run --timeout=5m; \
 		echo "Linter completed!"; \
 	else \
-		echo "golangci-lint is not installed. Installing..."; \
-		GOFLAGS="" go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest; \
-		echo "Running linter..."; \
-		GOARCH=$(GOARCH) GOOS=$(GOOS) CGO_ENABLED=0 $(GOLANGCI_LINT) run --timeout=5m; \
-		echo "Linter completed!"; \
+		echo "golangci-lint is not installed."; \
+		exit 1; \
 	fi
 
-check-all: lint
+# --- goimports formatting (ignore vendor) ------------------------------------
+# Use your repo path as the local prefix so internal imports form a separate group.
+LOCAL_PREFIX ?= $(REPOPATH)
+
+.PHONY: fmt
+fmt: install-tools
+	@echo "Running goimports (excluding vendor/)..."
+	@files=$$(git ls-files -- '*.go' ':(exclude)vendor/**'); \
+	if [ -n "$$files" ]; then \
+		echo "$$files" | xargs -n 50 $(GOIMPORTS) -w -local $(LOCAL_PREFIX); \
+	fi
+	@echo "goimports formatting done."
+
+.PHONY: fmt-check
+fmt-check: install-tools
+	@files=$$(git ls-files -- '*.go' ':(exclude)vendor/**'); \
+	if [ -n "$$files" ]; then \
+		out=$$($(GOIMPORTS) -l -local $(LOCAL_PREFIX) $$files); \
+		if [ -n "$$out" ]; then \
+			echo "The following files are not goimports-formatted:"; \
+			echo "$$out"; \
+			echo ""; \
+			echo "=> Run: make fmt"; \
+			exit 1; \
+		fi; \
+	fi; \
+	echo "goimports check passed."
+
+.PHONY: check-all
+check-all: fmt-check lint
 	@echo "All code quality checks completed"
+
+# --------------------------- Misc utilities ---------------------------
+.PHONY: install-container-diff
+install-container-diff:
+	@ curl -LO https://github.com/Gosayram/container-diff/releases/download/v0.17.0/container-diff-$(GOOS)-amd64 && \
+		chmod +x container-diff-$(GOOS)-amd64 && sudo mv container-diff-$(GOOS)-amd64 /usr/local/bin/container-diff
+
+.PHONY: k3s-setup
+k3s-setup:
+	@ ./scripts/k3s-setup.sh
