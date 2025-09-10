@@ -220,7 +220,7 @@ func extractSingleLayer(root string, layer v1.Layer, index int, cfg *FSConfig) (
 func extractTarEntries(root string, r io.ReadCloser, cfg *FSConfig) ([]string, error) {
 	var extractedFiles []string
 	tr := tar.NewReader(r)
-	
+
 	for {
 		hdr, err := tr.Next()
 		if errors.Is(err, io.EOF) {
@@ -232,14 +232,14 @@ func extractTarEntries(root string, r io.ReadCloser, cfg *FSConfig) ([]string, e
 
 		cleanedName := filepath.Clean(hdr.Name)
 		path := filepath.Join(root, cleanedName)
-		
+
 		if err := processTarEntry(root, hdr, cleanedName, tr, cfg); err != nil {
 			return nil, err
 		}
 
 		extractedFiles = append(extractedFiles, path)
 	}
-	
+
 	return extractedFiles, nil
 }
 
