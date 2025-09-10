@@ -49,7 +49,6 @@ func (s *S3) UnpackTarFromBuildContext() (string, error) {
 	endpoint := os.Getenv(constants.S3EndpointEnv)
 	forcePath := strings.ToLower(os.Getenv(constants.S3ForcePathStyle)) == "true"
 
-
 	cfg, err := config.LoadDefaultConfig(context.TODO())
 	if err != nil {
 		return bucketName, err

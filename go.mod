@@ -36,6 +36,7 @@ require (
 	github.com/GoogleCloudPlatform/docker-credential-gcr/v2 v2.1.22
 	github.com/containerd/containerd v1.7.28
 	github.com/docker/docker v28.4.0+incompatible
+	github.com/moby/go-archive v0.1.0
 	github.com/moby/sys/user v0.4.0
 )
 
@@ -170,7 +171,6 @@ require (
 	github.com/magiconair/properties v1.8.7 // indirect
 	github.com/mitchellh/mapstructure v1.5.0 // indirect
 	github.com/moby/docker-image-spec v1.3.1 // indirect
-	github.com/moby/go-archive v0.1.0 // indirect
 	github.com/moby/sys/atomicwriter v0.1.0 // indirect
 	github.com/moby/sys/reexec v0.1.0 // indirect
 	github.com/moby/sys/userns v0.1.0 // indirect

@@ -42,9 +42,9 @@ var (
 )
 
 const (
-	pathSeparator        = "/"
-	maxEnvSplitParts     = 2
-	defaultChmod         = 0o600
+	pathSeparator    = "/"
+	maxEnvSplitParts = 2
+	defaultChmod     = 0o600
 )
 
 // ResolveEnvironmentReplacementList resolves a list of values by calling resolveEnvironmentReplacement

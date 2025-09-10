@@ -39,9 +39,10 @@ import (
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 
+	"github.com/moby/patternmatcher/ignorefile"
+
 	"github.com/Gosayram/kaniko/pkg/config"
 	"github.com/Gosayram/kaniko/pkg/timing"
-	"github.com/moby/patternmatcher/ignorefile"
 )
 
 const (
@@ -111,7 +112,7 @@ type ExtractFunction func(string, *tar.Header, string, io.Reader) error
 
 // FSConfig contains configuration for filesystem operations
 type FSConfig struct {
-	includeWhiteout bool           // Whether to include whiteout files
+	includeWhiteout bool            // Whether to include whiteout files
 	extractFunc     ExtractFunction // Function for extracting files
 }
 
