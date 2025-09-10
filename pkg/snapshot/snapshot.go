@@ -88,14 +88,14 @@ func (s *Snapshotter) TakeSnapshot(files []string, shdCheckDelete, forceBuildMet
 	// Add files to current layer.
 	for _, file := range filesToAdd {
 		if err := s.l.Add(file); err != nil {
-			return "", fmt.Errorf("Unable to add file %s to layered map: %w", file, err)
+			return "", fmt.Errorf("unable to add file %s to layered map: %w", file, err)
 		}
 	}
 
 	// Get whiteout paths
 	var filesToWhiteout []string
 	if shdCheckDelete {
-		_, deletedFiles := util.WalkFS(s.directory, s.l.GetCurrentPaths(), func(s string) (bool, error) {
+		_, deletedFiles := util.WalkFS(s.directory, s.l.GetCurrentPaths(), func(_ string) (bool, error) {
 			return true, nil
 		})
 
@@ -103,7 +103,7 @@ func (s *Snapshotter) TakeSnapshot(files []string, shdCheckDelete, forceBuildMet
 		// Whiteout files in current layer.
 		for file := range deletedFiles {
 			if err := s.l.AddDelete(file); err != nil {
-				return "", fmt.Errorf("Unable to whiteout file %s in layered map: %w", file, err)
+				return "", fmt.Errorf("unable to whiteout file %s in layered map: %w", file, err)
 			}
 		}
 
@@ -148,7 +148,7 @@ func (s *Snapshotter) getSnapshotPathPrefix() string {
 	return snapshotPathPrefix
 }
 
-func (s *Snapshotter) scanFullFilesystem() (filesToAdd []string, filesToWhiteout []string, err error) {
+func (s *Snapshotter) scanFullFilesystem() (filesToAdd, filesToWhiteout []string, err error) {
 	logrus.Info("Taking snapshot of full filesystem...")
 
 	// Some of the operations that follow (e.g. hashing) depend on the file system being synced,
@@ -156,9 +156,9 @@ func (s *Snapshotter) scanFullFilesystem() (filesToAdd []string, filesToWhiteout
 	// which can lag if sync is not called. Unfortunately there can still be lag if too much data needs
 	// to be flushed or the disk does its own caching/buffering.
 	if runtime.GOOS == "linux" {
-		dir, err := os.Open(s.directory)
-		if err != nil {
-			return nil, nil, err
+		dir, openErr := os.Open(s.directory)
+		if openErr != nil {
+			return nil, nil, openErr
 		}
 		defer dir.Close()
 		// Try to use syncfs for Linux systems - this is more efficient than syncing all filesystems
@@ -196,12 +196,12 @@ func (s *Snapshotter) scanFullFilesystem() (filesToAdd []string, filesToWhiteout
 	// Add files to the layered map
 	for _, file := range filesToAdd {
 		if err := s.l.Add(file); err != nil {
-			return nil, nil, fmt.Errorf("Unable to add file %s to layered map: %w", file, err)
+			return nil, nil, fmt.Errorf("unable to add file %s to layered map: %w", file, err)
 		}
 	}
 	for file := range deletedPaths {
 		if err := s.l.AddDelete(file); err != nil {
-			return nil, nil, fmt.Errorf("Unable to whiteout file %s in layered map: %w", file, err)
+			return nil, nil, fmt.Errorf("unable to whiteout file %s in layered map: %w", file, err)
 		}
 	}
 
@@ -216,7 +216,6 @@ func (s *Snapshotter) scanFullFilesystem() (filesToAdd []string, filesToWhiteout
 
 // removeObsoleteWhiteouts filters deleted files according to their parents delete status.
 func removeObsoleteWhiteouts(deletedFiles map[string]struct{}) (filesToWhiteout []string) {
-
 	for path := range deletedFiles {
 		// Only add the whiteout if the directory for the file still exists.
 		dir := filepath.Dir(path)

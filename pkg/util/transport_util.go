@@ -31,11 +31,13 @@ import (
 	"github.com/Gosayram/kaniko/pkg/config"
 )
 
+// CertPool defines an interface for certificate pool operations
 type CertPool interface {
 	value() *x509.CertPool
 	append(path string) error
 }
 
+// X509CertPool implements CertPool using x509.CertPool
 type X509CertPool struct {
 	inner x509.CertPool
 }
@@ -60,10 +62,12 @@ func (p *X509CertPool) append(path string) error {
 
 var systemCertLoader CertPool
 
+// KeyPairLoader defines an interface for loading TLS key pairs
 type KeyPairLoader interface {
 	load(string, string) (tls.Certificate, error)
 }
 
+// X509KeyPairLoader implements KeyPairLoader using tls.LoadX509KeyPair
 type X509KeyPairLoader struct {
 }
 
@@ -87,6 +91,7 @@ func Initialize() {
 	systemKeyPairLoader = &X509KeyPairLoader{}
 }
 
+// MakeTransport creates an HTTP transport with TLS configuration based on registry options
 func MakeTransport(opts config.RegistryOptions, registryName string) (http.RoundTripper, error) {
 	// Create a transport to set our user-agent.
 	var tr http.RoundTripper = http.DefaultTransport.(*http.Transport).Clone()
@@ -110,11 +115,14 @@ func MakeTransport(opts config.RegistryOptions, registryName string) (http.Round
 	if clientCertificatePath := opts.RegistriesClientCertificates[registryName]; clientCertificatePath != "" {
 		certFiles := strings.Split(clientCertificatePath, ",")
 		if len(certFiles) != 2 {
-			return nil, fmt.Errorf("failed to load client certificate/key '%s=%s', expected format: %s=/path/to/cert,/path/to/key", registryName, clientCertificatePath, registryName)
+			return nil, fmt.Errorf("failed to load client certificate/key '%s=%s', "+
+				"expected format: %s=/path/to/cert,/path/to/key",
+				registryName, clientCertificatePath, registryName)
 		}
 		cert, err := systemKeyPairLoader.load(certFiles[0], certFiles[1])
 		if err != nil {
-			return nil, fmt.Errorf("failed to load client certificate/key '%s' for %s: %w", clientCertificatePath, registryName, err)
+			return nil, fmt.Errorf("failed to load client certificate/key '%s' for %s: %w",
+				clientCertificatePath, registryName, err)
 		}
 		tr.(*http.Transport).TLSClientConfig.Certificates = []tls.Certificate{cert}
 	}

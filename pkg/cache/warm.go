@@ -160,8 +160,8 @@ func (w *Warmer) Warm(image string, opts *config.WarmerOptions) (v1.Hash, error)
 	}
 
 	if !opts.Force {
-		_, err := w.Local(&opts.CacheOptions, digest.String())
-		if err == nil || IsExpired(err) {
+		_, localErr := w.Local(&opts.CacheOptions, digest.String())
+		if localErr == nil || IsExpired(localErr) {
 			return v1.Hash{}, AlreadyCachedErr{}
 		}
 	}
@@ -183,6 +183,7 @@ func (w *Warmer) Warm(image string, opts *config.WarmerOptions) (v1.Hash, error)
 	return digest, nil
 }
 
+// ParseDockerfile parses a Dockerfile from local path or URL and extracts base image names
 func ParseDockerfile(opts *config.WarmerOptions) ([]string, error) {
 	var err error
 	var d []uint8
@@ -190,7 +191,7 @@ func ParseDockerfile(opts *config.WarmerOptions) ([]string, error) {
 	match, _ := regexp.MatchString("^https?://", opts.DockerfilePath)
 	if match {
 		client := &http.Client{
-			CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
 				return http.ErrUseLastResponse
 			},
 		}
@@ -199,8 +200,8 @@ func ParseDockerfile(opts *config.WarmerOptions) ([]string, error) {
 			return nil, e
 		}
 		defer func() {
-			if err := response.Body.Close(); err != nil {
-				logrus.Warnf("Failed to close response body: %v", err)
+			if closeErr := response.Body.Close(); closeErr != nil {
+				logrus.Warnf("Failed to close response body: %v", closeErr)
 			}
 		}()
 		d, err = io.ReadAll(response.Body)
@@ -228,5 +229,4 @@ func ParseDockerfile(opts *config.WarmerOptions) ([]string, error) {
 		baseNames = append(baseNames, resolvedBaseName)
 	}
 	return baseNames, nil
-
 }

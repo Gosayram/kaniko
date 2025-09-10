@@ -30,6 +30,7 @@ import (
 
 	"github.com/docker/docker/pkg/archive"
 	"github.com/docker/docker/pkg/system"
+	"github.com/moby/go-archive/compression"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 
@@ -51,6 +52,7 @@ func NewTar(f io.Writer) Tar {
 	}
 }
 
+// CreateTarballOfDirectory creates a tarball from the contents of the specified directory.
 func CreateTarballOfDirectory(pathToDir string, f io.Writer) error {
 	if !filepath.IsAbs(pathToDir) {
 		return errors.New("pathToDir is not absolute")
@@ -58,7 +60,7 @@ func CreateTarballOfDirectory(pathToDir string, f io.Writer) error {
 	tarWriter := NewTar(f)
 	defer tarWriter.Close()
 
-	walkFn := func(path string, d fs.DirEntry, err error) error {
+	walkFn := func(path string, _ fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -82,7 +84,7 @@ func (t *Tar) Close() {
 func (t *Tar) AddFileToTar(p string) error {
 	i, err := os.Lstat(p)
 	if err != nil {
-		return fmt.Errorf("Failed to get file info for %s: %w", p, err)
+		return fmt.Errorf("failed to get file info for %s: %w", p, err)
 	}
 
 	// Handle sockets - ignore them
@@ -200,10 +202,10 @@ const (
 // writeSecurityXattrToTarFile writes security.capability
 // xattrs from a tar header to filesystem
 func writeSecurityXattrToTarFile(path string, hdr *tar.Header) error {
-	if hdr.Xattrs == nil {
+	if hdr.PAXRecords == nil {
 		return nil
 	}
-	if capability, ok := hdr.Xattrs[securityCapabilityXattr]; ok {
+	if capability, ok := hdr.PAXRecords[securityCapabilityXattr]; ok {
 		err := system.Lsetxattr(path, securityCapabilityXattr, []byte(capability), 0)
 		if err != nil && !errors.Is(err, syscall.EOPNOTSUPP) && !errors.Is(err, system.ErrNotSupportedPlatform) {
 			return errors.Wrapf(err, "failed to write %q attribute to %q", securityCapabilityXattr, path)
@@ -215,19 +217,20 @@ func writeSecurityXattrToTarFile(path string, hdr *tar.Header) error {
 // readSecurityXattrToTarHeader reads security.capability
 // xattrs from filesystem to a tar header
 func readSecurityXattrToTarHeader(path string, hdr *tar.Header) error {
-	if hdr.Xattrs == nil {
-		hdr.Xattrs = make(map[string]string)
+	if hdr.PAXRecords == nil {
+		hdr.PAXRecords = make(map[string]string)
 	}
 	capability, err := system.Lgetxattr(path, securityCapabilityXattr)
 	if err != nil && !errors.Is(err, syscall.EOPNOTSUPP) && !errors.Is(err, system.ErrNotSupportedPlatform) {
 		return errors.Wrapf(err, "failed to read %q attribute from %q", securityCapabilityXattr, path)
 	}
 	if capability != nil {
-		hdr.Xattrs[securityCapabilityXattr] = string(capability)
+		hdr.PAXRecords[securityCapabilityXattr] = string(capability)
 	}
 	return nil
 }
 
+// Whiteout creates a whiteout file in the tar archive for the specified path.
 func (t *Tar) Whiteout(p string) error {
 	dir := filepath.Dir(p)
 	name := archive.WhiteoutPrefix + filepath.Base(p)
@@ -244,8 +247,11 @@ func (t *Tar) Whiteout(p string) error {
 	return nil
 }
 
-// Returns true if path is hardlink, and the link destination
-func (t *Tar) checkHardlink(p string, i os.FileInfo) (bool, string) {
+// checkHardlink checks if the path is a hardlink and returns the result.
+// Returns:
+// - bool: true if path is hardlink
+// - string: the link destination
+func (t *Tar) checkHardlink(p string, i os.FileInfo) (isHardlink bool, linkDestination string) {
 	hardlink := false
 	linkDst := ""
 	stat := getSyscallStatT(i)
@@ -289,14 +295,15 @@ func UnpackLocalTarArchive(path, dest string) ([]string, error) {
 			return nil, err
 		}
 		defer file.Close()
-		if compressionLevel == archive.Gzip {
+		switch compressionLevel {
+		case archive.Gzip:
 			gzr, err := gzip.NewReader(file)
 			if err != nil {
 				return nil, err
 			}
 			defer gzr.Close()
 			return UnTar(gzr, dest)
-		} else if compressionLevel == archive.Bzip2 {
+		case archive.Bzip2:
 			bzr := bzip2.NewReader(file)
 			return UnTar(bzr, dest)
 		}
@@ -324,7 +331,7 @@ func IsFileLocalTarArchive(src string) bool {
 	return compressed || uncompressed
 }
 
-func fileIsCompressedTar(src string) (bool, archive.Compression) {
+func fileIsCompressedTar(src string) (isCompressed bool, compressionType archive.Compression) {
 	// Validate the source path to prevent directory traversal
 	cleanSrc := filepath.Clean(src)
 	if strings.Contains(cleanSrc, "..") || strings.HasPrefix(cleanSrc, "/") {
@@ -339,7 +346,7 @@ func fileIsCompressedTar(src string) (bool, archive.Compression) {
 	if err != nil {
 		return false, -1
 	}
-	compressionLevel := archive.DetectCompression(buf)
+	compressionLevel := compression.Detect(buf)
 	return (compressionLevel > 0), compressionLevel
 }
 

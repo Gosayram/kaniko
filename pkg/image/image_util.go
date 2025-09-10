@@ -14,6 +14,8 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// Package image provides utilities for working with container images,
+// including retrieval from remote registries and local cache.
 package image
 
 import (

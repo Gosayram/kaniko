@@ -47,27 +47,17 @@ func (s *S3) UnpackTarFromBuildContext() (string, error) {
 	}
 
 	endpoint := os.Getenv(constants.S3EndpointEnv)
-	forcePath := false
-	if strings.ToLower(os.Getenv(constants.S3ForcePathStyle)) == "true" {
-		forcePath = true
-	}
+	forcePath := strings.ToLower(os.Getenv(constants.S3ForcePathStyle)) == "true"
 
-	customResolver := aws.EndpointResolverWithOptionsFunc(func(service, region string, options ...interface{}) (aws.Endpoint, error) {
-		if endpoint != "" {
-			return aws.Endpoint{
-				URL: endpoint,
-			}, nil
-		}
-		return aws.Endpoint{}, &aws.EndpointNotFoundError{}
-	})
 
-	cfg, err := config.LoadDefaultConfig(context.TODO(), config.WithEndpointResolverWithOptions(customResolver))
+	cfg, err := config.LoadDefaultConfig(context.TODO())
 	if err != nil {
 		return bucketName, err
 	}
 	client := s3.NewFromConfig(cfg, func(options *s3.Options) {
 		if endpoint != "" {
 			options.UsePathStyle = forcePath
+			options.BaseEndpoint = aws.String(endpoint)
 		}
 	})
 	downloader := s3manager.NewDownloader(client)
@@ -78,19 +68,20 @@ func (s *S3) UnpackTarFromBuildContext() (string, error) {
 	}
 	// Ensure tarPath stays within the intended directory
 	if !strings.HasPrefix(filepath.Clean(tarPath), directory) {
-		return directory, fmt.Errorf("potential path traversal attempt - tarPath %s not within directory %s", tarPath, directory)
+		return directory, fmt.Errorf("potential path traversal attempt - "+
+			"tarPath %s not within directory %s", tarPath, directory)
 	}
 	file, err := os.Create(filepath.Clean(tarPath))
 	if err != nil {
 		return directory, err
 	}
-	_, err = downloader.Download(context.TODO(), file,
+	_, downloadErr := downloader.Download(context.TODO(), file,
 		&s3.GetObjectInput{
 			Bucket: aws.String(bucketName),
 			Key:    aws.String(item),
 		})
-	if err != nil {
-		return directory, err
+	if downloadErr != nil {
+		return directory, downloadErr
 	}
 
 	return directory, util.UnpackCompressedTar(tarPath, directory)

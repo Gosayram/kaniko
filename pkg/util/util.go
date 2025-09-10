@@ -37,11 +37,20 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+const (
+	// highwayhashBlockSize is the size of blocks used for highwayhash computation
+	highwayhashBlockSize = highwayhash.Size * 10 * 1024
+	// initialXattrBufferSize is the initial buffer size for xattr operations
+	initialXattrBufferSize = 128
+	// exponentialBackoffBase is the base multiplier for exponential backoff
+	exponentialBackoffBase = 2
+)
+
 // Hasher returns a hash function, used in snapshotting to determine if a file has changed
 func Hasher() func(string) (string, error) {
 	pool := sync.Pool{
 		New: func() interface{} {
-			b := make([]byte, highwayhash.Size*10*1024)
+			b := make([]byte, highwayhashBlockSize)
 			return &b
 		},
 	}
@@ -203,10 +212,10 @@ func GetInputFrom(r io.Reader) ([]byte, error) {
 type retryFunc func() error
 
 // Retry retries an operation
-func Retry(operation retryFunc, retryCount int, initialDelayMilliseconds int) error {
+func Retry(operation retryFunc, retryCount, initialDelayMilliseconds int) error {
 	err := operation()
 	for i := 0; err != nil && i < retryCount; i++ {
-		sleepDuration := time.Millisecond * time.Duration(int(math.Pow(2, float64(i)))*initialDelayMilliseconds)
+		sleepDuration := time.Millisecond * time.Duration(int(math.Pow(exponentialBackoffBase, float64(i)))*initialDelayMilliseconds)
 		logrus.Warnf("Retrying operation after %s due to %v", sleepDuration, err)
 		time.Sleep(sleepDuration)
 		err = operation()
@@ -215,14 +224,14 @@ func Retry(operation retryFunc, retryCount int, initialDelayMilliseconds int) er
 	return err
 }
 
-// Retry retries an operation with a return value
-func RetryWithResult[T any](operation func() (T, error), retryCount int, initialDelayMilliseconds int) (result T, err error) {
+// RetryWithResult retries an operation with a return value
+func RetryWithResult[T any](operation func() (T, error), retryCount, initialDelayMilliseconds int) (result T, err error) {
 	result, err = operation()
 	if err == nil {
 		return result, nil
 	}
 	for i := 0; i < retryCount; i++ {
-		sleepDuration := time.Millisecond * time.Duration(int(math.Pow(2, float64(i)))*initialDelayMilliseconds)
+		sleepDuration := time.Millisecond * time.Duration(int(math.Pow(exponentialBackoffBase, float64(i)))*initialDelayMilliseconds)
 		logrus.Warnf("Retrying operation after %s due to %v", sleepDuration, err)
 		time.Sleep(sleepDuration)
 
@@ -237,7 +246,7 @@ func RetryWithResult[T any](operation func() (T, error), retryCount int, initial
 
 func Lgetxattr(path string, attr string) ([]byte, error) {
 	// Start with a 128 length byte array
-	dest := make([]byte, 128)
+	dest := make([]byte, initialXattrBufferSize)
 	sz, errno := unix.Lgetxattr(path, attr, dest)
 
 	for errors.Is(errno, unix.ERANGE) {

@@ -42,7 +42,9 @@ var (
 )
 
 const (
-	pathSeparator = "/"
+	pathSeparator        = "/"
+	maxEnvSplitParts     = 2
+	defaultChmod         = 0o600
 )
 
 // ResolveEnvironmentReplacementList resolves a list of values by calling resolveEnvironmentReplacement
@@ -86,6 +88,7 @@ func ResolveEnvironmentReplacement(value string, envs []string, isFilepath bool)
 	return fp, nil
 }
 
+// ResolveEnvAndWildcards resolves environment variables and wildcards in source paths.
 func ResolveEnvAndWildcards(sd instructions.SourcesAndDest, fileContext FileContext, envs []string) ([]string, string, error) {
 	// First, resolve any environment replacement
 	resolvedEnvs, err := ResolveEnvironmentReplacementList(sd.SourcePaths, envs, true)
@@ -165,6 +168,7 @@ func matchSources(srcs, files []string) ([]string, error) {
 	return matchedSources, nil
 }
 
+// IsDestDir checks if the given path is a directory or should be treated as one.
 func IsDestDir(path string) bool {
 	// try to stat the path
 	fileInfo, err := os.Stat(path)
@@ -240,34 +244,62 @@ func IsSrcsValid(srcsAndDest instructions.SourcesAndDest, resolvedSources []stri
 	srcs := srcsAndDest.SourcePaths
 	dest := srcsAndDest.DestPath
 
-	if !ContainsWildcards(srcs) {
-		totalSrcs := 0
-		for _, src := range srcs {
-			if fileContext.ExcludesFile(src) {
-				continue
-			}
-			totalSrcs++
-		}
-		if totalSrcs > 1 && !IsDestDir(dest) {
-			return errors.New("when specifying multiple sources in a COPY command, destination must be a directory and end in '/'")
-		}
+	if err := validateNonWildcardSources(srcs, dest, fileContext); err != nil {
+		return err
 	}
 
-	// If there is only one source and it's a directory, docker assumes the dest is a directory
-	if len(resolvedSources) == 1 {
-		if IsSrcRemoteFileURL(resolvedSources[0]) {
-			return nil
-		}
-		path := filepath.Join(fileContext.Root, resolvedSources[0])
-		fi, err := os.Lstat(path)
-		if err != nil {
-			return errors.Wrap(err, fmt.Sprintf("failed to get fileinfo for %v", path))
-		}
-		if fi.IsDir() {
-			return nil
-		}
+	if err := checkSingleDirectorySource(resolvedSources, fileContext); err != nil {
+		return err
 	}
 
+	totalFiles, err := countTotalFiles(resolvedSources, fileContext)
+	if err != nil {
+		return err
+	}
+
+	return validateDestinationForMultipleFiles(totalFiles, dest)
+}
+
+func validateNonWildcardSources(srcs []string, dest string, fileContext FileContext) error {
+	if ContainsWildcards(srcs) {
+		return nil
+	}
+
+	totalSrcs := 0
+	for _, src := range srcs {
+		if fileContext.ExcludesFile(src) {
+			continue
+		}
+		totalSrcs++
+	}
+	if totalSrcs > 1 && !IsDestDir(dest) {
+		return errors.New("when specifying multiple sources in a COPY command, " +
+			"destination must be a directory and end in '/'")
+	}
+	return nil
+}
+
+func checkSingleDirectorySource(resolvedSources []string, fileContext FileContext) error {
+	if len(resolvedSources) != 1 {
+		return nil
+	}
+
+	if IsSrcRemoteFileURL(resolvedSources[0]) {
+		return nil
+	}
+
+	path := filepath.Join(fileContext.Root, resolvedSources[0])
+	fi, err := os.Lstat(path)
+	if err != nil {
+		return errors.Wrap(err, fmt.Sprintf("failed to get fileinfo for %v", path))
+	}
+	if fi.IsDir() {
+		return nil
+	}
+	return nil
+}
+
+func countTotalFiles(resolvedSources []string, fileContext FileContext) (int, error) {
 	totalFiles := 0
 	for _, src := range resolvedSources {
 		if IsSrcRemoteFileURL(src) {
@@ -277,7 +309,7 @@ func IsSrcsValid(srcsAndDest instructions.SourcesAndDest, resolvedSources []stri
 		src = filepath.Clean(src)
 		files, err := RelativeFiles(src, fileContext.Root)
 		if err != nil {
-			return errors.Wrap(err, "failed to get relative files")
+			return 0, errors.Wrap(err, "failed to get relative files")
 		}
 		for _, file := range files {
 			if fileContext.ExcludesFile(file) {
@@ -286,24 +318,31 @@ func IsSrcsValid(srcsAndDest instructions.SourcesAndDest, resolvedSources []stri
 			totalFiles++
 		}
 	}
-	// ignore the case where whildcards and there are no files to copy
+
+	// ignore the case where wildcards and there are no files to copy
 	if totalFiles == 0 {
-		// using log warning instead of return errors.New("copy failed: no source files specified")
 		logrus.Warn("No files to copy")
 	}
+	return totalFiles, nil
+}
+
+func validateDestinationForMultipleFiles(totalFiles int, dest string) error {
 	// If there are wildcards, and the destination is a file, there must be exactly one file to copy over,
 	// Otherwise, return an error
 	if !IsDestDir(dest) && totalFiles > 1 {
-		return errors.New("when specifying multiple sources in a COPY command, destination must be a directory and end in '/'")
+		return errors.New("when specifying multiple sources in a COPY command, " +
+			"destination must be a directory and end in '/'")
 	}
 	return nil
 }
 
+// IsSrcRemoteFileURL checks if the given URL represents a remote file source.
 func IsSrcRemoteFileURL(rawurl string) bool {
 	u, err := url.ParseRequestURI(rawurl)
 	return err == nil && u.Scheme != "" && u.Host != ""
 }
 
+// UpdateConfigEnv updates the container configuration environment variables.
 func UpdateConfigEnv(envVars []instructions.KeyValuePair, config *v1.Config, replacementEnvs []string) error {
 	newEnvs := make([]instructions.KeyValuePair, len(envVars))
 	for index, pair := range envVars {
@@ -324,7 +363,7 @@ func UpdateConfigEnv(envVars []instructions.KeyValuePair, config *v1.Config, rep
 	// First, convert config.Env array to []instruction.KeyValuePair
 	var kvps []instructions.KeyValuePair
 	for _, env := range config.Env {
-		entry := strings.SplitN(env, "=", 2)
+		entry := strings.SplitN(env, "=", maxEnvSplitParts)
 		kvps = append(kvps, instructions.KeyValuePair{
 			Key:   entry[0],
 			Value: entry[1],
@@ -355,6 +394,7 @@ Loop:
 	return nil
 }
 
+// GetUserGroup resolves user and group information from a chown string.
 func GetUserGroup(chownStr string, env []string) (int64, int64, error) {
 	if chownStr == "" {
 		return DoNotChangeUID, DoNotChangeGID, nil
@@ -373,9 +413,10 @@ func GetUserGroup(chownStr string, env []string) (int64, int64, error) {
 	return int64(uid32), int64(gid32), nil
 }
 
+// GetChmod resolves file mode permissions from a chmod string.
 func GetChmod(chmodStr string, env []string) (chmod fs.FileMode, useDefault bool, err error) {
 	if chmodStr == "" {
-		return fs.FileMode(0o600), true, nil
+		return fs.FileMode(defaultChmod), true, nil
 	}
 
 	chmodStr, err = ResolveEnvironmentReplacement(chmodStr, env, false)
@@ -393,7 +434,7 @@ func GetChmod(chmodStr string, env []string) (chmod fs.FileMode, useDefault bool
 
 // Extract user and group id from a string formatted 'user:group'.
 // UserID and GroupID don't need to be present on the system.
-func getUIDAndGIDFromString(userGroupString string) (uint32, uint32, error) {
+func getUIDAndGIDFromString(userGroupString string) (uid, gid uint32, err error) {
 	userAndGroup := strings.Split(userGroupString, ":")
 	userStr := userAndGroup[0]
 	var groupStr string
@@ -403,12 +444,12 @@ func getUIDAndGIDFromString(userGroupString string) (uint32, uint32, error) {
 	return getUIDAndGIDFunc(userStr, groupStr)
 }
 
-func getUIDAndGID(userStr string, groupStr string) (uint32, uint32, error) {
-	user, err := LookupUser(userStr)
+func getUIDAndGID(userStr, groupStr string) (uint32, uint32, error) {
+	userObj, err := LookupUser(userStr)
 	if err != nil {
 		return 0, 0, err
 	}
-	uid32, err := getUID(user.Uid)
+	uid32, err := getUID(userObj.Uid)
 	if err != nil {
 		return 0, 0, err
 	}

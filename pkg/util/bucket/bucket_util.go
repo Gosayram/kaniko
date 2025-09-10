@@ -14,6 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// Package bucket provides utilities for working with cloud storage buckets.
 package bucket
 
 import (
@@ -74,14 +75,14 @@ func NewClient(ctx context.Context, opts ...option.ClientOption) (*storage.Clien
 // GetNameAndFilepathFromURI returns the bucketname and the path to the item inside.
 // Will error if provided URI is not a valid URL.
 // If the filepath is empty, returns the contextTar filename
-func GetNameAndFilepathFromURI(bucketURI string) (bucketName string, path string, err error) {
-	url, err := url.Parse(bucketURI)
+func GetNameAndFilepathFromURI(bucketURI string) (bucketName, path string, err error) {
+	parsedURL, err := url.Parse(bucketURI)
 	if err != nil {
 		return "", "", err
 	}
-	bucketName = url.Host
+	bucketName = parsedURL.Host
 	// remove leading slash
-	filePath := strings.TrimPrefix(url.Path, "/")
+	filePath := strings.TrimPrefix(parsedURL.Path, "/")
 	if filePath == "" {
 		filePath = constants.ContextTar
 	}
