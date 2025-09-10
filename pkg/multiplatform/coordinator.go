@@ -106,7 +106,29 @@ func (c *Coordinator) Cleanup() error {
 func (c *Coordinator) preFlightChecks(platforms []string) error {
 	logrus.Info("Performing multi-platform pre-flight checks")
 
-	// Check for duplicate platforms
+	if err := validatePlatformDuplicates(platforms); err != nil {
+		return err
+	}
+
+	if err := validatePlatformFormat(platforms); err != nil {
+		return err
+	}
+
+	if err := validateDriverRequirements(c.opts, platforms); err != nil {
+		return err
+	}
+
+	if err := validatePublishIndexRequirements(c.opts); err != nil {
+		return err
+	}
+
+	validateCacheRepositorySuffix(c.opts, platforms)
+
+	logrus.Info("Pre-flight checks completed successfully")
+	return nil
+}
+
+func validatePlatformDuplicates(platforms []string) error {
 	platformSet := make(map[string]bool)
 	for _, platform := range platforms {
 		if platformSet[platform] {
@@ -114,8 +136,10 @@ func (c *Coordinator) preFlightChecks(platforms []string) error {
 		}
 		platformSet[platform] = true
 	}
+	return nil
+}
 
-	// Validate platform format
+func validatePlatformFormat(platforms []string) error {
 	for _, platform := range platforms {
 		parts := strings.Split(platform, "/")
 		if len(parts) != 2 {
@@ -127,37 +151,40 @@ func (c *Coordinator) preFlightChecks(platforms []string) error {
 			return fmt.Errorf("invalid platform format: %s (both os and arch must be specified)", platform)
 		}
 	}
+	return nil
+}
 
-	// Validate driver-specific requirements
-	switch c.opts.Driver {
+func validateDriverRequirements(opts *config.KanikoOptions, platforms []string) error {
+	switch opts.Driver {
 	case "local":
 		if len(platforms) > 1 {
 			logrus.Warn("Local driver selected with multiple platforms - only host architecture will be built")
 		}
 	case "k8s":
-		if c.opts.RequireNativeNodes {
+		if opts.RequireNativeNodes {
 			logrus.Info("Kubernetes driver will require native architecture nodes")
 		}
 	case "ci":
-		if c.opts.DigestsFrom == "" {
+		if opts.DigestsFrom == "" {
 			return errors.New("CI driver requires --digests-from path")
 		}
 	}
+	return nil
+}
 
-	// Validate publish index requirements
-	if c.opts.PublishIndex && len(c.opts.Destinations) == 0 {
+func validatePublishIndexRequirements(opts *config.KanikoOptions) error {
+	if opts.PublishIndex && len(opts.Destinations) == 0 {
 		return errors.New("cannot publish index without destination registries")
 	}
+	return nil
+}
 
-	// Validate cache repository suffix for multi-arch
-	if c.opts.Cache && c.opts.CacheRepo != "" && strings.Contains(c.opts.ArchCacheRepoSuffix, "${ARCH}") {
+func validateCacheRepositorySuffix(opts *config.KanikoOptions, platforms []string) {
+	if opts.Cache && opts.CacheRepo != "" && strings.Contains(opts.ArchCacheRepoSuffix, "${ARCH}") {
 		if len(platforms) > 1 {
 			logrus.Info("Using architecture-specific cache repositories for multi-platform build")
 		}
 	}
-
-	logrus.Info("Pre-flight checks completed successfully")
-	return nil
 }
 
 // getDriver returns the appropriate driver based on configuration

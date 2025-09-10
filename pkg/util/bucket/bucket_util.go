@@ -29,7 +29,7 @@ import (
 )
 
 // Upload uploads everything from Reader to the bucket under path
-func Upload(ctx context.Context, bucketName string, path string, r io.Reader, client *storage.Client) error {
+func Upload(ctx context.Context, bucketName, path string, r io.Reader, client *storage.Client) error {
 	bucket := client.Bucket(bucketName)
 	w := bucket.Object(path).NewWriter(ctx)
 	if _, err := io.Copy(w, r); err != nil {
@@ -43,7 +43,7 @@ func Upload(ctx context.Context, bucketName string, path string, r io.Reader, cl
 
 // Delete will remove the content at path. path should be the full path
 // to a file in GCS.
-func Delete(ctx context.Context, bucketName string, path string, client *storage.Client) error {
+func Delete(ctx context.Context, bucketName, path string, client *storage.Client) error {
 	err := client.Bucket(bucketName).Object(path).Delete(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to delete file at %s in gcs bucket %v: %w", path, bucketName, err)
@@ -52,7 +52,7 @@ func Delete(ctx context.Context, bucketName string, path string, client *storage
 }
 
 // ReadCloser will create io.ReadCloser for the specified bucket and path
-func ReadCloser(ctx context.Context, bucketName string, path string, client *storage.Client) (io.ReadCloser, error) {
+func ReadCloser(ctx context.Context, bucketName, path string, client *storage.Client) (io.ReadCloser, error) {
 	bucket := client.Bucket(bucketName)
 	r, err := bucket.Object(path).NewReader(ctx)
 	if err != nil {

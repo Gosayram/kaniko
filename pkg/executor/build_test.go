@@ -77,7 +77,8 @@ func Test_reviewConfig(t *testing.T) {
 				Cmd:        test.originalCmd,
 				Entrypoint: test.originalEntrypoint,
 			}
-			reviewConfig(stage(t, test.dockerfile), config)
+			stg := stage(t, test.dockerfile)
+			reviewConfig(&stg, config)
 			testutil.CheckErrorAndDeepEqual(t, false, nil, test.expectedCmd, config.Cmd)
 		})
 	}
@@ -630,7 +631,7 @@ func Test_stageBuilder_optimize(t *testing.T) {
 				cacheCommand: MockCachedDockerCommand{},
 			}
 			sb.cmds = []commands.DockerCommand{command}
-			err = sb.optimize(ck, cf.Config)
+			err = sb.optimize(ck, &cf.Config)
 			if err != nil {
 				t.Errorf("Expected error to be nil but was %v", err)
 			}

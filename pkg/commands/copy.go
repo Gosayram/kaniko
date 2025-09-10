@@ -23,13 +23,12 @@ import (
 	"strings"
 
 	kConfig "github.com/Gosayram/kaniko/pkg/config"
-	"github.com/moby/buildkit/frontend/dockerfile/instructions"
-	"github.com/pkg/errors"
-	"github.com/sirupsen/logrus"
-
 	"github.com/Gosayram/kaniko/pkg/dockerfile"
 	"github.com/Gosayram/kaniko/pkg/util"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
+	"github.com/moby/buildkit/frontend/dockerfile/instructions"
+	"github.com/pkg/errors"
+	"github.com/sirupsen/logrus"
 )
 
 // for testing
@@ -75,8 +74,8 @@ func (c *CopyCommand) ExecuteCommand(config *v1.Config, buildArgs *dockerfile.Bu
 }
 
 // setupUserGroup sets up the user and group for the copy operation
-func (c *CopyCommand) setupUserGroup(replacementEnvs []string) (int64, int64, error) {
-	uid, gid, err := getUserGroup(c.cmd.Chown, replacementEnvs)
+func (c *CopyCommand) setupUserGroup(replacementEnvs []string) (uid, gid int64, err error) {
+	uid, gid, err = getUserGroup(c.cmd.Chown, replacementEnvs)
 	logrus.Debugf("found uid %v and gid %v for chown string %v", uid, gid, c.cmd.Chown)
 	if err != nil {
 		return 0, 0, errors.Wrap(err, "getting user group from chown")
@@ -85,13 +84,13 @@ func (c *CopyCommand) setupUserGroup(replacementEnvs []string) (int64, int64, er
 }
 
 // resolveSourcesAndDest resolves sources and destination paths
-func (c *CopyCommand) resolveSourcesAndDest(replacementEnvs []string) ([]string, string, error) {
+func (c *CopyCommand) resolveSourcesAndDest(replacementEnvs []string) (sources []string, destination string, err error) {
 	// sources from the Copy command are resolved with wildcards {*?[}
-	srcs, dest, err := util.ResolveEnvAndWildcards(c.cmd.SourcesAndDest, c.fileContext, replacementEnvs)
+	sources, destination, err = util.ResolveEnvAndWildcards(c.cmd.SourcesAndDest, c.fileContext, replacementEnvs)
 	if err != nil {
 		return nil, "", errors.Wrap(err, "resolving src")
 	}
-	return srcs, dest, nil
+	return sources, destination, nil
 }
 
 // copySources copies each source to the destination
@@ -137,11 +136,12 @@ func (c *CopyCommand) copySingleSource(src, dest string, config *v1.Config, uid,
 
 // copyFileOrDir copies a file or directory based on the file info
 func (c *CopyCommand) copyFileOrDir(fullPath, destPath string, fi os.FileInfo, uid, gid int64, chmod os.FileMode, useDefaultChmod bool) error {
-	if fi.IsDir() {
+	switch {
+	case fi.IsDir():
 		return c.copyDirectory(fullPath, destPath, uid, gid, chmod, useDefaultChmod)
-	} else if util.IsSymlink(fi) {
+	case util.IsSymlink(fi):
 		return c.copySymlink(fullPath, destPath)
-	} else {
+	default:
 		return c.copyRegularFile(fullPath, destPath, uid, gid, chmod, useDefaultChmod)
 	}
 }
@@ -239,7 +239,7 @@ func (cr *CachingCopyCommand) ExecuteCommand(config *v1.Config, buildArgs *docke
 	var err error
 
 	if cr.img == nil {
-		return errors.New(fmt.Sprintf("cached command image is nil %v", cr.String()))
+		return fmt.Errorf("cached command image is nil %v", cr.String())
 	}
 
 	layers, err := cr.img.Layers()
@@ -248,7 +248,7 @@ func (cr *CachingCopyCommand) ExecuteCommand(config *v1.Config, buildArgs *docke
 	}
 
 	if len(layers) != 1 {
-		return errors.New(fmt.Sprintf("expected %d layers but got %d", 1, len(layers)))
+		return fmt.Errorf("expected %d layers but got %d", 1, len(layers))
 	}
 
 	cr.layer = layers[0]
@@ -305,9 +305,8 @@ func resolveIfSymlink(destPath string) (string, error) {
 				newPath = filepath.Clean(dir)
 				nonexistentPaths = append(nonexistentPaths, file)
 				continue
-			} else {
-				return "", errors.Wrap(err, "failed to lstat")
 			}
+			return "", errors.Wrap(err, "failed to lstat")
 		}
 
 		newPath, err = filepath.EvalSymlinks(newPath)

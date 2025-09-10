@@ -92,11 +92,12 @@ var (
 func CheckPushPermissions(opts *config.KanikoOptions) error {
 	targets := opts.Destinations
 	// When no push and no push cache are set, we don't need to check permissions
-	if opts.SkipPushPermissionCheck {
+	switch {
+	case opts.SkipPushPermissionCheck:
 		targets = []string{}
-	} else if opts.NoPush && opts.NoPushCache {
+	case opts.NoPush && opts.NoPushCache:
 		targets = []string{}
-	} else if opts.NoPush && !opts.NoPushCache {
+	case opts.NoPush && !opts.NoPushCache:
 		// When no push is set, we want to check permissions for the cache repo
 		// instead of the destinations
 		if isOCILayout(opts.CacheRepo) {
@@ -148,7 +149,7 @@ func getDigest(image v1.Image) ([]byte, error) {
 func writeDigestFile(path string, digestByteArray []byte) error {
 	if strings.HasPrefix(path, "https://") {
 		// Do a HTTP PUT to the URL; this could be a pre-signed URL to S3 or GCS or Azure
-		req, err := http.NewRequest("PUT", path, bytes.NewReader(digestByteArray)) //nolint:noctx
+		req, err := http.NewRequest("PUT", path, bytes.NewReader(digestByteArray)) //nolint:noctx // context not needed for simple HTTP PUT requests
 		if err != nil {
 			return err
 		}
@@ -393,7 +394,7 @@ func writeImageOutputs(image v1.Image, destRefs []name.Tag) error {
 
 // pushLayerToCache pushes layer (tagged with cacheKey) to opts.CacheRepo
 // if opts.CacheRepo doesn't exist, infer the cache from the given destination
-func pushLayerToCache(opts *config.KanikoOptions, cacheKey string, tarPath string, createdBy string) error {
+func pushLayerToCache(opts *config.KanikoOptions, cacheKey, tarPath, createdBy string) error {
 	var layerOpts []tarball.LayerOption
 	if opts.CompressedCaching == true {
 		layerOpts = append(layerOpts, tarball.WithCompressedCaching)
@@ -416,18 +417,18 @@ func pushLayerToCache(opts *config.KanikoOptions, cacheKey string, tarPath strin
 		return err
 	}
 
-	cache, err := cache.Destination(opts, cacheKey)
+	cacheDest, err := cache.Destination(opts, cacheKey)
 	if err != nil {
 		return errors.Wrap(err, "getting cache destination")
 	}
-	logrus.Infof("Pushing layer %s to cache now", cache)
-	empty := empty.Image
-	empty, err = mutate.CreatedAt(empty, v1.Time{Time: time.Now()})
+	logrus.Infof("Pushing layer %s to cache now", cacheDest)
+	emptyImg := empty.Image
+	emptyImg, err = mutate.CreatedAt(emptyImg, v1.Time{Time: time.Now()})
 	if err != nil {
 		return errors.Wrap(err, "setting empty image created time")
 	}
 
-	empty, err = mutate.Append(empty,
+	emptyImg, err = mutate.Append(emptyImg,
 		mutate.Addendum{
 			Layer: layer,
 			History: v1.History{
@@ -442,14 +443,14 @@ func pushLayerToCache(opts *config.KanikoOptions, cacheKey string, tarPath strin
 	cacheOpts := *opts
 	cacheOpts.TarPath = ""              // tarPath doesn't make sense for Docker layers
 	cacheOpts.NoPush = opts.NoPushCache // we do not want to push cache if --no-push-cache is set.
-	cacheOpts.Destinations = []string{cache}
+	cacheOpts.Destinations = []string{cacheDest}
 	cacheOpts.InsecureRegistries = opts.InsecureRegistries
 	cacheOpts.SkipTLSVerifyRegistries = opts.SkipTLSVerifyRegistries
-	if isOCILayout(cache) {
-		cacheOpts.OCILayoutPath = strings.TrimPrefix(cache, "oci:")
+	if isOCILayout(cacheDest) {
+		cacheOpts.OCILayoutPath = strings.TrimPrefix(cacheDest, "oci:")
 		cacheOpts.NoPush = true
 	}
-	return DoPush(empty, &cacheOpts)
+	return DoPush(emptyImg, &cacheOpts)
 }
 
 // setDummyDestinations sets the dummy destinations required to generate new

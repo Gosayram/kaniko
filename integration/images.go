@@ -551,13 +551,30 @@ func buildKanikoImage(
 	serviceAccount string,
 	shdUpload bool,
 ) (string, error) {
-	benchmarkEnv := "BENCHMARK_FILE=false"
+	benchmarkDir, err := setupBenchmarkEnvironment(dockerfile, gcsBucket, gcsClient, shdUpload)
+	if err != nil {
+		return "", err
+	}
+
+	additionalFlags := prepareKanikoFlags(buildArgs, kanikoArgs)
+	logf("Going to build image with kaniko: %s, flags: %s \n", kanikoImage, additionalFlags)
+
+	dockerRunFlags := prepareDockerRunFlags(benchmarkDir, contextDir, dockerfile, serviceAccount, dockerfilesPath, kanikoImage, additionalFlags)
+
+	sanitizedFlags, err := sanitizeDockerFlags(dockerRunFlags)
+	if err != nil {
+		return "", err
+	}
+
+	return executeKanikoBuild(logf, dockerfile, kanikoImage, sanitizedFlags, benchmarkDir)
+}
+
+func setupBenchmarkEnvironment(dockerfile, gcsBucket string, gcsClient *storage.Client, shdUpload bool) (string, error) {
 	benchmarkDir, err := os.MkdirTemp("", "")
 	if err != nil {
 		return "", err
 	}
 	if b, err := strconv.ParseBool(os.Getenv("BENCHMARK")); err == nil && b {
-		benchmarkEnv = "BENCHMARK_FILE=/kaniko/benchmarks/" + dockerfile
 		if shdUpload {
 			benchmarkFile := path.Join(benchmarkDir, dockerfile)
 			fileName := fmt.Sprintf("run_%s_%s", time.Now().Format("2006-01-02-15:04"), dockerfile)
@@ -574,16 +591,20 @@ func buildKanikoImage(
 			}()
 		}
 	}
+	return benchmarkDir, nil
+}
 
-	// build kaniko image
+func prepareKanikoFlags(buildArgs, kanikoArgs []string) []string {
 	additionalFlags := make([]string, len(buildArgs))
 	copy(additionalFlags, buildArgs)
 	additionalFlags = append(additionalFlags, kanikoArgs...)
-	logf("Going to build image with kaniko: %s, flags: %s \n", kanikoImage, additionalFlags)
+	return additionalFlags
+}
 
+func prepareDockerRunFlags(benchmarkDir, contextDir, dockerfile, serviceAccount, dockerfilesPath, kanikoImage string, additionalFlags []string) []string {
 	dockerRunFlags := []string{
 		"run", "--net=host",
-		"-e", benchmarkEnv,
+		"-e", "BENCHMARK_FILE=/kaniko/benchmarks/" + dockerfile,
 		"-v", contextDir + ":/workspace",
 		"-v", benchmarkDir + ":/kaniko/benchmarks",
 	}
@@ -604,23 +625,28 @@ func buildKanikoImage(
 	dockerRunFlags = append(dockerRunFlags, ExecutorImage,
 		"-f", kanikoDockerfilePath,
 		"-d", kanikoImage,
-		"--force", // TODO: detection of whether kaniko is being run inside a container might be broken?
+		"--force",
 	)
 	dockerRunFlags = append(dockerRunFlags, additionalFlags...)
 
-	// Validate dockerRunFlags to prevent command injection
+	return dockerRunFlags
+}
+
+func sanitizeDockerFlags(dockerRunFlags []string) ([]string, error) {
 	sanitizedFlags := make([]string, 0, len(dockerRunFlags))
 	for _, flag := range dockerRunFlags {
 		if strings.ContainsAny(flag, "&|;`$()<>") {
-			return "", fmt.Errorf("invalid character in docker run flag: %q", flag)
+			return nil, fmt.Errorf("invalid character in docker run flag: %q", flag)
 		}
-		// Additional validation: ensure flags don't contain potentially dangerous patterns
 		if strings.Contains(flag, "../") || strings.Contains(flag, "~/") {
-			return "", fmt.Errorf("potentially dangerous path pattern in docker run flag: %q", flag)
+			return nil, fmt.Errorf("potentially dangerous path pattern in docker run flag: %q", flag)
 		}
 		sanitizedFlags = append(sanitizedFlags, flag)
 	}
-	// Use explicit argument passing instead of variadic to satisfy gosec
+	return sanitizedFlags, nil
+}
+
+func executeKanikoBuild(logf logger, dockerfile, kanikoImage string, sanitizedFlags []string, benchmarkDir string) (string, error) {
 	kanikoCmd := exec.Command("docker")
 	kanikoCmd.Args = append([]string{"docker"}, sanitizedFlags...)
 

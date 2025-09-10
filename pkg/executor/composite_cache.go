@@ -92,7 +92,7 @@ func (s *CompositeCache) AddPath(p string, context util.FileContext) error {
 }
 
 // HashDir returns a hash of the directory.
-func hashDir(p string, context util.FileContext) (bool, string, error) {
+func hashDir(p string, context util.FileContext) (isEmpty bool, hash string, err error) {
 	sha := sha256.New()
 	empty := true
 	if err := filepath.Walk(p, func(path string, fi os.FileInfo, err error) error {

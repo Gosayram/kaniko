@@ -85,7 +85,7 @@ func GetCommand(cmd instructions.Command, fileContext util.FileContext, useNewRu
 }
 
 // createRunCommand creates a run command
-func createRunCommand(cmd instructions.Command, useNewRun bool, cacheRun bool) (DockerCommand, error) {
+func createRunCommand(cmd instructions.Command, useNewRun, cacheRun bool) (DockerCommand, error) {
 	if runCmd, ok := cmd.(*instructions.RunCommand); ok {
 		if useNewRun {
 			return &RunMarkerCommand{cmd: runCmd, shdCache: cacheRun}, nil

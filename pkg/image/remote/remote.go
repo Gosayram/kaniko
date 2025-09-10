@@ -37,7 +37,7 @@ var (
 )
 
 // RetrieveRemoteImage retrieves the manifest for the specified image from the specified registry
-func RetrieveRemoteImage(image string, opts config.RegistryOptions, customPlatform string) (v1.Image, error) {
+func RetrieveRemoteImage(image string, opts *config.RegistryOptions, customPlatform string) (v1.Image, error) {
 	logrus.Infof("Retrieving image manifest %s", image)
 
 	cachedRemoteImage := manifestCache[image]
@@ -110,7 +110,7 @@ func RetrieveRemoteImage(image string, opts config.RegistryOptions, customPlatfo
 }
 
 // remapRepository adds the {repositoryPrefix}/ to the original repo, and normalizes with an additional library/ if necessary
-func remapRepository(repo name.Repository, regToMapTo string, repositoryPrefix string, insecurePull bool) (name.Repository, error) {
+func remapRepository(repo name.Repository, regToMapTo, repositoryPrefix string, insecurePull bool) (name.Repository, error) {
 	if insecurePull {
 		return name.NewRepository(repositoryPrefix+repo.RepositoryStr(), name.WithDefaultRegistry(regToMapTo), name.WeakValidation, name.Insecure)
 	} else {
@@ -144,8 +144,8 @@ func setNewRegistry(ref name.Reference, newReg name.Registry) name.Reference {
 	}
 }
 
-func remoteOptions(registryName string, opts config.RegistryOptions, customPlatform string) []remote.Option {
-	tr, err := util.MakeTransport(opts, registryName)
+func remoteOptions(registryName string, opts *config.RegistryOptions, customPlatform string) []remote.Option {
+	tr, err := util.MakeTransport(*opts, registryName)
 
 	// The MakeTransport function will only return errors if there was a problem
 	// with registry certificates (Verification or mTLS)
@@ -164,9 +164,9 @@ func remoteOptions(registryName string, opts config.RegistryOptions, customPlatf
 
 // Parse the registry mapping
 // example: regMapping = "registry.example.com/subdir1/subdir2" will return registry.example.com and subdir1/subdir2/
-func parseRegistryMapping(regMapping string) (string, string) {
+func parseRegistryMapping(regMapping string) (regURL, repositoryPrefix string) {
 	// Split the registry mapping by first slash
-	regURL, repositoryPrefix, _ := strings.Cut(regMapping, "/")
+	regURL, repositoryPrefix, _ = strings.Cut(regMapping, "/")
 
 	// Normalize with a trailing slash if not empty
 	if repositoryPrefix != "" && !strings.HasSuffix(repositoryPrefix, "/") {

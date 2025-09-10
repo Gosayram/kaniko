@@ -54,6 +54,34 @@ func (r *RunCommand) ExecuteCommand(config *v1.Config, buildArgs *dockerfile.Bui
 }
 
 func runCommandInExec(config *v1.Config, buildArgs *dockerfile.BuildArgs, cmdRun *instructions.RunCommand) error {
+	newCommand, err := prepareCommand(config, buildArgs, cmdRun)
+	if err != nil {
+		return err
+	}
+
+	if err := validateCommand(newCommand); err != nil {
+		return err
+	}
+
+	cmd, err := createExecCommand(config, buildArgs, newCommand)
+	if err != nil {
+		return err
+	}
+
+	return executeAndCleanupCommand(cmd)
+}
+
+func executeAndCleanupCommand(cmd *exec.Cmd) error {
+	logrus.Infof("Running: %s", cmd.Args)
+	if startErr := cmd.Start(); startErr != nil {
+		return errors.Wrap(startErr, "starting command")
+	}
+
+	return waitAndCleanupProcess(cmd)
+}
+
+// prepareCommand prepares the command based on shell configuration
+func prepareCommand(config *v1.Config, buildArgs *dockerfile.BuildArgs, cmdRun *instructions.RunCommand) ([]string, error) {
 	var newCommand []string
 	if cmdRun.PrependShell {
 		// This is the default shell on Linux
@@ -64,7 +92,8 @@ func runCommandInExec(config *v1.Config, buildArgs *dockerfile.BuildArgs, cmdRun
 			shell = append(shell, "/bin/sh", "-c")
 		}
 
-		newCommand = append(shell, strings.Join(cmdRun.CmdLine, " "))
+		shell = append(shell, strings.Join(cmdRun.CmdLine, " "))
+		newCommand = shell
 	} else {
 		newCommand = cmdRun.CmdLine
 		// Find and set absolute path of executable by setting PATH temporary
@@ -77,24 +106,29 @@ func runCommandInExec(config *v1.Config, buildArgs *dockerfile.BuildArgs, cmdRun
 			oldPath := os.Getenv("PATH")
 			// Store old path to restore later
 			oldPathValue := oldPath
-			defer func() {
-				if setErr := os.Setenv("PATH", oldPathValue); setErr != nil {
-					logrus.Warnf("Failed to restore PATH: %v", setErr)
-				}
-			}()
+
 			if setErr := os.Setenv("PATH", entry[1]); setErr != nil {
-				return errors.Wrap(setErr, "setting PATH")
+				return nil, errors.Wrap(setErr, "setting PATH")
 			}
 			path, err := exec.LookPath(newCommand[0])
 			if err == nil {
 				newCommand[0] = path
+			}
+
+			// Restore PATH immediately after use instead of using defer in loop
+			if setErr := os.Setenv("PATH", oldPathValue); setErr != nil {
+				logrus.Warnf("Failed to restore PATH: %v", setErr)
 			}
 		}
 	}
 
 	logrus.Infof("Cmd: %s", newCommand[0])
 	logrus.Infof("Args: %s", newCommand[1:])
+	return newCommand, nil
+}
 
+// validateCommand validates command arguments to prevent command injection
+func validateCommand(newCommand []string) error {
 	// Validate command arguments to prevent command injection
 	for _, arg := range newCommand {
 		if strings.ContainsAny(arg, "&|;`$()<>") {
@@ -117,8 +151,18 @@ func runCommandInExec(config *v1.Config, buildArgs *dockerfile.BuildArgs, cmdRun
 	if strings.Contains(cleanCommandPath, "..") || !filepath.IsAbs(cleanCommandPath) {
 		return errors.Errorf("invalid command path: potential command injection detected: %q", newCommand[0])
 	}
-	cmd := exec.Command(cleanCommandPath)
-	cmd.Args = append([]string{cleanCommandPath}, newCommand[1:]...)
+	return nil
+}
+
+// createExecCommand creates and configures the exec.Cmd with proper settings
+func createExecCommand(config *v1.Config, buildArgs *dockerfile.BuildArgs, newCommand []string) (*exec.Cmd, error) {
+	cleanCommandPath := filepath.Clean(newCommand[0])
+
+	// Use explicit command construction with validated arguments
+	cmd := &exec.Cmd{
+		Path: cleanCommandPath,
+		Args: append([]string{cleanCommandPath}, newCommand[1:]...),
+	}
 
 	cmd.Dir = setWorkDirIfExists(config.WorkingDir)
 	cmd.Stdout = os.Stdout
@@ -133,29 +177,28 @@ func runCommandInExec(config *v1.Config, buildArgs *dockerfile.BuildArgs, cmdRun
 	userAndGroup := strings.Split(u, ":")
 	userStr, err := util.ResolveEnvironmentReplacement(userAndGroup[0], replacementEnvs, false)
 	if err != nil {
-		return errors.Wrapf(err, "resolving user %s", userAndGroup[0])
+		return nil, errors.Wrapf(err, "resolving user %s", userAndGroup[0])
 	}
 
 	// If specified, run the command as a specific user
 	if userStr != "" {
 		cmd.SysProcAttr.Credential, err = util.SyscallCredentials(userStr)
 		if err != nil {
-			return errors.Wrap(err, "credentials")
+			return nil, errors.Wrap(err, "credentials")
 		}
 	}
 
 	env, err := addDefaultHOME(userStr, replacementEnvs)
 	if err != nil {
-		return errors.Wrap(err, "adding default HOME variable")
+		return nil, errors.Wrap(err, "adding default HOME variable")
 	}
 
 	cmd.Env = env
+	return cmd, nil
+}
 
-	logrus.Infof("Running: %s", cmd.Args)
-	if err := cmd.Start(); err != nil {
-		return errors.Wrap(err, "starting command")
-	}
-
+// waitAndCleanupProcess waits for the process to complete and cleans up child processes
+func waitAndCleanupProcess(cmd *exec.Cmd) error {
 	pgid, err := syscall.Getpgid(cmd.Process.Pid)
 	if err != nil {
 		return errors.Wrap(err, "getting group id for process")
@@ -248,7 +291,7 @@ func (cr *CachingRunCommand) ExecuteCommand(config *v1.Config, buildArgs *docker
 	var err error
 
 	if cr.img == nil {
-		return errors.New(fmt.Sprintf("command image is nil %v", cr.String()))
+		return fmt.Errorf("command image is nil %v", cr.String())
 	}
 
 	layers, err := cr.img.Layers()
@@ -257,7 +300,7 @@ func (cr *CachingRunCommand) ExecuteCommand(config *v1.Config, buildArgs *docker
 	}
 
 	if len(layers) != 1 {
-		return errors.New(fmt.Sprintf("expected %d layers but got %d", 1, len(layers)))
+		return fmt.Errorf("expected %d layers but got %d", 1, len(layers))
 	}
 
 	cr.layer = layers[0]

@@ -43,7 +43,8 @@ func (c *CmdCommand) ExecuteCommand(config *v1.Config, buildArgs *dockerfile.Bui
 			shell = append(shell, "/bin/sh", "-c")
 		}
 
-		newCommand = append(shell, strings.Join(c.cmd.CmdLine, " "))
+		shell = append(shell, strings.Join(c.cmd.CmdLine, " "))
+		newCommand = shell
 	} else {
 		newCommand = c.cmd.CmdLine
 	}

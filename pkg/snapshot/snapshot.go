@@ -62,7 +62,7 @@ func (s *Snapshotter) Key() (string, error) {
 
 // TakeSnapshot takes a snapshot of the specified files, avoiding directories in the ignorelist, and creates
 // a tarball of the changed files. Return contents of the tarball, and whether or not any files were changed
-func (s *Snapshotter) TakeSnapshot(files []string, shdCheckDelete bool, forceBuildMetadata bool) (string, error) {
+func (s *Snapshotter) TakeSnapshot(files []string, shdCheckDelete, forceBuildMetadata bool) (string, error) {
 	f, err := os.CreateTemp(config.KanikoDir, "")
 	if err != nil {
 		return "", err
@@ -148,7 +148,7 @@ func (s *Snapshotter) getSnapshotPathPrefix() string {
 	return snapshotPathPrefix
 }
 
-func (s *Snapshotter) scanFullFilesystem() ([]string, []string, error) {
+func (s *Snapshotter) scanFullFilesystem() (filesToAdd []string, filesToWhiteout []string, err error) {
 	logrus.Info("Taking snapshot of full filesystem...")
 
 	// Some of the operations that follow (e.g. hashing) depend on the file system being synced,
@@ -177,7 +177,7 @@ func (s *Snapshotter) scanFullFilesystem() ([]string, []string, error) {
 	changedPaths, deletedPaths := util.WalkFS(s.directory, s.l.GetCurrentPaths(), s.l.CheckFileChange)
 	timer := timing.Start("Resolving Paths")
 
-	filesToAdd := []string{}
+	filesToAdd = []string{}
 	resolvedFiles, err := filesystem.ResolvePaths(changedPaths, s.ignorelist)
 	if err != nil {
 		return nil, nil, err
@@ -205,7 +205,7 @@ func (s *Snapshotter) scanFullFilesystem() ([]string, []string, error) {
 		}
 	}
 
-	filesToWhiteout := removeObsoleteWhiteouts(deletedPaths)
+	filesToWhiteout = removeObsoleteWhiteouts(deletedPaths)
 	timing.DefaultRun.Stop(timer)
 
 	sort.Strings(filesToAdd)
@@ -309,7 +309,7 @@ func filesWithLinks(path string) ([]string, error) {
 		link = filepath.Join(filepath.Dir(path), link)
 	}
 	if _, err := os.Stat(link); err != nil {
-		return []string{path}, nil //nolint:nilerr
+		return []string{path}, nil //nolint:nilerr // it's acceptable to ignore file not found errors for symlink targets
 	}
 	return []string{path, link}, nil
 }

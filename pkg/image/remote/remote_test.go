@@ -176,13 +176,13 @@ func Test_remapRepository(t *testing.T) {
 func Test_RetrieveRemoteImage_manifestCache(t *testing.T) {
 	nonExistingImageName := "this_is_a_non_existing_image_reference"
 
-	if _, err := RetrieveRemoteImage(nonExistingImageName, config.RegistryOptions{}, ""); err == nil {
+	if _, err := RetrieveRemoteImage(nonExistingImageName, &config.RegistryOptions{}, ""); err == nil {
 		t.Fatal("Expected call to fail because there is no manifest for this image.")
 	}
 
 	manifestCache[nonExistingImageName] = &mockImage{}
 
-	if image, err := RetrieveRemoteImage(nonExistingImageName, config.RegistryOptions{}, ""); image == nil || err != nil {
+	if image, err := RetrieveRemoteImage(nonExistingImageName, &config.RegistryOptions{}, ""); image == nil || err != nil {
 		t.Fatal("Expected call to succeed because there is a manifest for this image in the cache.")
 	}
 }
@@ -203,7 +203,7 @@ func Test_RetrieveRemoteImage_skipFallback(t *testing.T) {
 		return &mockImage{}, nil
 	}
 
-	if _, err := RetrieveRemoteImage(image, opts, ""); err != nil {
+	if _, err := RetrieveRemoteImage(image, &opts, ""); err != nil {
 		t.Fatalf("Expected call to succeed because fallback to default registry")
 	}
 
@@ -211,7 +211,7 @@ func Test_RetrieveRemoteImage_skipFallback(t *testing.T) {
 	//clean cached image
 	manifestCache = make(map[string]v1.Image)
 
-	if _, err := RetrieveRemoteImage(image, opts, ""); err == nil {
+	if _, err := RetrieveRemoteImage(image, &opts, ""); err == nil {
 		t.Fatal("Expected call to fail because fallback to default registry is skipped")
 	}
 }
@@ -232,7 +232,7 @@ func Test_RetryRetrieveRemoteImageSucceeds(t *testing.T) {
 	// Clean cached image
 	manifestCache = make(map[string]v1.Image)
 
-	if _, err := RetrieveRemoteImage(image, opts, ""); err != nil {
+	if _, err := RetrieveRemoteImage(image, &opts, ""); err != nil {
 		t.Fatal("Expected call to succeed because of retry")
 	}
 }
@@ -253,7 +253,7 @@ func Test_NoRetryRetrieveRemoteImageFails(t *testing.T) {
 	// Clean cached image
 	manifestCache = make(map[string]v1.Image)
 
-	if _, err := RetrieveRemoteImage(image, opts, ""); err == nil {
+	if _, err := RetrieveRemoteImage(image, &opts, ""); err == nil {
 		t.Fatal("Expected call to fail because there is no retry")
 	}
 }

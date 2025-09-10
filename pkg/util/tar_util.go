@@ -83,32 +83,76 @@ func (t *Tar) AddFileToTar(p string) error {
 	if err != nil {
 		return fmt.Errorf("Failed to get file info for %s: %w", p, err)
 	}
-	linkDst := ""
-	if i.Mode()&os.ModeSymlink != 0 {
-		var err error
-		// Validate the file path to prevent directory traversal
-		cleanPath := filepath.Clean(p)
-		if strings.Contains(cleanPath, "..") || strings.HasPrefix(cleanPath, "/") {
-			return fmt.Errorf("invalid file path: potential directory traversal detected")
-		}
-		linkDst, err = os.Readlink(cleanPath)
-		if err != nil {
-			return err
-		}
-	}
+
+	// Handle sockets - ignore them
 	if i.Mode()&os.ModeSocket != 0 {
 		logrus.Infof("Ignoring socket %s, not adding to tar", i.Name())
 		return nil
 	}
-	hdr, err := tar.FileInfoHeader(i, linkDst)
-	if err != nil {
-		return err
-	}
-	err = readSecurityXattrToTarHeader(p, hdr)
+
+	// Get link destination for symlinks
+	linkDst, err := t.getLinkDestination(p, i)
 	if err != nil {
 		return err
 	}
 
+	// Create tar header
+	hdr, err := t.createTarHeader(p, i, linkDst)
+	if err != nil {
+		return err
+	}
+
+	// Write header to tar
+	if err := t.w.WriteHeader(hdr); err != nil {
+		return err
+	}
+
+	// Write file content for regular files that aren't hardlinks
+	if hdr.Typeflag == tar.TypeReg {
+		return t.writeFileContent(p)
+	}
+
+	return nil
+}
+
+func (t *Tar) getLinkDestination(p string, i os.FileInfo) (string, error) {
+	if i.Mode()&os.ModeSymlink != 0 {
+		// Validate the file path to prevent directory traversal
+		cleanPath := filepath.Clean(p)
+		if strings.Contains(cleanPath, "..") || strings.HasPrefix(cleanPath, "/") {
+			return "", fmt.Errorf("invalid file path: potential directory traversal detected")
+		}
+		return os.Readlink(cleanPath)
+	}
+	return "", nil
+}
+
+func (t *Tar) createTarHeader(p string, i os.FileInfo, linkDst string) (*tar.Header, error) {
+	hdr, err := tar.FileInfoHeader(i, linkDst)
+	if err != nil {
+		return nil, err
+	}
+
+	// Read security xattrs
+	if err := readSecurityXattrToTarHeader(p, hdr); err != nil {
+		return nil, err
+	}
+
+	// Set header name
+	t.setHeaderName(p, hdr)
+
+	// Set header format and clear user/group names
+	hdr.Uname = ""
+	hdr.Gname = ""
+	hdr.Format = tar.FormatPAX
+
+	// Handle hardlinks
+	t.handleHardlinks(p, i, hdr)
+
+	return hdr, nil
+}
+
+func (t *Tar) setHeaderName(p string, hdr *tar.Header) {
 	if p == config.RootDir {
 		// allow entry for / to preserve permission changes etc. (currently ignored anyway by Docker runtime)
 		hdr.Name = "/"
@@ -120,25 +164,18 @@ func (t *Tar) AddFileToTar(p string) error {
 	if hdr.Typeflag == tar.TypeDir && !strings.HasSuffix(hdr.Name, "/") {
 		hdr.Name += "/"
 	}
-	// rootfs may not have been extracted when using cache, preventing uname/gname from resolving
-	// this makes this layer unnecessarily differ from a cached layer which does contain this information
-	hdr.Uname = ""
-	hdr.Gname = ""
-	// use PAX format to preserve accurate mtime (match Docker behavior)
-	hdr.Format = tar.FormatPAX
+}
 
+func (t *Tar) handleHardlinks(p string, i os.FileInfo, hdr *tar.Header) {
 	hardlink, linkDst := t.checkHardlink(p, i)
 	if hardlink {
 		hdr.Linkname = linkDst
 		hdr.Typeflag = tar.TypeLink
 		hdr.Size = 0
 	}
-	if err := t.w.WriteHeader(hdr); err != nil {
-		return err
-	}
-	if !(i.Mode().IsRegular()) || hardlink {
-		return nil
-	}
+}
+
+func (t *Tar) writeFileContent(p string) error {
 	// Validate the file path to prevent directory traversal
 	cleanPath := filepath.Clean(p)
 	if strings.Contains(cleanPath, "..") || strings.HasPrefix(cleanPath, "/") {

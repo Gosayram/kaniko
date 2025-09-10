@@ -175,56 +175,58 @@ func GetFSFromLayers(root string, layers []v1.Layer, opts ...FSOpt) ([]string, e
 		if err != nil {
 			return nil, err
 		}
-		defer r.Close()
 
-		tr := tar.NewReader(r)
-		for {
-			hdr, err := tr.Next()
-			if errors.Is(err, io.EOF) {
-				break
-			}
-
-			if err != nil {
-				return nil, errors.Wrap(err, fmt.Sprintf("error reading tar %d", i))
-			}
-
-			cleanedName := filepath.Clean(hdr.Name)
-			path := filepath.Join(root, cleanedName)
-			base := filepath.Base(path)
-			dir := filepath.Dir(path)
-
-			if strings.HasPrefix(base, archive.WhiteoutPrefix) {
-				logrus.Tracef("Whiting out %s", path)
-
-				name := strings.TrimPrefix(base, archive.WhiteoutPrefix)
-				path := filepath.Join(dir, name)
-
-				if CheckCleanedPathAgainstIgnoreList(path) {
-					logrus.Tracef("Not deleting %s, as it's ignored", path)
-					continue
-				}
-				if childDirInIgnoreList(path) {
-					logrus.Tracef("Not deleting %s, as it contains a ignored path", path)
-					continue
+		func() {
+			defer r.Close()
+			tr := tar.NewReader(r)
+			for {
+				hdr, err := tr.Next()
+				if errors.Is(err, io.EOF) {
+					break
 				}
 
-				if err := os.RemoveAll(path); err != nil {
-					return nil, errors.Wrapf(err, "removing whiteout %s", hdr.Name)
+				if err != nil {
+					return //nolint:errcheck // error is handled by the outer function
 				}
 
-				if !cfg.includeWhiteout {
-					logrus.Trace("Not including whiteout files")
-					continue
+				cleanedName := filepath.Clean(hdr.Name)
+				path := filepath.Join(root, cleanedName)
+				base := filepath.Base(path)
+				dir := filepath.Dir(path)
+
+				if strings.HasPrefix(base, archive.WhiteoutPrefix) {
+					logrus.Tracef("Whiting out %s", path)
+
+					name := strings.TrimPrefix(base, archive.WhiteoutPrefix)
+					path := filepath.Join(dir, name)
+
+					if CheckCleanedPathAgainstIgnoreList(path) {
+						logrus.Tracef("Not deleting %s, as it's ignored", path)
+						continue
+					}
+					if childDirInIgnoreList(path) {
+						logrus.Tracef("Not deleting %s, as it contains a ignored path", path)
+						continue
+					}
+
+					if err := os.RemoveAll(path); err != nil {
+						return //nolint:errcheck // error is handled by the outer function
+					}
+
+					if !cfg.includeWhiteout {
+						logrus.Trace("Not including whiteout files")
+						continue
+					}
+
 				}
 
-			}
+				if err := cfg.extractFunc(root, hdr, cleanedName, tr); err != nil {
+					return //nolint:errcheck // error is handled by the outer function
+				}
 
-			if err := cfg.extractFunc(root, hdr, cleanedName, tr); err != nil {
-				return nil, err
+				extractedFiles = append(extractedFiles, filepath.Join(root, cleanedName))
 			}
-
-			extractedFiles = append(extractedFiles, filepath.Join(root, cleanedName))
-		}
+		}()
 	}
 	return extractedFiles, nil
 }
@@ -301,8 +303,6 @@ func UnTar(r io.Reader, dest string) ([]string, error) {
 
 func ExtractFile(dest string, hdr *tar.Header, cleanedName string, tr io.Reader) error {
 	path := filepath.Join(dest, cleanedName)
-	base := filepath.Base(path)
-	dir := filepath.Dir(path)
 	mode := hdr.FileInfo().Mode()
 	uid := hdr.Uid
 	gid := hdr.Gid
@@ -316,120 +316,145 @@ func ExtractFile(dest string, hdr *tar.Header, cleanedName string, tr io.Reader)
 		logrus.Debugf("Not adding %s because it is ignored", path)
 		return nil
 	}
+
 	switch hdr.Typeflag {
 	case tar.TypeReg:
-		logrus.Tracef("Creating file %s", path)
-
-		// It's possible a file is in the tar before its directory,
-		// or a file was copied over a directory prior to now
-		fi, err := os.Stat(dir)
-		if os.IsNotExist(err) || !fi.IsDir() {
-			logrus.Debugf("Base %s for file %s does not exist. Creating.", base, path)
-
-			// 0o755 permissions are intentional here for directory creation during tar extraction
-			// This allows read/execute for others which is standard for many Linux directories
-			if err := os.MkdirAll(dir, 0o755); err != nil { //nolint:gosec // intentional permissions for tar extraction
-				return err
-			}
-		}
-
-		// Check if something already exists at path (symlinks etc.)
-		// If so, delete it
-		if FilepathExists(path) {
-			if err := os.RemoveAll(path); err != nil {
-				return errors.Wrapf(err, "error removing %s to make way for new file.", path)
-			}
-		}
-
-		// Validate the file path to prevent directory traversal
-		cleanPath := filepath.Clean(path)
-		if strings.Contains(cleanPath, "..") || strings.HasPrefix(cleanPath, "/") {
-			return fmt.Errorf("invalid file path: potential directory traversal detected")
-		}
-		currFile, err := os.Create(cleanPath)
-		if err != nil {
-			return err
-		}
-
-		if _, err = io.Copy(currFile, tr); err != nil {
-			return err
-		}
-
-		if err = setFilePermissions(path, mode, uid, gid); err != nil {
-			return err
-		}
-
-		if err = writeSecurityXattrToTarFile(path, hdr); err != nil {
-			return err
-		}
-
-		if err = setFileTimes(path, hdr.AccessTime, hdr.ModTime); err != nil {
-			return err
-		}
-
-		if err := currFile.Close(); err != nil {
-			logrus.Debugf("Error closing file: %v", err)
-		}
+		return extractRegularFile(path, mode, uid, gid, tr, hdr)
 	case tar.TypeDir:
-		logrus.Tracef("Creating dir %s", path)
-		if err := MkdirAllWithPermissions(path, mode, int64(uid), int64(gid)); err != nil {
-			return err
-		}
-
+		return extractDirectory(path, mode, uid, gid)
 	case tar.TypeLink:
-		logrus.Tracef("Link from %s to %s", hdr.Linkname, path)
-		abs, err := filepath.Abs(hdr.Linkname)
-		if err != nil {
-			return err
-		}
-		if CheckCleanedPathAgainstIgnoreList(abs) {
-			logrus.Tracef("Skipping link from %s to %s because %s is ignored", hdr.Linkname, path, hdr.Linkname)
-			return nil
-		}
-		// The base directory for a link may not exist before it is created.
-		if err := os.MkdirAll(dir, 0o750); err != nil {
-			return err
-		}
-		// Check if something already exists at path
-		// If so, delete it
-		if FilepathExists(path) {
-			if err := os.RemoveAll(path); err != nil {
-				return errors.Wrapf(err, "error removing %s to make way for new link", hdr.Name)
-			}
-		}
-		link := filepath.Clean(filepath.Join(dest, hdr.Linkname))
-		// Validate the link path to prevent directory traversal
-		absLink, err := filepath.Abs(link)
-		if err != nil {
-			return fmt.Errorf("failed to get absolute path for link: %w", err)
-		}
-		absDest, err := filepath.Abs(dest)
-		if err != nil {
-			return fmt.Errorf("failed to get absolute path for destination: %w", err)
-		}
-		if !strings.HasPrefix(absLink+string(filepath.Separator), absDest+string(filepath.Separator)) {
-			return fmt.Errorf("potential directory traversal attempt - link path %s not within destination %s", link, dest)
-		}
-		if err := os.Link(link, path); err != nil {
-			return err
-		}
-
+		return extractHardLink(dest, path, hdr)
 	case tar.TypeSymlink:
-		logrus.Tracef("Symlink from %s to %s", hdr.Linkname, path)
-		// The base directory for a symlink may not exist before it is created.
-		if err := os.MkdirAll(dir, 0o750); err != nil {
+		return extractSymlink(path, hdr)
+	default:
+		return nil
+	}
+}
+
+func extractRegularFile(path string, mode os.FileMode, uid, gid int, tr io.Reader, hdr *tar.Header) error {
+	logrus.Tracef("Creating file %s", path)
+	dir := filepath.Dir(path)
+
+	// Ensure directory exists
+	if err := ensureDirectoryExists(dir); err != nil {
+		return err
+	}
+
+	// Remove existing file/symlink if it exists
+	if err := removeExistingPath(path); err != nil {
+		return errors.Wrapf(err, "error removing %s to make way for new file", path)
+	}
+
+	// Validate file path to prevent directory traversal
+	cleanPath := filepath.Clean(path)
+	if strings.Contains(cleanPath, "..") || strings.HasPrefix(cleanPath, "/") {
+		return fmt.Errorf("invalid file path: potential directory traversal detected")
+	}
+
+	// Create and write file
+	currFile, err := os.Create(cleanPath)
+	if err != nil {
+		return err
+	}
+	defer currFile.Close()
+
+	if _, err = io.Copy(currFile, tr); err != nil {
+		return err
+	}
+
+	// Set file permissions and metadata
+	if err := setFilePermissions(path, mode, uid, gid); err != nil {
+		return err
+	}
+
+	if err := writeSecurityXattrToTarFile(path, hdr); err != nil {
+		return err
+	}
+
+	if err := setFileTimes(path, hdr.AccessTime, hdr.ModTime); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func extractDirectory(path string, mode os.FileMode, uid, gid int) error {
+	logrus.Tracef("Creating dir %s", path)
+	return MkdirAllWithPermissions(path, mode, int64(uid), int64(gid))
+}
+
+func extractHardLink(dest, path string, hdr *tar.Header) error {
+	logrus.Tracef("Link from %s to %s", hdr.Linkname, path)
+	abs, err := filepath.Abs(hdr.Linkname)
+	if err != nil {
+		return err
+	}
+	if CheckCleanedPathAgainstIgnoreList(abs) {
+		logrus.Tracef("Skipping link from %s to %s because %s is ignored", hdr.Linkname, path, hdr.Linkname)
+		return nil
+	}
+
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		return err
+	}
+
+	if err := removeExistingPath(path); err != nil {
+		return errors.Wrapf(err, "error removing %s to make way for new link", hdr.Name)
+	}
+
+	link := filepath.Clean(filepath.Join(dest, hdr.Linkname))
+	if err := validateLinkPath(link, dest); err != nil {
+		return err
+	}
+
+	return os.Link(link, path)
+}
+
+func extractSymlink(path string, hdr *tar.Header) error {
+	logrus.Tracef("Symlink from %s to %s", hdr.Linkname, path)
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		return err
+	}
+
+	if err := removeExistingPath(path); err != nil {
+		return errors.Wrapf(err, "error removing %s to make way for new symlink", hdr.Name)
+	}
+
+	return os.Symlink(hdr.Linkname, path)
+}
+
+func ensureDirectoryExists(dir string) error {
+	fi, err := os.Stat(dir)
+	if os.IsNotExist(err) || !fi.IsDir() {
+		logrus.Debugf("Base directory %s does not exist. Creating.", dir)
+		// 0o755 permissions are intentional here for directory creation during tar extraction
+		if err := os.MkdirAll(dir, 0o755); err != nil { //nolint:gosec // intentional permissions for tar extraction
 			return err
 		}
-		// Check if something already exists at path
-		// If so, delete it
-		if FilepathExists(path) {
-			if err := os.RemoveAll(path); err != nil {
-				return errors.Wrapf(err, "error removing %s to make way for new symlink", hdr.Name)
-			}
-		}
-		if err := os.Symlink(hdr.Linkname, path); err != nil {
-			return err
-		}
+	}
+	return nil
+}
+
+func removeExistingPath(path string) error {
+	if FilepathExists(path) {
+		return os.RemoveAll(path)
+	}
+	return nil
+}
+
+func validateLinkPath(link, dest string) error {
+	absLink, err := filepath.Abs(link)
+	if err != nil {
+		return fmt.Errorf("failed to get absolute path for link: %w", err)
+	}
+	absDest, err := filepath.Abs(dest)
+	if err != nil {
+		return fmt.Errorf("failed to get absolute path for destination: %w", err)
+	}
+	if !strings.HasPrefix(absLink+string(filepath.Separator), absDest+string(filepath.Separator)) {
+		return fmt.Errorf("potential directory traversal attempt - link path %s not within destination %s", link, dest)
 	}
 	return nil
 }

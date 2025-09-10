@@ -42,7 +42,8 @@ func (e *EntrypointCommand) ExecuteCommand(config *v1.Config, buildArgs *dockerf
 			shell = append(shell, "/bin/sh", "-c")
 		}
 
-		newCommand = append(shell, strings.Join(e.cmd.CmdLine, " "))
+		shell = append(shell, strings.Join(e.cmd.CmdLine, " "))
+		newCommand = shell
 	} else {
 		newCommand = e.cmd.CmdLine
 	}

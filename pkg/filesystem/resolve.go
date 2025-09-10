@@ -132,7 +132,6 @@ func resolveSymlinkAncestor(path string) (string, error) {
 	last := ""
 	newPath := filepath.Clean(path)
 
-loop:
 	for newPath != config.RootDir {
 		fi, err := os.Lstat(newPath)
 		if err != nil {
@@ -156,7 +155,7 @@ loop:
 				last = filepath.Base(newPath)
 				newPath = filepath.Dir(newPath)
 			} else {
-				break loop
+				break
 			}
 		}
 	}

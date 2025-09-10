@@ -43,7 +43,7 @@ var (
 )
 
 // RetrieveSourceImage returns the base image of the stage at index
-func RetrieveSourceImage(stage config.KanikoStage, opts *config.KanikoOptions) (v1.Image, error) {
+func RetrieveSourceImage(stage *config.KanikoStage, opts *config.KanikoOptions) (v1.Image, error) {
 	t := timing.Start("Retrieving Source Image")
 	defer timing.DefaultRun.Stop(t)
 	var buildArgs []string
@@ -88,7 +88,7 @@ func RetrieveSourceImage(stage config.KanikoStage, opts *config.KanikoOptions) (
 	}
 
 	// Otherwise, initialize image as usual
-	return RetrieveRemoteImage(currentBaseName, opts.RegistryOptions, opts.CustomPlatform)
+	return RetrieveRemoteImage(currentBaseName, &opts.RegistryOptions, opts.CustomPlatform)
 }
 
 func tarballImage(index int) (v1.Image, error) {
@@ -107,7 +107,7 @@ func cachedImage(opts *config.KanikoOptions, image string) (v1.Image, error) {
 	if d, ok := ref.(name.Digest); ok {
 		cacheKey = d.DigestStr()
 	} else {
-		image, err := remote.RetrieveRemoteImage(image, opts.RegistryOptions, opts.CustomPlatform)
+		image, err := remote.RetrieveRemoteImage(image, &opts.RegistryOptions, opts.CustomPlatform)
 		if err != nil {
 			return nil, err
 		}
