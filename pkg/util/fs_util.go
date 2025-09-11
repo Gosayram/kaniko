@@ -170,6 +170,8 @@ func GetFSFromImage(root string, img v1.Image, extract ExtractFunction) ([]strin
 	return GetFSFromLayers(root, layers, ExtractFunc(extract))
 }
 
+// GetFSFromLayers extracts filesystem layers to the specified root directory
+// It returns a list of all files extracted and handles filesystem ignore list initialization
 func GetFSFromLayers(root string, layers []v1.Layer, opts ...FSOpt) ([]string, error) {
 	volumes = []string{}
 	cfg := new(FSConfig)
@@ -448,19 +450,21 @@ func extractHardLink(dest, path string, hdr *tar.Header) error {
 	}
 
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, DefaultDirPerm); err != nil {
+	if err = os.MkdirAll(dir, DefaultDirPerm); err != nil {
 		return err
 	}
 
-	if err := removeExistingPath(path); err != nil {
+	if err = removeExistingPath(path); err != nil {
 		return errors.Wrapf(err, "error removing %s to make way for new link", hdr.Name)
 	}
 
-	link := filepath.Clean(filepath.Join(dest, hdr.Linkname))
-	// Validate link path to prevent directory traversal
-	if strings.Contains(link, "..") || strings.HasPrefix(link, "/") {
-		return fmt.Errorf("invalid link path: potential directory traversal detected")
+	// Validate linkname first to prevent directory traversal before constructing the full path
+	if strings.Contains(hdr.Linkname, "..") || strings.HasPrefix(hdr.Linkname, "/") {
+		return fmt.Errorf("invalid linkname: potential directory traversal detected")
 	}
+	
+	link := filepath.Clean(filepath.Join(dest, hdr.Linkname))
+	
 	// Additional security check: ensure the link destination is within the destination directory
 	absDest, err := filepath.Abs(dest)
 	if err != nil {
@@ -773,9 +777,9 @@ func DownloadFileToDest(rawurl, dest string, uid, gid int64, chmod fs.FileMode) 
 	if uid < 0 || uid > math.MaxUint32 || gid < 0 || gid > math.MaxUint32 {
 		return fmt.Errorf("UID or GID value out of range for uint32 conversion: uid=%d, gid=%d", uid, gid)
 	}
-	// Safe conversion after bounds checking
-	safeUID := uint32(uid)
-	safeGID := uint32(gid)
+	// Safe conversion after bounds checking - gosec G115 is a false positive here
+	safeUID := uint32(uid) //nolint:gosec // bounds checked above
+	safeGID := uint32(gid) //nolint:gosec // bounds checked above
 	if err := CreateFile(dest, resp.Body, chmod, safeUID, safeGID); err != nil {
 		return err
 	}
@@ -913,9 +917,9 @@ func CopyFile(src, dest string, context FileContext, uid, gid int64,
 	if uid < 0 || uid > math.MaxUint32 || gid < 0 || gid > math.MaxUint32 {
 		return false, fmt.Errorf("UID or GID value out of range for uint32 conversion: uid=%d, gid=%d", uid, gid)
 	}
-	// Safe conversion after bounds checking
-	safeUID := uint32(uid)
-	safeGID := uint32(gid)
+	// Safe conversion after bounds checking - gosec G115 is a false positive here
+	safeUID := uint32(uid) //nolint:gosec // bounds checked above
+	safeGID := uint32(gid) //nolint:gosec // bounds checked above
 	return false, CreateFile(dest, srcFile, mode, safeUID, safeGID)
 }
 
@@ -1223,7 +1227,7 @@ func createParentDirectory(path string, uid, gid int) error {
 			if _, err := os.Lstat(dir); os.IsNotExist(err) {
 				// 0o755 permissions are intentional here for parent directory creation
 				// This allows read/execute for others which is standard for many Linux directories
-				if mkdirErr := os.Mkdir(dir, 0o755); mkdirErr != nil { //nolint:gosec // intentional
+				if mkdirErr := os.Mkdir(dir, TarExtractPerm); mkdirErr != nil { //nolint:gosec // intentional
 					// permissions for directory creation
 					return errors.Wrapf(mkdirErr, "failed to create directory %s", dir)
 				}

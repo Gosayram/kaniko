@@ -35,6 +35,8 @@ import (
 	"github.com/Gosayram/kaniko/pkg/util"
 )
 
+// RunCommand implements the Dockerfile RUN instruction
+// It handles executing shell commands during the build process
 type RunCommand struct {
 	BaseCommand
 	cmd      *instructions.RunCommand
@@ -46,10 +48,14 @@ var (
 	userLookup = util.LookupUser
 )
 
+// IsArgsEnvsRequiredInCache indicates whether arguments and environment variables
+// are required for caching this command
 func (r *RunCommand) IsArgsEnvsRequiredInCache() bool {
 	return true
 }
 
+// ExecuteCommand executes the RUN instruction by preparing and running the command
+// with proper environment setup and security validation
 func (r *RunCommand) ExecuteCommand(config *v1.Config, buildArgs *dockerfile.BuildArgs) error {
 	return runCommandInExec(config, buildArgs, r.cmd)
 }
@@ -60,7 +66,7 @@ func runCommandInExec(config *v1.Config, buildArgs *dockerfile.BuildArgs, cmdRun
 		return err
 	}
 
-	if err := validateCommand(newCommand); err != nil {
+	if err = validateCommand(newCommand); err != nil {
 		return err
 	}
 
@@ -82,6 +88,7 @@ func executeAndCleanupCommand(cmd *exec.Cmd) error {
 }
 
 // prepareCommand prepares the command based on shell configuration
+// and handles PATH environment variable resolution for executables
 func prepareCommand(config *v1.Config, buildArgs *dockerfile.BuildArgs, cmdRun *instructions.RunCommand) ([]string, error) {
 	var newCommand []string
 	if cmdRun.PrependShell {
@@ -100,7 +107,7 @@ func prepareCommand(config *v1.Config, buildArgs *dockerfile.BuildArgs, cmdRun *
 		// Find and set absolute path of executable by setting PATH temporary
 		replacementEnvs := buildArgs.ReplacementEnvs(config.Env)
 		for _, v := range replacementEnvs {
-			entry := strings.SplitN(v, "=", 2)
+			entry := strings.SplitN(v, "=", 2) //nolint:mnd // 2 is the expected number of parts for env var
 			if entry[0] != "PATH" {
 				continue
 			}
@@ -218,7 +225,7 @@ func waitAndCleanupProcess(cmd *exec.Cmd) error {
 // addDefaultHOME adds the default value for HOME if it isn't already set
 func addDefaultHOME(u string, envs []string) ([]string, error) {
 	for _, env := range envs {
-		split := strings.SplitN(env, "=", 2)
+		split := strings.SplitN(env, "=", 2) //nolint:mnd // 2 is the expected number of parts for env var
 		if split[0] == constants.HOME {
 			return envs, nil
 		}
@@ -244,17 +251,18 @@ func (r *RunCommand) String() string {
 	return r.cmd.String()
 }
 
+// FilesToSnapshot returns the list of files that should be snapshotted after command execution
 func (r *RunCommand) FilesToSnapshot() []string {
 	return nil
 }
 
+// ProvidesFilesToSnapshot indicates whether this command provides files for snapshotting
 func (r *RunCommand) ProvidesFilesToSnapshot() bool {
 	return false
 }
 
-// CacheCommand returns true since this command should be cached
+// CacheCommand creates a cached version of the RUN command for layer reuse
 func (r *RunCommand) CacheCommand(img v1.Image) DockerCommand {
-
 	return &CachingRunCommand{
 		img:       img,
 		cmd:       r.cmd,
@@ -262,18 +270,23 @@ func (r *RunCommand) CacheCommand(img v1.Image) DockerCommand {
 	}
 }
 
+// MetadataOnly indicates whether this command only affects metadata (not filesystem)
 func (r *RunCommand) MetadataOnly() bool {
 	return false
 }
 
+// RequiresUnpackedFS indicates whether this command requires an unpacked filesystem
 func (r *RunCommand) RequiresUnpackedFS() bool {
 	return true
 }
 
+// ShouldCacheOutput indicates whether the output of this command should be cached
 func (r *RunCommand) ShouldCacheOutput() bool {
 	return r.shdCache
 }
 
+// CachingRunCommand implements caching for RUN instructions
+// It handles extracting cached layers instead of executing commands
 type CachingRunCommand struct {
 	BaseCommand
 	caching
@@ -283,10 +296,14 @@ type CachingRunCommand struct {
 	extractFn      util.ExtractFunction
 }
 
+// IsArgsEnvsRequiredInCache indicates whether arguments and environment variables
+// are required for caching this command
 func (cr *CachingRunCommand) IsArgsEnvsRequiredInCache() bool {
 	return true
 }
 
+// ExecuteCommand handles cached RUN instruction execution by extracting
+// pre-computed layers instead of running the command
 func (cr *CachingRunCommand) ExecuteCommand(config *v1.Config, buildArgs *dockerfile.BuildArgs) error {
 	logrus.Infof("Found cached layer, extracting to filesystem")
 	var err error
@@ -319,6 +336,7 @@ func (cr *CachingRunCommand) ExecuteCommand(config *v1.Config, buildArgs *docker
 	return nil
 }
 
+// FilesToSnapshot returns the list of files extracted from cached layers
 func (cr *CachingRunCommand) FilesToSnapshot() []string {
 	f := cr.extractedFiles
 	logrus.Debugf("%d files extracted by caching run command", len(f))
@@ -327,6 +345,7 @@ func (cr *CachingRunCommand) FilesToSnapshot() []string {
 	return f
 }
 
+// String returns string representation of the cached RUN command
 func (cr *CachingRunCommand) String() string {
 	if cr.cmd == nil {
 		return "nil command"
@@ -334,6 +353,7 @@ func (cr *CachingRunCommand) String() string {
 	return cr.cmd.String()
 }
 
+// MetadataOnly indicates whether this cached command only affects metadata
 func (cr *CachingRunCommand) MetadataOnly() bool {
 	return false
 }

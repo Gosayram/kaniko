@@ -54,6 +54,13 @@ import (
 // This is the size of an empty tar in Go
 const emptyTarSize = 1024
 
+// Constants for magic number replacements
+const (
+	keyValueParts      = 2
+	defaultRetryDelayMs = 1000
+	DefaultDirPerm     = 0o750
+)
+
 // for testing
 var (
 	initializeConfig = initConfig
@@ -87,7 +94,14 @@ type stageBuilder struct {
 }
 
 // newStageBuilder returns a new type stageBuilder which contains all the information required to build the stage
-func newStageBuilder(args *dockerfile.BuildArgs, opts *config.KanikoOptions, stage *config.KanikoStage, crossStageDeps map[int][]string, dcm, sid, stageNameToIdx map[string]string, fileContext util.FileContext) (*stageBuilder, error) {
+func newStageBuilder(
+	args *dockerfile.BuildArgs,
+	opts *config.KanikoOptions,
+	stage *config.KanikoStage,
+	crossStageDeps map[int][]string,
+	dcm, sid, stageNameToIdx map[string]string,
+	fileContext util.FileContext,
+) (*stageBuilder, error) {
 	sourceImage, err := image_util.RetrieveSourceImage(stage, opts)
 	if err != nil {
 		return nil, err
@@ -98,7 +112,7 @@ func newStageBuilder(args *dockerfile.BuildArgs, opts *config.KanikoOptions, sta
 		return nil, err
 	}
 
-	if err := resolveOnBuild(stage, &imageConfig.Config, stageNameToIdx); err != nil {
+	if err = resolveOnBuild(stage, &imageConfig.Config, stageNameToIdx); err != nil {
 		return nil, err
 	}
 
@@ -172,8 +186,8 @@ func initConfig(img partial.WithConfigFile, opts *config.KanikoOptions) (*v1.Con
 			imageConfig.Config.Labels = make(map[string]string)
 		}
 		for _, label := range opts.Labels {
-			parts := strings.SplitN(label, "=", 2)
-			if len(parts) != 2 {
+			parts := strings.SplitN(label, "=", keyValueParts)
+			if len(parts) != keyValueParts {
 				return nil, fmt.Errorf("labels must be of the form key=value, got %s", label)
 			}
 
@@ -199,7 +213,13 @@ func isOCILayout(path string) bool {
 	return strings.HasPrefix(path, "oci:")
 }
 
-func (s *stageBuilder) populateCompositeKey(command commands.DockerCommand, files []string, compositeKey CompositeCache, args *dockerfile.BuildArgs, env []string) (CompositeCache, error) {
+func (s *stageBuilder) populateCompositeKey(
+	command commands.DockerCommand,
+	files []string,
+	compositeKey CompositeCache,
+	args *dockerfile.BuildArgs,
+	env []string,
+) (CompositeCache, error) {
 	// First replace all the environment variables or args in the command
 	replacementEnvs := args.ReplacementEnvs(env)
 	// The sort order of `replacementEnvs` is basically undefined, sort it
@@ -361,7 +381,7 @@ func (s *stageBuilder) unpackFilesystemIfNeeded() error {
 		return err
 	}
 
-	return errors.Wrap(util.Retry(retryFunc, s.opts.ImageFSExtractRetry, 1000),
+	return errors.Wrap(util.Retry(retryFunc, s.opts.ImageFSExtractRetry, defaultRetryDelayMs),
 		"failed to get filesystem from image")
 }
 
@@ -598,7 +618,8 @@ func convertMediaType(mt types.MediaType) types.MediaType {
 		return types.DockerForeignLayer
 	case types.OCIUncompressedLayer:
 		return types.DockerUncompressedLayer
-	case types.OCIContentDescriptor, types.OCIUncompressedRestrictedLayer, types.DockerManifestSchema1Signed, types.DockerPluginConfig:
+	case types.OCIContentDescriptor, types.OCIUncompressedRestrictedLayer,
+		types.DockerManifestSchema1Signed, types.DockerPluginConfig:
 		return ""
 	default:
 		return ""
@@ -657,7 +678,13 @@ func (s *stageBuilder) saveLayerToImage(layer v1.Layer, createdBy string) error 
 	return err
 }
 
-func processCommandForDependencies(c interface{}, ba *dockerfile.BuildArgs, cfg *v1.ConfigFile, depGraph map[int][]string, image v1.Image) error {
+func processCommandForDependencies(
+	c interface{},
+	ba *dockerfile.BuildArgs,
+	cfg *v1.ConfigFile,
+	depGraph map[int][]string,
+	image v1.Image,
+) error {
 	switch cmd := c.(type) {
 	case *instructions.CopyCommand:
 		if cmd.From != "" {
@@ -665,7 +692,11 @@ func processCommandForDependencies(c interface{}, ba *dockerfile.BuildArgs, cfg 
 			if err != nil {
 				return nil
 			}
-			resolved, err := util.ResolveEnvironmentReplacementList(cmd.SourcesAndDest.SourcePaths, ba.ReplacementEnvs(cfg.Config.Env), true)
+			resolved, err := util.ResolveEnvironmentReplacementList(
+				cmd.SourcesAndDest.SourcePaths,
+				ba.ReplacementEnvs(cfg.Config.Env),
+				true,
+			)
 			if err != nil {
 				return err
 			}
@@ -675,10 +706,10 @@ func processCommandForDependencies(c interface{}, ba *dockerfile.BuildArgs, cfg 
 		if err := util.UpdateConfigEnv(cmd.Env, &cfg.Config, ba.ReplacementEnvs(cfg.Config.Env)); err != nil {
 			return err
 		}
-		var err error
-		image, err = mutate.Config(image, cfg.Config)
-		if err != nil {
-			return err
+		var mutateErr error
+		image, mutateErr = mutate.Config(image, cfg.Config)
+		if mutateErr != nil {
+			return mutateErr
 		}
 	case *instructions.ArgCommand:
 		for _, arg := range cmd.Args {
@@ -692,6 +723,9 @@ func processCommandForDependencies(c interface{}, ba *dockerfile.BuildArgs, cfg 
 	return nil
 }
 
+// CalculateDependencies calculates cross-stage dependencies for multi-stage builds
+// It analyzes COPY --from commands and other cross-stage references to determine
+// which files need to be preserved between stages
 func CalculateDependencies(stages []config.KanikoStage, opts *config.KanikoOptions, stageNameToIdx map[string]string) (map[int][]string, error) {
 	images := []v1.Image{}
 	depGraph := map[int][]string{}
@@ -735,7 +769,13 @@ func getStageImage(s *config.KanikoStage, images []v1.Image, opts *config.Kaniko
 	return image_util.RetrieveSourceImage(s, opts)
 }
 
-func processCommandsForDependencies(cmds []instructions.Command, ba *dockerfile.BuildArgs, cfg *v1.ConfigFile, depGraph map[int][]string, image v1.Image) error {
+func processCommandsForDependencies(
+	cmds []instructions.Command,
+	ba *dockerfile.BuildArgs,
+	cfg *v1.ConfigFile,
+	depGraph map[int][]string,
+	image v1.Image,
+) error {
 	for _, c := range cmds {
 		if err := processCommandForDependencies(c, ba, cfg, depGraph, image); err != nil {
 			return err
@@ -802,7 +842,7 @@ func initBuildStages(opts *config.KanikoOptions) ([]config.KanikoStage, map[stri
 
 	stageNameToIdx := ResolveCrossStageInstructions(kanikoStages)
 
-	if err := fetchExtraStages(kanikoStages, opts); err != nil {
+	if err = fetchExtraStages(kanikoStages, opts); err != nil {
 		return nil, nil, util.FileContext{}, err
 	}
 
@@ -828,7 +868,7 @@ func calculateStageDependencies(
 }
 
 func buildStage(
-	index int,
+	_ int,
 	stage *config.KanikoStage,
 	opts *config.KanikoOptions,
 	args *dockerfile.BuildArgs,
@@ -853,7 +893,7 @@ func buildStage(
 	logrus.Infof("Building stage '%v' [idx: '%v', base-idx: '%v']",
 		stage.BaseName, stage.Index, stage.BaseImageIndex)
 
-	if err := sb.build(); err != nil {
+	if err = sb.build(); err != nil {
 		return nil, errors.Wrap(err, "error building stage")
 	}
 
@@ -937,7 +977,7 @@ func handleNonFinalStage(
 	}
 
 	dstDir := filepath.Join(config.KanikoDir, strconv.Itoa(index))
-	if err := os.MkdirAll(dstDir, 0o750); err != nil {
+	if err := os.MkdirAll(dstDir, DefaultDirPerm); err != nil {
 		return errors.Wrap(err,
 			fmt.Sprintf("to create workspace for stage %d", index))
 	}
@@ -966,7 +1006,7 @@ func filesToSave(deps []string) ([]string, error) {
 			return nil, err
 		}
 		for _, f := range srcs {
-			if link, err := util.EvalSymLink(f); err == nil {
+			if link, evalErr := util.EvalSymLink(f); evalErr == nil {
 				link, err = filepath.Rel(config.RootDir, link)
 				if err != nil {
 					return nil, errors.Wrap(err, fmt.Sprintf("could not find relative path to %s", config.RootDir))
@@ -1088,7 +1128,7 @@ func extractImageToDependencyDir(imageName string, image v1.Image) error {
 	t := timing.Start("Extracting Image to Dependency Dir")
 	defer timing.DefaultRun.Stop(t)
 	dependencyDir := filepath.Join(config.KanikoDir, imageName)
-	if err := os.MkdirAll(dependencyDir, 0o750); err != nil {
+	if err := os.MkdirAll(dependencyDir, DefaultDirPerm); err != nil {
 		return err
 	}
 	logrus.Debugf("Trying to extract to %s", dependencyDir)
@@ -1105,7 +1145,7 @@ func saveStageAsTarball(path string, image v1.Image) error {
 	}
 	tarPath := filepath.Join(config.KanikoIntermediateStagesDir, path)
 	logrus.Infof("Storing source image from stage %s at path %s", path, tarPath)
-	if err := os.MkdirAll(filepath.Dir(tarPath), 0o750); err != nil {
+	if err := os.MkdirAll(filepath.Dir(tarPath), DefaultDirPerm); err != nil {
 		return err
 	}
 	return tarball.WriteToFile(tarPath, destRef, image)
@@ -1160,8 +1200,8 @@ func reviewConfig(stage *config.KanikoStage, cfg *v1.Config) {
 	}
 }
 
-// iterates over a list of KanikoStage and resolves instructions referring to earlier stages
-// returns a mapping of stage name to stage id, f.e - ["first": "0", "second": "1", "target": "2"]
+// ResolveCrossStageInstructions iterates over a list of KanikoStage and resolves instructions referring to earlier stages
+// It returns a mapping of stage name to stage id, f.e - ["first": "0", "second": "1", "target": "2"]
 func ResolveCrossStageInstructions(stages []config.KanikoStage) map[string]string {
 	nameToIndex := make(map[string]string)
 	for i := range stages {
