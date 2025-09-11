@@ -56,9 +56,9 @@ const emptyTarSize = 1024
 
 // Constants for magic number replacements
 const (
-	keyValueParts      = 2
+	keyValueParts       = 2
 	defaultRetryDelayMs = 1000
-	DefaultDirPerm     = 0o750
+	DefaultDirPerm      = 0o750
 )
 
 // for testing

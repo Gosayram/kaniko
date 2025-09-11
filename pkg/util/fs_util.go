@@ -462,9 +462,9 @@ func extractHardLink(dest, path string, hdr *tar.Header) error {
 	if strings.Contains(hdr.Linkname, "..") || strings.HasPrefix(hdr.Linkname, "/") {
 		return fmt.Errorf("invalid linkname: potential directory traversal detected")
 	}
-	
+
 	link := filepath.Clean(filepath.Join(dest, hdr.Linkname))
-	
+
 	// Additional security check: ensure the link destination is within the destination directory
 	absDest, err := filepath.Abs(dest)
 	if err != nil {
