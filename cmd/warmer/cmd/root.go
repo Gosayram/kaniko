@@ -45,12 +45,18 @@ var (
 	logTimestamp bool
 )
 
+// Cache timeout constants for warmer
+const (
+	warmerDefaultCacheTTL = time.Hour * 336 // 2 weeks
+)
+
 func init() {
 	RootCmd.PersistentFlags().StringVarP(&logLevel, "verbosity", "v", logging.DefaultLevel,
 		"Log level (trace, debug, info, warn, error, fatal, panic)")
 	RootCmd.PersistentFlags().StringVar(&logFormat, "log-format", logging.FormatColor,
 		"Log format (text, color, json)")
-	RootCmd.PersistentFlags().BoolVar(&logTimestamp, "log-timestamp", logging.DefaultLogTimestamp, "Timestamp in log output")
+	RootCmd.PersistentFlags().BoolVar(&logTimestamp, "log-timestamp",
+		logging.DefaultLogTimestamp, "Timestamp in log output")
 
 	addKanikoOptionsFlags()
 	addHiddenFlags()
@@ -118,7 +124,7 @@ func addKanikoOptionsFlags() {
 	RootCmd.PersistentFlags().VarP(&opts.Images, "image", "i", "Image to cache. Set it repeatedly for multiple images.")
 	RootCmd.PersistentFlags().StringVarP(&opts.CacheDir, "cache-dir", "c", "/cache", "Directory of the cache.")
 	RootCmd.PersistentFlags().BoolVarP(&opts.Force, "force", "f", false, "Force cache overwriting.")
-	RootCmd.PersistentFlags().DurationVarP(&opts.CacheTTL, "cache-ttl", "", time.Hour*336,
+	RootCmd.PersistentFlags().DurationVarP(&opts.CacheTTL, "cache-ttl", "", warmerDefaultCacheTTL,
 		"Cache timeout in hours. Defaults to two weeks.")
 	RootCmd.PersistentFlags().BoolVarP(&opts.InsecurePull, "insecure-pull", "", false,
 		"Pull from insecure registry using plain HTTP")
@@ -148,10 +154,12 @@ func addKanikoOptionsFlags() {
 		"If an image is not found on any mirrors (defined with registry-mirror) "+
 			"do not fallback to the default registry. "+
 			"If registry-mirror is not defined, this flag is ignored.")
-	RootCmd.PersistentFlags().StringVarP(&opts.CustomPlatform, "customPlatform", "", "", "Specify the build platform if different from the current host")
+	RootCmd.PersistentFlags().StringVarP(&opts.CustomPlatform, "customPlatform", "", "",
+		"Specify the build platform if different from the current host")
 	RootCmd.PersistentFlags().StringVarP(&opts.DockerfilePath, "dockerfile", "d", "",
 		"Path to the dockerfile to be cached. The kaniko warmer will parse and write out each stage's base image layers "+
-			"to the cache-dir. Using the same dockerfile path as what you plan to build in the kaniko executor is the expected usage.")
+			"to the cache-dir. Using the same dockerfile path as what you plan to build "+
+			"in the kaniko executor is the expected usage.")
 	RootCmd.PersistentFlags().VarP(&opts.BuildArgs, "build-arg", "",
 		"This flag should be used in conjunction with the dockerfile flag for scenarios "+
 			"where dynamic replacement of the base image is required.")

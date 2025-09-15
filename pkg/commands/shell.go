@@ -23,13 +23,14 @@ import (
 	"github.com/Gosayram/kaniko/pkg/dockerfile"
 )
 
+// ShellCommand implements the Dockerfile SHELL instruction
 type ShellCommand struct {
 	BaseCommand
 	cmd *instructions.ShellCommand
 }
 
 // ExecuteCommand handles command processing similar to CMD and RUN,
-func (s *ShellCommand) ExecuteCommand(config *v1.Config, buildArgs *dockerfile.BuildArgs) error {
+func (s *ShellCommand) ExecuteCommand(config *v1.Config, _ *dockerfile.BuildArgs) error {
 	config.Shell = s.cmd.Shell
 	return nil
 }

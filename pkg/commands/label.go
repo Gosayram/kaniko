@@ -27,11 +27,13 @@ import (
 	"github.com/Gosayram/kaniko/pkg/util"
 )
 
+// LabelCommand implements the Dockerfile LABEL instruction
 type LabelCommand struct {
 	BaseCommand
 	cmd *instructions.LabelCommand
 }
 
+// ExecuteCommand processes the LABEL instruction by updating image labels
 func (r *LabelCommand) ExecuteCommand(config *v1.Config, buildArgs *dockerfile.BuildArgs) error {
 	return updateLabels(r.cmd.Labels, config, buildArgs)
 }
@@ -64,7 +66,6 @@ func updateLabels(labels []instructions.KeyValuePair, config *v1.Config, buildAr
 
 	config.Labels = existingLabels
 	return nil
-
 }
 
 // String returns some information about the command for the image config history

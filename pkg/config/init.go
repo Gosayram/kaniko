@@ -23,6 +23,7 @@ import (
 	"github.com/Gosayram/kaniko/pkg/constants"
 )
 
+// RootDir is the root directory path used by Kaniko for container operations
 var RootDir string
 
 // KanikoDir is the path to the Kaniko directory
@@ -44,6 +45,7 @@ var BuildContextDir = fmt.Sprintf("%s/buildcontext/", KanikoDir)
 // as tarballs in case they are needed later on
 var KanikoIntermediateStagesDir = fmt.Sprintf("%s/stages/", KanikoDir)
 
+// MountInfoPath is the path to the mount information file used for container analysis
 var MountInfoPath string
 
 // Initialize initializes the configuration variables

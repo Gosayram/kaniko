@@ -58,12 +58,19 @@ var (
 	logTimestamp bool
 )
 
+// Cache timeout and file permission constants
+const (
+	defaultCacheTTL = time.Hour * 336 // 2 weeks
+	filePermission  = 0o600
+)
+
 func init() {
 	RootCmd.PersistentFlags().StringVarP(&logLevel, "verbosity", "v", logging.DefaultLevel,
 		"Log level (trace, debug, info, warn, error, fatal, panic)")
 	RootCmd.PersistentFlags().StringVar(&logFormat, "log-format", logging.FormatColor,
 		"Log format (text, color, json)")
-	RootCmd.PersistentFlags().BoolVar(&logTimestamp, "log-timestamp", logging.DefaultLogTimestamp, "Timestamp in log output")
+	RootCmd.PersistentFlags().BoolVar(&logTimestamp, "log-timestamp",
+		logging.DefaultLogTimestamp, "Timestamp in log output")
 	RootCmd.PersistentFlags().BoolVarP(&force, "force", "", false, "Force building outside of a container")
 
 	addKanikoOptionsFlags()
@@ -307,7 +314,8 @@ func addRegistryFlags() {
 		"If true, known tag immutability errors are ignored and the push finishes with success.")
 	RootCmd.PersistentFlags().VarP(&opts.InsecureRegistries, "insecure-registry", "",
 		"Insecure registry using plain HTTP to push and pull. Set it repeatedly for multiple registries.")
-	RootCmd.PersistentFlags().VarP(&opts.SkipTLSVerifyRegistries, "skip-tls-verify-registry", "", "Insecure registry ignoring TLS verify to push and pull. Set it repeatedly for multiple registries.")
+	RootCmd.PersistentFlags().VarP(&opts.SkipTLSVerifyRegistries, "skip-tls-verify-registry", "",
+		"Insecure registry ignoring TLS verify to push and pull. Set it repeatedly for multiple registries.")
 	opts.RegistriesCertificates = make(map[string]string)
 	RootCmd.PersistentFlags().VarP(&opts.RegistriesCertificates, "registry-certificate", "",
 		"Use the provided certificate for TLS communication with the given registry. "+
@@ -343,7 +351,7 @@ func addCacheFlags() {
 		"Use cache when building image")
 	RootCmd.PersistentFlags().BoolVarP(&opts.CompressedCaching, "compressed-caching", "", true,
 		"Compress the cached layers. Decreases build time, but increases memory usage.")
-	RootCmd.PersistentFlags().DurationVarP(&opts.CacheTTL, "cache-ttl", "", time.Hour*336,
+	RootCmd.PersistentFlags().DurationVarP(&opts.CacheTTL, "cache-ttl", "", defaultCacheTTL,
 		"Cache timeout, requires value and unit of duration -> ex: 6h. Defaults to two weeks.")
 	RootCmd.PersistentFlags().IntVar(&opts.ImageFSExtractRetry, "image-fs-extract-retry", 0,
 		"Number of retries for image FS extraction")
@@ -450,7 +458,7 @@ func checkKanikoDir(dir string) error {
 	if dir != filepath.Clean(constants.DefaultKanikoPath) {
 		// The destination directory may be across a different partition, so we cannot simply rename/move the directory.
 		if _, err := util.CopyDir(constants.DefaultKanikoPath, dir, util.FileContext{},
-			util.DoNotChangeUID, util.DoNotChangeGID, fs.FileMode(0o600), true); err != nil {
+			util.DoNotChangeUID, util.DoNotChangeGID, fs.FileMode(filePermission), true); err != nil {
 			return err
 		}
 
@@ -542,13 +550,13 @@ func resolveEnvironmentBuildArgs(arguments []string, resolver func(string) strin
 // it won't be copied into the image
 func copyDockerfile() error {
 	if _, err := util.CopyFile(opts.DockerfilePath, config.DockerfilePath, util.FileContext{},
-		util.DoNotChangeUID, util.DoNotChangeGID, fs.FileMode(0o600), true); err != nil {
+		util.DoNotChangeUID, util.DoNotChangeGID, fs.FileMode(filePermission), true); err != nil {
 		return errors.Wrap(err, "copying dockerfile")
 	}
 	dockerignorePath := opts.DockerfilePath + ".dockerignore"
 	if util.FilepathExists(dockerignorePath) {
 		if _, err := util.CopyFile(dockerignorePath, config.DockerfilePath+".dockerignore", util.FileContext{},
-			util.DoNotChangeUID, util.DoNotChangeGID, fs.FileMode(0o600), true); err != nil {
+			util.DoNotChangeUID, util.DoNotChangeGID, fs.FileMode(filePermission), true); err != nil {
 			return errors.Wrap(err, "copying Dockerfile.dockerignore")
 		}
 	}

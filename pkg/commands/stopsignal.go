@@ -26,6 +26,7 @@ import (
 	"github.com/Gosayram/kaniko/pkg/util"
 )
 
+// StopSignalCommand implements the Dockerfile STOPSIGNAL instruction
 type StopSignalCommand struct {
 	BaseCommand
 	cmd *instructions.StopSignalCommand

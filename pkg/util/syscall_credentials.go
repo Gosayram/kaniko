@@ -14,6 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// Package util provides various utility functions for filesystem operations, system calls, and other common tasks.
 package util
 
 import (
@@ -26,6 +27,9 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
+// SyscallCredentials retrieves system call credentials for a given user string.
+// It parses the user string to extract UID and GID, looks up user information,
+// and returns a syscall.Credential structure with the appropriate credentials.
 func SyscallCredentials(userStr string) (*syscall.Credential, error) {
 	uid, gid, err := getUIDAndGIDFromString(userStr)
 	if err != nil {
@@ -55,7 +59,7 @@ func SyscallCredentials(userStr string) (*syscall.Credential, error) {
 		groups = append(groups, uint32(i))
 	}
 
-	if !(len(strings.Split(userStr, ":")) > 1) {
+	if len(strings.Split(userStr, ":")) <= 1 {
 		if u.Gid != "" {
 			gid, _ = getGID(u.Gid)
 		}

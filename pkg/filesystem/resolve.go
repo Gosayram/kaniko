@@ -14,6 +14,8 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// Package filesystem provides path resolution functionality for filesystem operations.
+// It handles symlink resolution, ignore list checking, and path validation for secure filesystem access.
 package filesystem
 
 import (
@@ -69,7 +71,7 @@ func ResolvePaths(paths []string, wl []util.IgnoreListEntry) (pathsToAdd []strin
 		if e != nil {
 			if !os.IsNotExist(e) {
 				logrus.Errorf("Couldn't eval %s with link %s", f, link)
-				return
+				return nil, e
 			}
 
 			logrus.Tracef("Symlink path %s, target does not exist", f)
@@ -94,7 +96,7 @@ func ResolvePaths(paths []string, wl []util.IgnoreListEntry) (pathsToAdd []strin
 
 	// Also add parent directories to keep the permission of them correctly.
 	pathsToAdd = filesWithParentDirs(pathsToAdd)
-	return
+	return pathsToAdd, nil
 }
 
 // filesWithParentDirs returns every ancestor path for each provided file path.

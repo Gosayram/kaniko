@@ -24,6 +24,7 @@ import (
 	"github.com/Gosayram/kaniko/pkg/util"
 )
 
+// ArgCommand implements the Dockerfile ARG instruction
 type ArgCommand struct {
 	BaseCommand
 	cmd *instructions.ArgCommand
@@ -42,6 +43,7 @@ func (r *ArgCommand) ExecuteCommand(config *v1.Config, buildArgs *dockerfile.Bui
 	return nil
 }
 
+// ParseArg parses and resolves ARG key/value pairs with environment variable substitution
 func ParseArg(key string, val *string, env []string, ba *dockerfile.BuildArgs) (string, *string, error) {
 	replacementEnvs := ba.ReplacementEnvs(env)
 	resolvedKey, err := util.ResolveEnvironmentReplacement(key, replacementEnvs, false)

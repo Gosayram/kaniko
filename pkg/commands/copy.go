@@ -87,7 +87,8 @@ func (c *CopyCommand) setupUserGroup(replacementEnvs []string) (uid, gid int64, 
 }
 
 // resolveSourcesAndDest resolves sources and destination paths
-func (c *CopyCommand) resolveSourcesAndDest(replacementEnvs []string) (sources []string, destination string, err error) {
+func (c *CopyCommand) resolveSourcesAndDest(
+	replacementEnvs []string) (sources []string, destination string, err error) {
 	// sources from the Copy command are resolved with wildcards {*?[}
 	sources, destination, err = util.ResolveEnvAndWildcards(c.cmd.SourcesAndDest, c.fileContext, replacementEnvs)
 	if err != nil {
@@ -97,7 +98,9 @@ func (c *CopyCommand) resolveSourcesAndDest(replacementEnvs []string) (sources [
 }
 
 // copySources copies each source to the destination
-func (c *CopyCommand) copySources(srcs []string, dest string, config *v1.Config, uid, gid int64, chmod os.FileMode, useDefaultChmod bool) error {
+func (c *CopyCommand) copySources(
+	srcs []string, dest string, config *v1.Config, uid, gid int64,
+	chmod os.FileMode, useDefaultChmod bool) error {
 	for _, src := range srcs {
 		if err := c.copySingleSource(src, dest, config, uid, gid, chmod, useDefaultChmod); err != nil {
 			return err
@@ -107,7 +110,9 @@ func (c *CopyCommand) copySources(srcs []string, dest string, config *v1.Config,
 }
 
 // copySingleSource copies a single source to the destination
-func (c *CopyCommand) copySingleSource(src, dest string, config *v1.Config, uid, gid int64, chmod os.FileMode, useDefaultChmod bool) error {
+func (c *CopyCommand) copySingleSource(
+	src, dest string, config *v1.Config, uid, gid int64,
+	chmod os.FileMode, useDefaultChmod bool) error {
 	fullPath := filepath.Join(c.fileContext.Root, src)
 
 	fi, err := os.Lstat(fullPath)
@@ -247,7 +252,7 @@ type CachingCopyCommand struct {
 }
 
 // ExecuteCommand executes the cached COPY command by extracting files from cached layers.
-func (cr *CachingCopyCommand) ExecuteCommand(config *v1.Config, buildArgs *dockerfile.BuildArgs) error {
+func (cr *CachingCopyCommand) ExecuteCommand(_ *v1.Config, buildArgs *dockerfile.BuildArgs) error {
 	logrus.Infof("Found cached layer, extracting to filesystem")
 	var err error
 
@@ -277,7 +282,8 @@ func (cr *CachingCopyCommand) ExecuteCommand(config *v1.Config, buildArgs *docke
 }
 
 // FilesUsedFromContext returns the list of files used from the build context.
-func (cr *CachingCopyCommand) FilesUsedFromContext(config *v1.Config, buildArgs *dockerfile.BuildArgs) ([]string, error) {
+func (cr *CachingCopyCommand) FilesUsedFromContext(
+	config *v1.Config, buildArgs *dockerfile.BuildArgs) ([]string, error) {
 	return copyCmdFilesUsedFromContext(config, buildArgs, cr.cmd, cr.fileContext)
 }
 

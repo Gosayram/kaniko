@@ -42,7 +42,7 @@ func NewCIDriver(opts *config.KanikoOptions) (*CIDriver, error) {
 }
 
 // ValidatePlatforms validates that digest files are available for requested platforms
-func (d *CIDriver) ValidatePlatforms(platforms []string) error {
+func (d *CIDriver) ValidatePlatforms(_ []string) error {
 	if d.opts.DigestsFrom == "" {
 		return errors.New("CI driver requires --digests-from path to read digest files")
 	}
@@ -56,7 +56,7 @@ func (d *CIDriver) ValidatePlatforms(platforms []string) error {
 }
 
 // ExecuteBuilds reads digest files from the specified directory and returns them
-func (d *CIDriver) ExecuteBuilds(ctx context.Context, platforms []string) (map[string]string, error) {
+func (d *CIDriver) ExecuteBuilds(_ context.Context, platforms []string) (map[string]string, error) {
 	digests := make(map[string]string)
 
 	logrus.Infof("Reading digests from directory: %s", d.opts.DigestsFrom)

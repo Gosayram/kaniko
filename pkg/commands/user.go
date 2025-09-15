@@ -29,11 +29,13 @@ import (
 	"github.com/Gosayram/kaniko/pkg/util"
 )
 
+// UserCommand implements the Dockerfile USER instruction
 type UserCommand struct {
 	BaseCommand
 	cmd *instructions.UserCommand
 }
 
+// ExecuteCommand processes the USER instruction by setting the user/group for subsequent commands
 func (r *UserCommand) ExecuteCommand(config *v1.Config, buildArgs *dockerfile.BuildArgs) error {
 	logrus.Info("Cmd: USER")
 	u := r.cmd.User

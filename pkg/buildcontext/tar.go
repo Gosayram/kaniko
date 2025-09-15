@@ -59,7 +59,6 @@ func (t *Tar) UnpackTarFromBuildContext() (string, error) {
 		defer gzr.Close()
 		_, err = util.UnTar(gzr, directory)
 		return directory, err
-
 	}
 
 	return directory, util.UnpackCompressedTar(t.context, directory)

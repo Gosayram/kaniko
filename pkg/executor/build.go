@@ -112,7 +112,7 @@ func newStageBuilder(
 		return nil, err
 	}
 
-	if err = resolveOnBuild(stage, &imageConfig.Config, stageNameToIdx); err != nil {
+	if err := resolveOnBuild(stage, &imageConfig.Config, stageNameToIdx); err != nil {
 		return nil, err
 	}
 
@@ -693,7 +693,7 @@ func processCommandForDependencies(
 				return nil
 			}
 			resolved, err := util.ResolveEnvironmentReplacementList(
-				cmd.SourcesAndDest.SourcePaths,
+				cmd.SourcePaths,
 				ba.ReplacementEnvs(cfg.Config.Env),
 				true,
 			)
@@ -707,7 +707,7 @@ func processCommandForDependencies(
 			return err
 		}
 		var mutateErr error
-		image, mutateErr = mutate.Config(image, cfg.Config)
+		_, mutateErr = mutate.Config(image, cfg.Config)
 		if mutateErr != nil {
 			return mutateErr
 		}
@@ -723,10 +723,14 @@ func processCommandForDependencies(
 	return nil
 }
 
-// CalculateDependencies calculates cross-stage dependencies for multi-stage builds
+// CalculateDependencies calculates cross-stage dependencies for multi-stage builds.
 // It analyzes COPY --from commands and other cross-stage references to determine
-// which files need to be preserved between stages
-func CalculateDependencies(stages []config.KanikoStage, opts *config.KanikoOptions, stageNameToIdx map[string]string) (map[int][]string, error) {
+// which files need to be preserved between stages.
+func CalculateDependencies(
+	stages []config.KanikoStage,
+	opts *config.KanikoOptions,
+	stageNameToIdx map[string]string,
+) (map[int][]string, error) {
 	images := []v1.Image{}
 	depGraph := map[int][]string{}
 
@@ -842,7 +846,7 @@ func initBuildStages(opts *config.KanikoOptions) ([]config.KanikoStage, map[stri
 
 	stageNameToIdx := ResolveCrossStageInstructions(kanikoStages)
 
-	if err = fetchExtraStages(kanikoStages, opts); err != nil {
+	if err := fetchExtraStages(kanikoStages, opts); err != nil {
 		return nil, nil, util.FileContext{}, err
 	}
 
@@ -1200,8 +1204,9 @@ func reviewConfig(stage *config.KanikoStage, cfg *v1.Config) {
 	}
 }
 
-// ResolveCrossStageInstructions iterates over a list of KanikoStage and resolves instructions referring to earlier stages
-// It returns a mapping of stage name to stage id, f.e - ["first": "0", "second": "1", "target": "2"]
+// ResolveCrossStageInstructions iterates over a list of KanikoStage and resolves
+// instructions referring to earlier stages. It returns a mapping of stage name
+// to stage id, f.e - ["first": "0", "second": "1", "target": "2"]
 func ResolveCrossStageInstructions(stages []config.KanikoStage) map[string]string {
 	nameToIndex := make(map[string]string)
 	for i := range stages {

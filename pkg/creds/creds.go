@@ -14,6 +14,8 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// Package creds provides authentication keychain functionality for container registries.
+// It supports multiple credential helpers including AWS ECR, Azure ACR, GitLab, and Google Container Registry.
 package creds
 
 import (

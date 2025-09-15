@@ -37,7 +37,6 @@ type HTTPSTar struct {
 
 // UnpackTarFromBuildContext downloads context file from https server
 func (h *HTTPSTar) UnpackTarFromBuildContext() (directory string, err error) {
-
 	logrus.Info("Retrieving https tar file")
 
 	// Create directory and target file for downloading the context file
@@ -45,19 +44,19 @@ func (h *HTTPSTar) UnpackTarFromBuildContext() (directory string, err error) {
 	tarPath := filepath.Join(directory, constants.ContextTar)
 	file, err := util.CreateTargetTarfile(tarPath)
 	if err != nil {
-		return
+		return directory, err
 	}
 
 	// Download tar file from remote https server
 	// and save it into the target tar file
 	client := &http.Client{
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		CheckRedirect: func(_ *http.Request, via []*http.Request) error {
 			return http.ErrUseLastResponse
 		},
 	}
 	resp, err := client.Get(h.context)
 	if err != nil {
-		return
+		return directory, err
 	}
 	defer func() {
 		if closeErr := resp.Body.Close(); err == nil && closeErr != nil {
@@ -76,7 +75,7 @@ func (h *HTTPSTar) UnpackTarFromBuildContext() (directory string, err error) {
 	logrus.Info("Retrieved https tar file")
 
 	if err = util.UnpackCompressedTar(tarPath, directory); err != nil {
-		return
+		return directory, err
 	}
 
 	logrus.Info("Extracted https tar file")

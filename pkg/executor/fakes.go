@@ -57,7 +57,7 @@ type MockDockerCommand struct {
 }
 
 // ExecuteCommand is a mock implementation that always returns nil
-func (m MockDockerCommand) ExecuteCommand(c *v1.Config, args *dockerfile.BuildArgs) error { return nil }
+func (m MockDockerCommand) ExecuteCommand(_ *v1.Config, _ *dockerfile.BuildArgs) error { return nil }
 
 // String returns the command string representation for testing
 func (m MockDockerCommand) String() string {
@@ -75,12 +75,12 @@ func (m MockDockerCommand) ProvidesFilesToSnapshot() bool {
 }
 
 // CacheCommand returns the cached command implementation for testing
-func (m MockDockerCommand) CacheCommand(image v1.Image) commands.DockerCommand {
+func (m MockDockerCommand) CacheCommand(_ v1.Image) commands.DockerCommand {
 	return m.cacheCommand
 }
 
 // FilesUsedFromContext returns mock context files for testing
-func (m MockDockerCommand) FilesUsedFromContext(c *v1.Config, args *dockerfile.BuildArgs) ([]string, error) {
+func (m MockDockerCommand) FilesUsedFromContext(_ *v1.Config, _ *dockerfile.BuildArgs) ([]string, error) {
 	return m.contextFiles, nil
 }
 
@@ -117,7 +117,7 @@ type MockCachedDockerCommand struct {
 }
 
 // ExecuteCommand is a mock implementation that always returns nil
-func (m MockCachedDockerCommand) ExecuteCommand(c *v1.Config, args *dockerfile.BuildArgs) error {
+func (m MockCachedDockerCommand) ExecuteCommand(_ *v1.Config, _ *dockerfile.BuildArgs) error {
 	return nil
 }
 
@@ -137,7 +137,7 @@ func (m MockCachedDockerCommand) ProvidesFilesToSnapshot() bool {
 }
 
 // CacheCommand returns nil since this is already a cached command mock
-func (m MockCachedDockerCommand) CacheCommand(image v1.Image) commands.DockerCommand {
+func (m MockCachedDockerCommand) CacheCommand(_ v1.Image) commands.DockerCommand {
 	return nil
 }
 
@@ -147,7 +147,7 @@ func (m MockCachedDockerCommand) ShouldDetectDeletedFiles() bool {
 }
 
 // FilesUsedFromContext returns mock context files for testing
-func (m MockCachedDockerCommand) FilesUsedFromContext(c *v1.Config, args *dockerfile.BuildArgs) ([]string, error) {
+func (m MockCachedDockerCommand) FilesUsedFromContext(_ *v1.Config, _ *dockerfile.BuildArgs) ([]string, error) {
 	return m.contextFiles, nil
 }
 

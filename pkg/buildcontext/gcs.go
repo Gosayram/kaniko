@@ -36,6 +36,7 @@ type GCS struct {
 	context string
 }
 
+// UnpackTarFromBuildContext downloads and unpacks build context from Google Cloud Storage
 func (g *GCS) UnpackTarFromBuildContext() (string, error) {
 	bucketName, filePath, err := bucket.GetNameAndFilepathFromURI(g.context)
 	if err != nil {
@@ -44,6 +45,7 @@ func (g *GCS) UnpackTarFromBuildContext() (string, error) {
 	return kConfig.BuildContextDir, unpackTarFromGCSBucket(bucketName, filePath, kConfig.BuildContextDir)
 }
 
+// UploadToBucket uploads data from a reader to a Google Cloud Storage bucket
 func UploadToBucket(r io.Reader, dest string) error {
 	ctx := context.Background()
 	bucketName, filePath, err := bucket.GetNameAndFilepathFromURI(dest)
@@ -88,7 +90,8 @@ func getTarFromBucket(bucketName, filepathInBucket, directory string) (string, e
 	}
 	defer reader.Close()
 	tarPath := filepath.Join(directory, constants.ContextTar)
-	if err := util.CreateFile(tarPath, reader, 0o600, 0, 0); err != nil {
+	// 0o600 permissions provide read/write access for owner only (standard for sensitive files)
+	if err := util.CreateFile(tarPath, reader, 0o600, 0, 0); err != nil { //nolint:mnd // 0o600 is standard file permissions
 		return "", err
 	}
 	logrus.Debugf("Copied tarball %s from GCS bucket %s to %s", constants.ContextTar, bucketName, tarPath)

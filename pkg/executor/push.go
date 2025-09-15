@@ -59,9 +59,20 @@ var (
 )
 
 const (
+	// UpstreamClientUaKey is the environment variable key for upstream client type
+	// used to set User-Agent header in HTTP requests
 	UpstreamClientUaKey = "UPSTREAM_CLIENT_TYPE"
 	DummyDestination    = "docker.io/unset-repo/unset-image-name"
 )
+
+// File permission constants
+const (
+	dirPermission  = 0o700
+	filePermission = 0o600
+)
+
+// pushRetryDelay is the delay between push retry attempts in milliseconds
+const pushRetryDelay = 1000
 
 var (
 	// known tag immutability errors
@@ -118,13 +129,13 @@ func CheckPushPermissions(opts *config.KanikoOptions) error {
 			continue
 		}
 
-		registryName := destRef.Repository.Registry.Name()
+		registryName := destRef.Registry.Name()
 		if opts.Insecure || opts.InsecureRegistries.Contains(registryName) {
 			newReg, err := name.NewRegistry(registryName, name.WeakValidation, name.Insecure)
 			if err != nil {
 				return errors.Wrap(err, "getting new insecure registry")
 			}
-			destRef.Repository.Registry = newReg
+			destRef.Registry = newReg
 		}
 		rt, err := util.MakeTransport(&opts.RegistryOptions, registryName)
 		if err != nil {
@@ -150,7 +161,7 @@ func getDigest(image v1.Image) ([]byte, error) {
 func writeDigestFile(path string, digestByteArray []byte) error {
 	if strings.HasPrefix(path, "https://") {
 		// Do a HTTP PUT to the URL; this could be a pre-signed URL to S3 or GCS or Azure
-		req, err := http.NewRequest("PUT", path, bytes.NewReader(digestByteArray)) //nolint:noctx // context not needed for simple HTTP PUT requests
+		req, err := http.NewRequest("PUT", path, bytes.NewReader(digestByteArray)) //nolint:noctx // context not needed for simple HTTP PUT
 		if err != nil {
 			return err
 		}
@@ -165,13 +176,13 @@ func writeDigestFile(path string, digestByteArray []byte) error {
 
 	parentDir := filepath.Dir(path)
 	if _, err := os.Stat(parentDir); os.IsNotExist(err) {
-		if err := os.MkdirAll(parentDir, 0o700); err != nil {
+		if err := os.MkdirAll(parentDir, dirPermission); err != nil {
 			logrus.Debugf("Error creating %s, %s", parentDir, err)
 			return err
 		}
 		logrus.Tracef("Created directory %v", parentDir)
 	}
-	return os.WriteFile(path, digestByteArray, 0o600)
+	return os.WriteFile(path, digestByteArray, filePermission)
 }
 
 // DoPush is responsible for pushing image to the destinations specified in opts.
@@ -185,13 +196,13 @@ func DoPush(image v1.Image, opts *config.KanikoOptions) error {
 		return errors.New("must provide at least one destination to push")
 	}
 
-	digestByteArray, err := handleDigestFiles(image, opts)
-	if err != nil {
-		return err
+	digestByteArray, handleErr := handleDigestFiles(image, opts)
+	if handleErr != nil {
+		return handleErr
 	}
 
-	if err := handleOCILayout(image, opts); err != nil {
-		return err
+	if layoutErr := handleOCILayout(image, opts); layoutErr != nil {
+		return layoutErr
 	}
 
 	if opts.NoPush && len(opts.Destinations) == 0 && opts.TarPath != "" {
@@ -307,13 +318,13 @@ func handleTarballCreation(image v1.Image, opts *config.KanikoOptions, destRefs 
 
 func pushToDestinations(image v1.Image, opts *config.KanikoOptions, destRefs []name.Tag) error {
 	for _, destRef := range destRefs {
-		registryName := destRef.Repository.Registry.Name()
+		registryName := destRef.Registry.Name()
 		if opts.Insecure || opts.InsecureRegistries.Contains(registryName) {
 			newReg, err := name.NewRegistry(registryName, name.WeakValidation, name.Insecure)
 			if err != nil {
 				return errors.Wrap(err, "getting new insecure registry")
 			}
-			destRef.Repository.Registry = newReg
+			destRef.Registry = newReg
 		}
 
 		pushAuth, err := creds.GetKeychain().Resolve(destRef.Context().Registry)
@@ -355,7 +366,7 @@ func pushToDestinations(image v1.Image, opts *config.KanikoOptions, destRefs []n
 			return nil
 		}
 
-		if err := util.Retry(retryFunc, opts.PushRetry, 1000); err != nil {
+		if err := util.Retry(retryFunc, opts.PushRetry, pushRetryDelay); err != nil {
 			return errors.Wrap(err, fmt.Sprintf("failed to push to destination %s", destRef))
 		}
 	}
@@ -397,7 +408,7 @@ func writeImageOutputs(image v1.Image, destRefs []name.Tag) error {
 // if opts.CacheRepo doesn't exist, infer the cache from the given destination
 func pushLayerToCache(opts *config.KanikoOptions, cacheKey, tarPath, createdBy string) error {
 	var layerOpts []tarball.LayerOption
-	if opts.CompressedCaching == true {
+	if opts.CompressedCaching {
 		layerOpts = append(layerOpts, tarball.WithCompressedCaching)
 	}
 

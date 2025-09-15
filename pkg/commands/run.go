@@ -66,7 +66,7 @@ func runCommandInExec(config *v1.Config, buildArgs *dockerfile.BuildArgs, cmdRun
 		return err
 	}
 
-	if err = validateCommand(newCommand); err != nil {
+	if err := validateCommand(newCommand); err != nil {
 		return err
 	}
 
@@ -89,7 +89,9 @@ func executeAndCleanupCommand(cmd *exec.Cmd) error {
 
 // prepareCommand prepares the command based on shell configuration
 // and handles PATH environment variable resolution for executables
-func prepareCommand(config *v1.Config, buildArgs *dockerfile.BuildArgs, cmdRun *instructions.RunCommand) ([]string, error) {
+func prepareCommand(
+	config *v1.Config, buildArgs *dockerfile.BuildArgs,
+	cmdRun *instructions.RunCommand) ([]string, error) {
 	var newCommand []string
 	if cmdRun.PrependShell {
 		// This is the default shell on Linux
@@ -304,7 +306,7 @@ func (cr *CachingRunCommand) IsArgsEnvsRequiredInCache() bool {
 
 // ExecuteCommand handles cached RUN instruction execution by extracting
 // pre-computed layers instead of running the command
-func (cr *CachingRunCommand) ExecuteCommand(config *v1.Config, buildArgs *dockerfile.BuildArgs) error {
+func (cr *CachingRunCommand) ExecuteCommand(_ *v1.Config, _ *dockerfile.BuildArgs) error {
 	logrus.Infof("Found cached layer, extracting to filesystem")
 	var err error
 

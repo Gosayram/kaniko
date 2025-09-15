@@ -54,7 +54,6 @@ func RetrieveRemoteImage(image string, opts *config.RegistryOptions, customPlatf
 
 	if newRegURLs, found := opts.RegistryMaps[ref.Context().RegistryStr()]; found {
 		for _, registryMapping := range newRegURLs {
-
 			regToMapTo, repositoryPrefix := parseRegistryMapping(registryMapping)
 
 			insecurePull := opts.InsecurePull || opts.InsecureRegistries.Contains(regToMapTo)
@@ -114,7 +113,8 @@ func RetrieveRemoteImage(image string, opts *config.RegistryOptions, customPlatf
 	return remoteImage, err
 }
 
-// remapRepository adds the {repositoryPrefix}/ to the original repo, and normalizes with an additional library/ if necessary
+// remapRepository adds the {repositoryPrefix}/ to the original repo,
+// and normalizes with an additional library/ if necessary
 func remapRepository(repo name.Repository, regToMapTo, repositoryPrefix string,
 	insecurePull bool) (name.Repository, error) {
 	if insecurePull {

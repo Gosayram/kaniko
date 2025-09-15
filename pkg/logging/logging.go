@@ -14,6 +14,8 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// Package logging provides configuration utilities for logrus logging
+// including log levels, formats, and timestamp settings
 package logging
 
 import (
@@ -24,16 +26,16 @@ import (
 )
 
 const (
-	// Default log level
+	// DefaultLevel is the default log level used when no level is specified
 	DefaultLevel = "info"
-	// Default timestamp in logs
+	// DefaultLogTimestamp controls whether timestamps are shown in logs by default
 	DefaultLogTimestamp = false
 
-	// Text format
+	// FormatText represents plain text log format without colors
 	FormatText = "text"
-	// Colored text format
+	// FormatColor represents colored text log format with ANSI colors
 	FormatColor = "color"
-	// JSON format
+	// FormatJSON represents JSON log format for structured logging
 	FormatJSON = "json"
 )
 

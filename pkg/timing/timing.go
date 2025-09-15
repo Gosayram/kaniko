@@ -14,6 +14,8 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// Package timing provides timing utilities for measuring execution time
+// of different operations in Kaniko build process
 package timing
 
 import (
@@ -79,6 +81,7 @@ func Summary() string {
 	return DefaultRun.Summary()
 }
 
+// JSON returns timing data in JSON format from the default timed run
 func JSON() (string, error) {
 	return DefaultRun.JSON()
 }
@@ -95,6 +98,7 @@ func (tr *TimedRun) Summary() string {
 	return b.String()
 }
 
+// JSON returns timing data in JSON format for this timed run instance
 func (tr *TimedRun) JSON() (string, error) {
 	b, err := json.Marshal(tr.categories)
 	if err != nil {

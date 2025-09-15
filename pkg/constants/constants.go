@@ -14,12 +14,15 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// Package constants defines common constants used throughout the Kaniko project
+// including file paths, configuration values, and environment variable names
 package constants
 
 const (
 	// RootDir is the path to the root directory
 	RootDir = "/"
 
+	// MountInfoPath is the path to the mount information file in proc filesystem
 	MountInfoPath = "/proc/self/mountinfo"
 
 	DefaultKanikoPath = "/kaniko"
@@ -29,7 +32,7 @@ const (
 	// ContextTar is the default name of the tar uploaded to GCS buckets
 	ContextTar = "context.tar.gz"
 
-	// Various snapshot modes:
+	// SnapshotModeTime is the time-based snapshot mode for filesystem tracking
 	SnapshotModeTime = "time"
 	SnapshotModeFull = "full"
 	SnapshotModeRedo = "redo"
@@ -48,14 +51,14 @@ const (
 	DefaultHOMEValue = "/root"
 	RootUser         = "root"
 
-	// Docker command names
+	// Cmd represents the CMD Dockerfile instruction name
 	Cmd        = "CMD"
 	Entrypoint = "ENTRYPOINT"
 
-	// Name of the .dockerignore file
+	// Dockerignore is the name of the .dockerignore file used for file exclusion
 	Dockerignore = ".dockerignore"
 
-	// S3 Custom endpoint ENV name
+	// S3EndpointEnv is the environment variable name for S3 custom endpoint configuration
 	S3EndpointEnv    = "S3_ENDPOINT"
 	S3ForcePathStyle = "S3_FORCE_PATH_STYLE"
 )
@@ -63,7 +66,8 @@ const (
 // ScratchEnvVars are the default environment variables needed for a scratch image.
 var ScratchEnvVars = []string{"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"}
 
-// AzureBlobStorageHostRegEx is ReqEX for Valid azure blob storage host suffix in url for AzureCloud, AzureChinaCloud, AzureGermanCloud and AzureUSGovernment
+// AzureBlobStorageHostRegEx contains regex patterns for valid Azure blob storage host suffixes
+// across different Azure clouds: AzureCloud, AzureChinaCloud, AzureGermanCloud, and AzureUSGovernment
 var AzureBlobStorageHostRegEx = []string{
 	"https://(.+?)\\.blob\\.core\\.windows\\.net/(.+)",
 	"https://(.+?)\\.blob\\.core\\.chinacloudapi\\.cn/(.+)",

@@ -25,9 +25,11 @@ import (
 )
 
 const (
+	// TarBuildContextPrefix is the prefix for tar-based build contexts
 	TarBuildContextPrefix = "tar://"
 )
 
+// BuildOptions contains configuration options for build context retrieval
 type BuildOptions struct {
 	GitBranch            string
 	GitSingleBranch      bool
@@ -67,5 +69,7 @@ func GetBuildContext(srcContext string, opts BuildOptions) (BuildContext, error)
 			return &Tar{context: context}, nil
 		}
 	}
-	return nil, errors.New("unknown build context prefix provided, please use one of the following: gs://, dir://, tar://, s3://, git://, https://")
+	return nil, errors.New("unknown build context prefix provided, " +
+		"please use one of the following: gs://, dir://, tar://, " +
+		"s3://, git://, https://")
 }

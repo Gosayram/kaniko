@@ -48,7 +48,7 @@ func (d *KubernetesDriver) ValidatePlatforms(platforms []string) error {
 
 	for _, platform := range platforms {
 		parts := strings.Split(platform, "/")
-		if len(parts) != 2 {
+		if len(parts) != 2 { // platform format should be "os/arch"
 			return fmt.Errorf("invalid platform format: %s", platform)
 		}
 		// Basic validation - ensure platform format is correct

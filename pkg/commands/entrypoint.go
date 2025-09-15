@@ -26,13 +26,14 @@ import (
 	"github.com/moby/buildkit/frontend/dockerfile/instructions"
 )
 
+// EntrypointCommand implements the Dockerfile ENTRYPOINT instruction
 type EntrypointCommand struct {
 	BaseCommand
 	cmd *instructions.EntrypointCommand
 }
 
 // ExecuteCommand handles command processing similar to CMD and RUN,
-func (e *EntrypointCommand) ExecuteCommand(config *v1.Config, buildArgs *dockerfile.BuildArgs) error {
+func (e *EntrypointCommand) ExecuteCommand(config *v1.Config, _ *dockerfile.BuildArgs) error {
 	var newCommand []string
 	if e.cmd.PrependShell {
 		// This is the default shell on Linux

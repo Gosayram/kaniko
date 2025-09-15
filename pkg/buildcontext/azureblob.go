@@ -14,6 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// Package buildcontext provides implementations for various build context sources
 package buildcontext
 
 import (
@@ -35,9 +36,9 @@ type AzureBlob struct {
 	context string
 }
 
-// Download context file from given azure blob storage url and unpack it to BuildContextDir
+// UnpackTarFromBuildContext downloads context file from Azure Blob Storage URL
+// and unpacks it to BuildContextDir.
 func (b *AzureBlob) UnpackTarFromBuildContext() (string, error) {
-
 	// Get Azure_STORAGE_ACCESS_KEY from environment variables
 	accountKey := os.Getenv("AZURE_STORAGE_ACCESS_KEY")
 	if accountKey == "" {

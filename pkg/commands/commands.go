@@ -26,8 +26,10 @@ import (
 	"github.com/Gosayram/kaniko/pkg/util"
 )
 
+// CurrentCacheKey is a function type that returns the current cache key
 type CurrentCacheKey func() (string, error)
 
+// DockerCommand is the interface that all Dockerfile command implementations must satisfy
 type DockerCommand interface {
 	// ExecuteCommand is responsible for:
 	// 	1. Making required changes to the filesystem (ex. copying files for ADD/COPY or setting ENV variables)
@@ -65,6 +67,7 @@ type DockerCommand interface {
 	IsArgsEnvsRequiredInCache() bool
 }
 
+// GetCommand creates the appropriate DockerCommand implementation based on the instruction type
 func GetCommand(cmd instructions.Command, fileContext util.FileContext, useNewRun bool, cacheCopy bool, cacheRun bool) (DockerCommand, error) {
 	if command, err := createRunCommand(cmd, useNewRun, cacheRun); err == nil {
 		return command, nil

@@ -31,6 +31,8 @@ import (
 	"github.com/Gosayram/kaniko/pkg/util"
 )
 
+// WorkdirCommand represents the WORKDIR Dockerfile instruction
+// which sets the working directory for subsequent instructions
 type WorkdirCommand struct {
 	BaseCommand
 	cmd           *instructions.WorkdirCommand
@@ -40,6 +42,8 @@ type WorkdirCommand struct {
 // For testing
 var mkdirAllWithPermissions = util.MkdirAllWithPermissions
 
+// ExecuteCommand processes the WORKDIR instruction by setting the working directory
+// and creating the directory if it doesn't exist with appropriate permissions
 func (w *WorkdirCommand) ExecuteCommand(config *v1.Config, buildArgs *dockerfile.BuildArgs) error {
 	logrus.Info("Cmd: workdir")
 	workdirPath := w.cmd.Path
@@ -74,7 +78,8 @@ func (w *WorkdirCommand) ExecuteCommand(config *v1.Config, buildArgs *dockerfile
 
 		logrus.Infof("Creating directory %s with uid %d and gid %d", config.WorkingDir, uid, gid)
 		w.snapshotFiles = append(w.snapshotFiles, config.WorkingDir)
-		if err := mkdirAllWithPermissions(config.WorkingDir, 0o755, uid, gid); err != nil {
+		// 0o755 permissions provide read/write/execute for owner, read/execute for group and others (standard for directories)
+		if err := mkdirAllWithPermissions(config.WorkingDir, 0o755, uid, gid); err != nil { //nolint:mnd // 0o755 is standard directory permissions
 			return errors.Wrapf(err, "creating workdir %s", config.WorkingDir)
 		}
 	}
@@ -91,6 +96,8 @@ func (w *WorkdirCommand) String() string {
 	return w.cmd.String()
 }
 
+// MetadataOnly indicates whether this command only affects metadata without
+// modifying the filesystem contents
 func (w *WorkdirCommand) MetadataOnly() bool {
 	return false
 }

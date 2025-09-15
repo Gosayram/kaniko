@@ -114,7 +114,7 @@ func MakeTransport(opts *config.RegistryOptions, registryName string) (http.Roun
 
 	if clientCertificatePath := opts.RegistriesClientCertificates[registryName]; clientCertificatePath != "" {
 		certFiles := strings.Split(clientCertificatePath, ",")
-		if len(certFiles) != 2 {
+		if len(certFiles) != 2 { // expected format: cert_path,key_path
 			return nil, fmt.Errorf("failed to load client certificate/key '%s=%s', "+
 				"expected format: %s=/path/to/cert,/path/to/key",
 				registryName, clientCertificatePath, registryName)

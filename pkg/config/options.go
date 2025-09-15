@@ -104,6 +104,8 @@ type KanikoOptions struct {
 	OCIMode             string           // --oci-mode=[oci|auto]
 }
 
+// KanikoGitOptions represents Git-specific configuration options
+// for handling Git repositories as build contexts
 type KanikoGitOptions struct {
 	Branch            string
 	SingleBranch      bool
@@ -111,8 +113,10 @@ type KanikoGitOptions struct {
 	InsecureSkipTLS   bool
 }
 
+// ErrInvalidGitFlag is returned when Git flag format is invalid
 var ErrInvalidGitFlag = errors.New("invalid git flag, must be in the key=value format")
 
+// Type returns the string identifier for Git options type
 func (k *KanikoGitOptions) Type() string {
 	return "gitoptions"
 }
@@ -121,9 +125,13 @@ func (k *KanikoGitOptions) String() string {
 	return fmt.Sprintf("branch=%s,single-branch=%t,recurse-submodules=%t", k.Branch, k.SingleBranch, k.RecurseSubmodules)
 }
 
+// Set parses and applies Git configuration options from string format
 func (k *KanikoGitOptions) Set(s string) error {
-	var parts = strings.SplitN(s, "=", 2)
-	if len(parts) != 2 {
+	// splitLimit is the limit for strings.SplitN operations when parsing key=value pairs
+	const splitLimit = 2
+
+	var parts = strings.SplitN(s, "=", splitLimit)
+	if len(parts) != splitLimit {
 		return fmt.Errorf("%w: %s", ErrInvalidGitFlag, s)
 	}
 	switch parts[0] {
@@ -164,6 +172,7 @@ func (c *Compression) String() string {
 	return string(*c)
 }
 
+// Set validates and sets the compression algorithm from string value
 func (c *Compression) Set(v string) error {
 	switch v {
 	case "gzip", "zstd":
@@ -174,6 +183,7 @@ func (c *Compression) Set(v string) error {
 	}
 }
 
+// Type returns the string identifier for compression type
 func (c *Compression) Type() string {
 	return "compression"
 }
