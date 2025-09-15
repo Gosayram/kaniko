@@ -43,7 +43,6 @@ Kaniko demonstrates **excellent compliance** with OCI Image Format Specification
 3. **Driver Architecture**: Support for local, Kubernetes, and CI execution modes
 4. **Security First**: Maintain unprivileged operation without qemu/binfmt emulation
 5. **Registry Compatibility**: Enhanced support for all major registries (Docker Hub, GHCR, ECR, ACR, GCR, Quay)
-6. **Observability**: Add structured logging, metrics, and profiling capabilities
 
 ## Implementation Plan
 
@@ -106,13 +105,7 @@ CosignKeyPassword    string          // --cosign-key-password=secret
 - HTTP/2 → HTTP/1.1 fallback mechanisms
 - Enhanced retry logic with exponential backoff
 
-### Phase 4: Observability & Performance (9-12 months)
 
-**Metrics & Logging:**
-- Structured logging with `log/slog`
-- Prometheus metrics endpoint
-- pprof profiling support
-- Build timing and performance metrics
 
 **Cache Optimization:**
 - Per-architecture cache repositories
@@ -305,7 +298,6 @@ kaniko --oci-mode=docker \       # Docker compatibility mode
 2. **Gradual Rollout**: Implement drivers incrementally with feature flags
 3. **Comprehensive Testing**: Matrix testing across all supported platforms and registries
 4. **Documentation**: Clear migration guides and known limitations
-5. **Monitoring**: Enhanced observability for early issue detection
 
 ## Success Metrics
 
@@ -322,7 +314,7 @@ kaniko --oci-mode=docker \       # Docker compatibility mode
 1. **Q1**: Core multi-platform architecture and local driver
 2. **Q2**: Kubernetes driver implementation and testing
 3. **Q3**: CI driver and enhanced OCI support
-4. **Q4**: Observability features and performance optimization
+4. **Q4**: Performance optimization
 
 This plan ensures Kaniko remains the premier unprivileged container builder while adding comprehensive multi-architecture support for modern CI/CD and Kubernetes environments.
 
