@@ -26,11 +26,15 @@ import (
 	"github.com/Gosayram/kaniko/pkg/util"
 )
 
+// EnvCommand represents the ENV Dockerfile instruction
+// which sets environment variables in the container image
 type EnvCommand struct {
 	BaseCommand
 	cmd *instructions.EnvCommand
 }
 
+// ExecuteCommand processes the ENV instruction by setting environment variables
+// in the container configuration using build arguments replacement
 func (e *EnvCommand) ExecuteCommand(config *v1.Config, buildArgs *dockerfile.BuildArgs) error {
 	newEnvs := e.cmd.Env
 	replacementEnvs := buildArgs.ReplacementEnvs(config.Env)

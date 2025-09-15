@@ -14,11 +14,14 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// Package version provides legacy version information for Kaniko.
+// This package is maintained for backward compatibility.
 package version
 
 // Set with LDFLAGS
 var version = "unset"
 
+// Version returns the legacy version string set via LDFLAGS
 func Version() string {
 	return version
 }

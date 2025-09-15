@@ -14,7 +14,8 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// for use in tests
+// Package executor provides mock implementations and test utilities
+// for testing the Kaniko executor functionality
 package executor
 
 import (
@@ -46,6 +47,8 @@ func (f *fakeSnapShotter) TakeSnapshot(_ []string, _, _ bool) (string, error) {
 	return f.tarPath, nil
 }
 
+// MockDockerCommand is a mock implementation of DockerCommand interface
+// for use in unit tests of the executor package
 type MockDockerCommand struct {
 	command             string
 	contextFiles        []string
@@ -53,73 +56,117 @@ type MockDockerCommand struct {
 	argToCompositeCache bool
 }
 
+// ExecuteCommand is a mock implementation that always returns nil
 func (m MockDockerCommand) ExecuteCommand(c *v1.Config, args *dockerfile.BuildArgs) error { return nil }
+
+// String returns the command string representation for testing
 func (m MockDockerCommand) String() string {
 	return m.command
 }
+
+// FilesToSnapshot returns test file paths for snapshot testing
 func (m MockDockerCommand) FilesToSnapshot() []string {
 	return []string{"meow-snapshot-no-cache"}
 }
+
+// ProvidesFilesToSnapshot indicates that this mock provides files for snapshotting
 func (m MockDockerCommand) ProvidesFilesToSnapshot() bool {
 	return true
 }
+
+// CacheCommand returns the cached command implementation for testing
 func (m MockDockerCommand) CacheCommand(image v1.Image) commands.DockerCommand {
 	return m.cacheCommand
 }
+
+// FilesUsedFromContext returns mock context files for testing
 func (m MockDockerCommand) FilesUsedFromContext(c *v1.Config, args *dockerfile.BuildArgs) ([]string, error) {
 	return m.contextFiles, nil
 }
+
+// MetadataOnly indicates this mock command affects both metadata and filesystem
 func (m MockDockerCommand) MetadataOnly() bool {
 	return false
 }
+
+// RequiresUnpackedFS indicates this mock doesn't require unpacked filesystem
 func (m MockDockerCommand) RequiresUnpackedFS() bool {
 	return false
 }
+
+// ShouldCacheOutput indicates this mock command output should be cached
 func (m MockDockerCommand) ShouldCacheOutput() bool {
 	return true
 }
+
+// ShouldDetectDeletedFiles indicates this mock doesn't detect deleted files
 func (m MockDockerCommand) ShouldDetectDeletedFiles() bool {
 	return false
 }
+
+// IsArgsEnvsRequiredInCache indicates whether args/envs affect cache key for this mock
 func (m MockDockerCommand) IsArgsEnvsRequiredInCache() bool {
 	return m.argToCompositeCache
 }
 
+// MockCachedDockerCommand is a mock implementation for cached Docker commands
+// used in executor unit tests
 type MockCachedDockerCommand struct {
 	contextFiles        []string
 	argToCompositeCache bool
 }
 
+// ExecuteCommand is a mock implementation that always returns nil
 func (m MockCachedDockerCommand) ExecuteCommand(c *v1.Config, args *dockerfile.BuildArgs) error {
 	return nil
 }
+
+// String returns a fixed string representation for testing
 func (m MockCachedDockerCommand) String() string {
 	return "meow"
 }
+
+// FilesToSnapshot returns test file paths for snapshot testing
 func (m MockCachedDockerCommand) FilesToSnapshot() []string {
 	return []string{"meow-snapshot"}
 }
+
+// ProvidesFilesToSnapshot indicates that this mock provides files for snapshotting
 func (m MockCachedDockerCommand) ProvidesFilesToSnapshot() bool {
 	return true
 }
+
+// CacheCommand returns nil since this is already a cached command mock
 func (m MockCachedDockerCommand) CacheCommand(image v1.Image) commands.DockerCommand {
 	return nil
 }
+
+// ShouldDetectDeletedFiles indicates this mock doesn't detect deleted files
 func (m MockCachedDockerCommand) ShouldDetectDeletedFiles() bool {
 	return false
 }
+
+// FilesUsedFromContext returns mock context files for testing
 func (m MockCachedDockerCommand) FilesUsedFromContext(c *v1.Config, args *dockerfile.BuildArgs) ([]string, error) {
 	return m.contextFiles, nil
 }
+
+// MetadataOnly indicates this mock command affects both metadata and filesystem
 func (m MockCachedDockerCommand) MetadataOnly() bool {
 	return false
 }
+
+// RequiresUnpackedFS indicates this mock doesn't require unpacked filesystem
 func (m MockCachedDockerCommand) RequiresUnpackedFS() bool {
 	return false
 }
+
+// ShouldCacheOutput indicates this mock command output should not be cached
 func (m MockCachedDockerCommand) ShouldCacheOutput() bool {
 	return false
 }
+
+// IsArgsEnvsRequiredInCache indicates whether args/envs affect cache key for this mock
 func (m MockCachedDockerCommand) IsArgsEnvsRequiredInCache() bool {
 	return m.argToCompositeCache
 }

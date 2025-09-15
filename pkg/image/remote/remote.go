@@ -14,6 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// Package remote provides functionality for retrieving remote container images.
 package remote
 
 import (
@@ -58,9 +59,9 @@ func RetrieveRemoteImage(image string, opts *config.RegistryOptions, customPlatf
 
 			insecurePull := opts.InsecurePull || opts.InsecureRegistries.Contains(regToMapTo)
 
-			remappedRepository, err := remapRepository(ref.Context(), regToMapTo, repositoryPrefix, insecurePull)
+			remappedRepository, remapErr := remapRepository(ref.Context(), regToMapTo, repositoryPrefix, insecurePull)
 			if err != nil {
-				return nil, err
+				return nil, remapErr
 			}
 
 			remappedRef := setNewRepository(ref, remappedRepository)
@@ -71,8 +72,11 @@ func RetrieveRemoteImage(image string, opts *config.RegistryOptions, customPlatf
 			}
 
 			var remoteImage v1.Image
-			if remoteImage, err = util.RetryWithResult(retryFunc, opts.ImageDownloadRetry, 1000); err != nil {
-				logrus.Warnf("Failed to retrieve image %s from remapped registry %s: %s. Will try with the next registry, or fallback to the original registry.", remappedRef, regToMapTo, err)
+			const retryDelayMs = 1000 //nolint:mnd // 1000ms is a reasonable default retry delay
+			if remoteImage, err = util.RetryWithResult(retryFunc, opts.ImageDownloadRetry, retryDelayMs); err != nil {
+				logrus.Warnf("Failed to retrieve image %s from remapped registry %s: %s. "+
+					"Will try with the next registry, or fallback to the original registry.",
+					remappedRef, regToMapTo, err)
 				continue
 			}
 
@@ -88,9 +92,9 @@ func RetrieveRemoteImage(image string, opts *config.RegistryOptions, customPlatf
 
 	registryName := ref.Context().RegistryStr()
 	if opts.InsecurePull || opts.InsecureRegistries.Contains(registryName) {
-		newReg, err := name.NewRegistry(registryName, name.WeakValidation, name.Insecure)
+		newReg, regErr := name.NewRegistry(registryName, name.WeakValidation, name.Insecure)
 		if err != nil {
-			return nil, err
+			return nil, regErr
 		}
 		ref = setNewRegistry(ref, newReg)
 	}
@@ -102,7 +106,8 @@ func RetrieveRemoteImage(image string, opts *config.RegistryOptions, customPlatf
 	}
 
 	var remoteImage v1.Image
-	if remoteImage, err = util.RetryWithResult(retryFunc, opts.ImageDownloadRetry, 1000); remoteImage != nil {
+	const retryDelayMs = 1000 //nolint:mnd // 1000ms is a reasonable default retry delay
+	if remoteImage, err = util.RetryWithResult(retryFunc, opts.ImageDownloadRetry, retryDelayMs); remoteImage != nil {
 		manifestCache[image] = remoteImage
 	}
 
@@ -110,12 +115,14 @@ func RetrieveRemoteImage(image string, opts *config.RegistryOptions, customPlatf
 }
 
 // remapRepository adds the {repositoryPrefix}/ to the original repo, and normalizes with an additional library/ if necessary
-func remapRepository(repo name.Repository, regToMapTo, repositoryPrefix string, insecurePull bool) (name.Repository, error) {
+func remapRepository(repo name.Repository, regToMapTo, repositoryPrefix string,
+	insecurePull bool) (name.Repository, error) {
 	if insecurePull {
-		return name.NewRepository(repositoryPrefix+repo.RepositoryStr(), name.WithDefaultRegistry(regToMapTo), name.WeakValidation, name.Insecure)
-	} else {
-		return name.NewRepository(repositoryPrefix+repo.RepositoryStr(), name.WithDefaultRegistry(regToMapTo), name.WeakValidation)
+		return name.NewRepository(repositoryPrefix+repo.RepositoryStr(),
+			name.WithDefaultRegistry(regToMapTo), name.WeakValidation, name.Insecure)
 	}
+	return name.NewRepository(repositoryPrefix+repo.RepositoryStr(),
+		name.WithDefaultRegistry(regToMapTo), name.WeakValidation)
 }
 
 func setNewRepository(ref name.Reference, newRepo name.Repository) name.Reference {
@@ -134,10 +141,10 @@ func setNewRepository(ref name.Reference, newRepo name.Repository) name.Referenc
 func setNewRegistry(ref name.Reference, newReg name.Registry) name.Reference {
 	switch r := ref.(type) {
 	case name.Tag:
-		r.Repository.Registry = newReg
+		r.Registry = newReg
 		return r
 	case name.Digest:
-		r.Repository.Registry = newReg
+		r.Registry = newReg
 		return r
 	default:
 		return ref
@@ -159,7 +166,11 @@ func remoteOptions(registryName string, opts *config.RegistryOptions, customPlat
 		logrus.Fatalf("Invalid platform %q: %v", customPlatform, err)
 	}
 
-	return []remote.Option{remote.WithTransport(tr), remote.WithAuthFromKeychain(creds.GetKeychain()), remote.WithPlatform(*platform)}
+	return []remote.Option{
+		remote.WithTransport(tr),
+		remote.WithAuthFromKeychain(creds.GetKeychain()),
+		remote.WithPlatform(*platform),
+	}
 }
 
 // Parse the registry mapping

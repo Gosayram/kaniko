@@ -14,6 +14,8 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// Package snapshot provides layered map functionality for tracking file changes
+// across container image layers with efficient hashing and caching mechanisms
 package snapshot
 
 import (
@@ -25,6 +27,8 @@ import (
 	"github.com/Gosayram/kaniko/pkg/util"
 )
 
+// LayeredMap tracks file additions and deletions across container image layers
+// with efficient caching and hash-based change detection
 type LayeredMap struct {
 	adds    []map[string]string   // All layers with added files.
 	deletes []map[string]struct{} // All layers with deleted files.
@@ -49,7 +53,6 @@ func NewLayeredMap(h func(string) (string, error)) *LayeredMap {
 
 // Snapshot creates a new layer.
 func (l *LayeredMap) Snapshot() {
-
 	// Save current state of image
 	l.updateCurrentImage()
 
@@ -60,7 +63,6 @@ func (l *LayeredMap) Snapshot() {
 
 // Key returns a hash for added and delted files.
 func (l *LayeredMap) Key() (string, error) {
-
 	var adds map[string]string
 	var deletes map[string]struct{}
 
@@ -162,7 +164,7 @@ func (l *LayeredMap) Add(s string) error {
 	}(s)
 
 	if err != nil {
-		return fmt.Errorf("Error creating hash for %s: %w", s, err)
+		return fmt.Errorf("error creating hash for %s: %w", s, err)
 	}
 
 	l.adds[len(l.adds)-1][s] = newV

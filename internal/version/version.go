@@ -1,3 +1,5 @@
+// Package version provides version information and utilities for Kaniko.
+// Version variables are injected at build time via ldflags.
 package version
 
 import (

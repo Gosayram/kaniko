@@ -37,6 +37,7 @@ var (
 	getUserGroup = util.GetUserGroup
 )
 
+// CopyCommand implements the COPY Dockerfile instruction.
 type CopyCommand struct {
 	BaseCommand
 	cmd           *instructions.CopyCommand
@@ -45,6 +46,7 @@ type CopyCommand struct {
 	shdCache      bool
 }
 
+// ExecuteCommand executes the COPY command by copying files from source to destination.
 func (c *CopyCommand) ExecuteCommand(config *v1.Config, buildArgs *dockerfile.BuildArgs) error {
 	// Resolve from
 	if c.cmd.From != "" {
@@ -136,7 +138,8 @@ func (c *CopyCommand) copySingleSource(src, dest string, config *v1.Config, uid,
 }
 
 // copyFileOrDir copies a file or directory based on the file info
-func (c *CopyCommand) copyFileOrDir(fullPath, destPath string, fi os.FileInfo, uid, gid int64, chmod os.FileMode, useDefaultChmod bool) error {
+func (c *CopyCommand) copyFileOrDir(fullPath, destPath string, fi os.FileInfo,
+	uid, gid int64, chmod os.FileMode, useDefaultChmod bool) error {
 	switch {
 	case fi.IsDir():
 		return c.copyDirectory(fullPath, destPath, uid, gid, chmod, useDefaultChmod)
@@ -148,7 +151,8 @@ func (c *CopyCommand) copyFileOrDir(fullPath, destPath string, fi os.FileInfo, u
 }
 
 // copyDirectory copies a directory
-func (c *CopyCommand) copyDirectory(fullPath, destPath string, uid, gid int64, chmod os.FileMode, useDefaultChmod bool) error {
+func (c *CopyCommand) copyDirectory(fullPath, destPath string, uid, gid int64,
+	chmod os.FileMode, useDefaultChmod bool) error {
 	copiedFiles, err := util.CopyDir(fullPath, destPath, c.fileContext, uid, gid, chmod, useDefaultChmod)
 	if err != nil {
 		return errors.Wrap(err, "copying dir")
@@ -172,7 +176,8 @@ func (c *CopyCommand) copySymlink(fullPath, destPath string) error {
 }
 
 // copyRegularFile copies a regular file
-func (c *CopyCommand) copyRegularFile(fullPath, destPath string, uid, gid int64, chmod os.FileMode, useDefaultChmod bool) error {
+func (c *CopyCommand) copyRegularFile(fullPath, destPath string, uid, gid int64,
+	chmod os.FileMode, useDefaultChmod bool) error {
 	// ... Else, we want to copy over a file
 	exclude, err := util.CopyFile(fullPath, destPath, c.fileContext, uid, gid, chmod, useDefaultChmod)
 	if err != nil {
@@ -195,22 +200,27 @@ func (c *CopyCommand) String() string {
 	return c.cmd.String()
 }
 
+// FilesUsedFromContext returns the list of files used from the build context.
 func (c *CopyCommand) FilesUsedFromContext(config *v1.Config, buildArgs *dockerfile.BuildArgs) ([]string, error) {
 	return copyCmdFilesUsedFromContext(config, buildArgs, c.cmd, c.fileContext)
 }
 
+// MetadataOnly returns false as COPY command modifies the filesystem.
 func (c *CopyCommand) MetadataOnly() bool {
 	return false
 }
 
+// RequiresUnpackedFS returns true as COPY command requires an unpacked filesystem.
 func (c *CopyCommand) RequiresUnpackedFS() bool {
 	return true
 }
 
+// From returns the base image name for multi-stage builds.
 func (c *CopyCommand) From() string {
 	return c.cmd.From
 }
 
+// ShouldCacheOutput returns whether the command output should be cached.
 func (c *CopyCommand) ShouldCacheOutput() bool {
 	return c.shdCache
 }
@@ -225,6 +235,7 @@ func (c *CopyCommand) CacheCommand(img v1.Image) DockerCommand {
 	}
 }
 
+// CachingCopyCommand implements caching for COPY commands.
 type CachingCopyCommand struct {
 	BaseCommand
 	caching
@@ -235,6 +246,7 @@ type CachingCopyCommand struct {
 	extractFn      util.ExtractFunction
 }
 
+// ExecuteCommand executes the cached COPY command by extracting files from cached layers.
 func (cr *CachingCopyCommand) ExecuteCommand(config *v1.Config, buildArgs *dockerfile.BuildArgs) error {
 	logrus.Infof("Found cached layer, extracting to filesystem")
 	var err error
@@ -253,7 +265,8 @@ func (cr *CachingCopyCommand) ExecuteCommand(config *v1.Config, buildArgs *docke
 	}
 
 	cr.layer = layers[0]
-	cr.extractedFiles, err = util.GetFSFromLayers(kConfig.RootDir, layers, util.ExtractFunc(cr.extractFn), util.IncludeWhiteout())
+	cr.extractedFiles, err = util.GetFSFromLayers(kConfig.RootDir, layers,
+		util.ExtractFunc(cr.extractFn), util.IncludeWhiteout())
 
 	logrus.Debugf("ExtractedFiles: %s", cr.extractedFiles)
 	if err != nil {
@@ -263,10 +276,12 @@ func (cr *CachingCopyCommand) ExecuteCommand(config *v1.Config, buildArgs *docke
 	return nil
 }
 
+// FilesUsedFromContext returns the list of files used from the build context.
 func (cr *CachingCopyCommand) FilesUsedFromContext(config *v1.Config, buildArgs *dockerfile.BuildArgs) ([]string, error) {
 	return copyCmdFilesUsedFromContext(config, buildArgs, cr.cmd, cr.fileContext)
 }
 
+// FilesToSnapshot returns the list of files extracted from cached layers.
 func (cr *CachingCopyCommand) FilesToSnapshot() []string {
 	f := cr.extractedFiles
 	logrus.Debugf("%d files extracted by caching copy command", len(f))
@@ -275,6 +290,7 @@ func (cr *CachingCopyCommand) FilesToSnapshot() []string {
 	return f
 }
 
+// MetadataOnly returns false as caching COPY command modifies the filesystem.
 func (cr *CachingCopyCommand) MetadataOnly() bool {
 	return false
 }
@@ -286,6 +302,7 @@ func (cr *CachingCopyCommand) String() string {
 	return cr.cmd.String()
 }
 
+// From returns the base image name for multi-stage builds.
 func (cr *CachingCopyCommand) From() string {
 	return cr.cmd.From
 }

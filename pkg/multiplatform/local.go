@@ -46,16 +46,19 @@ func (d *LocalDriver) ValidatePlatforms(platforms []string) error {
 	for _, platform := range platforms {
 		if platform != currentPlatform {
 			if d.opts.RequireNativeNodes {
-				return fmt.Errorf("platform %s is not native to this host (%s). Use --require-native-nodes=false to allow emulation", platform, currentPlatform)
+				return fmt.Errorf("platform %s is not native to this host (%s). "+
+					"Use --require-native-nodes=false to allow emulation",
+					platform, currentPlatform)
 			}
-			logrus.Warnf("Platform %s is not native to this host (%s). Build may fail or require emulation", platform, currentPlatform)
+			logrus.Warnf("Platform %s is not native to this host (%s). "+
+				"Build may fail or require emulation", platform, currentPlatform)
 		}
 	}
 	return nil
 }
 
 // ExecuteBuilds performs builds for the specified platforms on the local host
-func (d *LocalDriver) ExecuteBuilds(ctx context.Context, platforms []string) (map[string]string, error) {
+func (d *LocalDriver) ExecuteBuilds(_ context.Context, platforms []string) (map[string]string, error) {
 	digests := make(map[string]string)
 	currentPlatform := fmt.Sprintf("%s/%s", runtime.GOOS, runtime.GOARCH)
 
@@ -105,7 +108,8 @@ func executeBuild(opts *config.KanikoOptions) (v1.Image, error) {
 // isPlatformNative checks if the platform matches the current host
 func isPlatformNative(platform string) bool {
 	parts := strings.Split(platform, "/")
-	if len(parts) != 2 {
+	const expectedParts = 2 //nolint:mnd // platform format should be "os/arch"
+	if len(parts) != expectedParts {
 		return false
 	}
 	return parts[0] == runtime.GOOS && parts[1] == runtime.GOARCH

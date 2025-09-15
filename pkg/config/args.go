@@ -14,6 +14,8 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// Package config provides types and utilities for handling command-line arguments
+// and configuration parsing in Kaniko.
 package config
 
 import (
@@ -22,6 +24,9 @@ import (
 
 	"github.com/sirupsen/logrus"
 )
+
+// splitLimit is the limit for strings.SplitN operations when parsing key=value pairs
+const splitLimit = 2
 
 // This type is used to supported passing in multiple flags
 type multiArg []string
@@ -70,8 +75,8 @@ func (a *keyValueArg) String() string {
 
 // The second method is Set(value string) error
 func (a *keyValueArg) Set(value string) error {
-	valueSplit := strings.SplitN(value, "=", 2)
-	if len(valueSplit) < 2 {
+	valueSplit := strings.SplitN(value, "=", splitLimit)
+	if len(valueSplit) < splitLimit {
 		return fmt.Errorf("invalid argument value. expect key=value, got %s", value)
 	}
 	(*a)[valueSplit[0]] = valueSplit[1]
@@ -86,8 +91,8 @@ func (a *keyValueArg) Type() string {
 type multiKeyMultiValueArg map[string][]string
 
 func (c *multiKeyMultiValueArg) parseKV(value string) error {
-	valueSplit := strings.SplitN(value, "=", 2)
-	if len(valueSplit) < 2 {
+	valueSplit := strings.SplitN(value, "=", splitLimit)
+	if len(valueSplit) < splitLimit {
 		return fmt.Errorf("invalid argument value. expect key=value, got %s", value)
 	}
 	(*c)[valueSplit[0]] = append((*c)[valueSplit[0]], valueSplit[1])
@@ -102,7 +107,6 @@ func (c *multiKeyMultiValueArg) String() string {
 		}
 	}
 	return strings.Join(result, ";")
-
 }
 
 func (c *multiKeyMultiValueArg) Set(value string) error {
@@ -148,16 +152,16 @@ func (a *multiKeyValueArg) Set(value string) error {
 	if strings.Contains(value, ",") {
 		kvpairs := strings.Split(value, ",")
 		for _, kv := range kvpairs {
-			valueSplit := strings.SplitN(kv, "=", 2)
-			if len(valueSplit) < 2 {
+			valueSplit := strings.SplitN(kv, "=", splitLimit)
+			if len(valueSplit) < splitLimit {
 				return fmt.Errorf("invalid argument value. expect key=value, got %s", kv)
 			}
 			(*a)[valueSplit[0]] = valueSplit[1]
 		}
 		return nil
 	}
-	valueSplit := strings.SplitN(value, "=", 2)
-	if len(valueSplit) < 2 {
+	valueSplit := strings.SplitN(value, "=", splitLimit)
+	if len(valueSplit) < splitLimit {
 		return fmt.Errorf("invalid argument value. expect key=value, got %s", value)
 	}
 	(*a)[valueSplit[0]] = valueSplit[1]

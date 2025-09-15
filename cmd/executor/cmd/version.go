@@ -31,7 +31,7 @@ func init() {
 var versionCmd = &cobra.Command{
 	Use:   "version",
 	Short: "Print the version number of kaniko",
-	Run: func(cmd *cobra.Command, args []string) {
+	Run: func(_ *cobra.Command, _ []string) {
 		fmt.Printf("Kaniko version: %s\n", version.Version)
 		fmt.Printf("Commit: %s\n", version.Commit)
 		fmt.Printf("Build date: %s\n", version.Date)

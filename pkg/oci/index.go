@@ -14,7 +14,8 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// Package oci provides functionality for building, manipulating, and pushing OCI image indices and Docker manifest lists in Kaniko.
+// Package oci provides functionality for building, manipulating, and pushing
+// OCI image indices and Docker manifest lists in Kaniko.
 package oci
 
 import (
@@ -141,8 +142,9 @@ func (s *simpleIndex) Size() (int64, error) {
 }
 
 func (s *simpleIndex) IndexManifest() (*v1.IndexManifest, error) {
+	const schemaVersion = 2 //nolint:mnd // OCI index schema version is 2
 	manifest := &v1.IndexManifest{
-		SchemaVersion: 2,
+		SchemaVersion: schemaVersion,
 		MediaType:     s.mediaType,
 		Manifests:     s.manifests,
 		Annotations:   s.annotations,
@@ -167,7 +169,7 @@ func (s *simpleIndex) ImageIndex(v1.Hash) (v1.ImageIndex, error) {
 }
 
 // createManifestDescriptor creates a descriptor for a manifest digest
-func createManifestDescriptor(digestStr string, platform *v1.Platform, opts *config.KanikoOptions) (v1.Descriptor, error) {
+func createManifestDescriptor(digestStr string, platform *v1.Platform, _ *config.KanikoOptions) (v1.Descriptor, error) {
 	digest, err := v1.NewHash(digestStr)
 	if err != nil {
 		return v1.Descriptor{}, errors.Wrapf(err, "invalid digest: %s", digestStr)
@@ -185,7 +187,8 @@ func createManifestDescriptor(digestStr string, platform *v1.Platform, opts *con
 // parsePlatform parses a platform string into v1.Platform
 func parsePlatform(platformStr string) (*v1.Platform, error) {
 	parts := strings.Split(platformStr, "/")
-	if len(parts) != 2 {
+	const expectedParts = 2 //nolint:mnd // platform format should be "os/arch"
+	if len(parts) != expectedParts {
 		return nil, fmt.Errorf("invalid platform format: %s (expected os/arch)", platformStr)
 	}
 
