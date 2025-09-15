@@ -252,7 +252,7 @@ type CachingCopyCommand struct {
 }
 
 // ExecuteCommand executes the cached COPY command by extracting files from cached layers.
-func (cr *CachingCopyCommand) ExecuteCommand(_ *v1.Config, buildArgs *dockerfile.BuildArgs) error {
+func (cr *CachingCopyCommand) ExecuteCommand(_ *v1.Config, _ *dockerfile.BuildArgs) error {
 	logrus.Infof("Found cached layer, extracting to filesystem")
 	var err error
 

@@ -25,8 +25,10 @@ const (
 	// MountInfoPath is the path to the mount information file in proc filesystem
 	MountInfoPath = "/proc/self/mountinfo"
 
+	// DefaultKanikoPath is the default path where Kaniko stores its working files
 	DefaultKanikoPath = "/kaniko"
 
+	// Author is the default author name used in image metadata
 	Author = "kaniko"
 
 	// ContextTar is the default name of the tar uploaded to GCS buckets
@@ -34,32 +36,43 @@ const (
 
 	// SnapshotModeTime is the time-based snapshot mode for filesystem tracking
 	SnapshotModeTime = "time"
+	// SnapshotModeFull is the full filesystem snapshot mode
 	SnapshotModeFull = "full"
+	// SnapshotModeRedo is the redo-based snapshot mode for filesystem tracking
 	SnapshotModeRedo = "redo"
 
 	// NoBaseImage is the scratch image
 	NoBaseImage = "scratch"
 
-	GCSBuildContextPrefix      = "gs://"
-	S3BuildContextPrefix       = "s3://"
+	// GCSBuildContextPrefix is the prefix for Google Cloud Storage build contexts
+	GCSBuildContextPrefix = "gs://"
+	// S3BuildContextPrefix is the prefix for Amazon S3 build contexts
+	S3BuildContextPrefix = "s3://"
+	// LocalDirBuildContextPrefix is the prefix for local directory build contexts
 	LocalDirBuildContextPrefix = "dir://"
-	GitBuildContextPrefix      = "git://"
-	HTTPSBuildContextPrefix    = "https://"
+	// GitBuildContextPrefix is the prefix for Git repository build contexts
+	GitBuildContextPrefix = "git://"
+	// HTTPSBuildContextPrefix is the prefix for HTTPS build contexts
+	HTTPSBuildContextPrefix = "https://"
 
+	// HOME is the environment variable name for the home directory
 	HOME = "HOME"
 	// DefaultHOMEValue is the default value Docker sets for $HOME
 	DefaultHOMEValue = "/root"
-	RootUser         = "root"
+	// RootUser is the default root user name
+	RootUser = "root"
 
 	// Cmd represents the CMD Dockerfile instruction name
-	Cmd        = "CMD"
+	Cmd = "CMD"
+	// Entrypoint represents the ENTRYPOINT Dockerfile instruction name
 	Entrypoint = "ENTRYPOINT"
 
 	// Dockerignore is the name of the .dockerignore file used for file exclusion
 	Dockerignore = ".dockerignore"
 
 	// S3EndpointEnv is the environment variable name for S3 custom endpoint configuration
-	S3EndpointEnv    = "S3_ENDPOINT"
+	S3EndpointEnv = "S3_ENDPOINT"
+	// S3ForcePathStyle is the environment variable name for S3 force path style configuration
 	S3ForcePathStyle = "S3_FORCE_PATH_STYLE"
 )
 

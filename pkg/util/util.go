@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package util
+package util //nolint:revive // package name 'util' is intentionally generic
 
 import (
 	"crypto/md5" //nolint:gosec // MD5 used for non-cryptographic purposes (file change detection)

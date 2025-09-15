@@ -68,7 +68,8 @@ type DockerCommand interface {
 }
 
 // GetCommand creates the appropriate DockerCommand implementation based on the instruction type
-func GetCommand(cmd instructions.Command, fileContext util.FileContext, useNewRun bool, cacheCopy bool, cacheRun bool) (DockerCommand, error) {
+func GetCommand(cmd instructions.Command, fileContext util.FileContext,
+	useNewRun, cacheCopy, cacheRun bool) (DockerCommand, error) {
 	if command, err := createRunCommand(cmd, useNewRun, cacheRun); err == nil {
 		return command, nil
 	}

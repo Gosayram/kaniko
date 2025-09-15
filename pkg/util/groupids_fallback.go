@@ -94,7 +94,9 @@ func localGroups(r io.Reader) []*group {
 		}
 
 		// wheel:*:0:root,anotherGrp
-		parts := strings.SplitN(string(line), ":", 4) // group file format: name:password:gid:members
+		const groupFileParts = 4 // group file format: name:password:gid:members
+
+		parts := strings.SplitN(string(line), ":", groupFileParts)
 		if _, err := strconv.Atoi(parts[2]); err != nil {
 			continue
 		}

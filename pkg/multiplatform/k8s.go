@@ -26,6 +26,8 @@ import (
 	"github.com/Gosayram/kaniko/pkg/config"
 )
 
+const expectedPlatformParts = 2 // platform format should be "os/arch"
+
 // KubernetesDriver implements the Driver interface for Kubernetes-based multi-platform builds
 // This is a placeholder implementation that will be expanded when Kubernetes client dependencies are available
 type KubernetesDriver struct {
@@ -48,7 +50,7 @@ func (d *KubernetesDriver) ValidatePlatforms(platforms []string) error {
 
 	for _, platform := range platforms {
 		parts := strings.Split(platform, "/")
-		if len(parts) != 2 { // platform format should be "os/arch"
+		if len(parts) != expectedPlatformParts { // platform format should be "os/arch"
 			return fmt.Errorf("invalid platform format: %s", platform)
 		}
 		// Basic validation - ensure platform format is correct

@@ -62,7 +62,8 @@ const (
 	// UpstreamClientUaKey is the environment variable key for upstream client type
 	// used to set User-Agent header in HTTP requests
 	UpstreamClientUaKey = "UPSTREAM_CLIENT_TYPE"
-	DummyDestination    = "docker.io/unset-repo/unset-image-name"
+	// DummyDestination is a placeholder destination used when no push destinations are specified
+	DummyDestination = "docker.io/unset-repo/unset-image-name"
 )
 
 // File permission constants
@@ -131,9 +132,9 @@ func CheckPushPermissions(opts *config.KanikoOptions) error {
 
 		registryName := destRef.Registry.Name()
 		if opts.Insecure || opts.InsecureRegistries.Contains(registryName) {
-			newReg, err := name.NewRegistry(registryName, name.WeakValidation, name.Insecure)
-			if err != nil {
-				return errors.Wrap(err, "getting new insecure registry")
+			newReg, regErr := name.NewRegistry(registryName, name.WeakValidation, name.Insecure)
+			if regErr != nil {
+				return errors.Wrap(regErr, "getting new insecure registry")
 			}
 			destRef.Registry = newReg
 		}
@@ -142,8 +143,8 @@ func CheckPushPermissions(opts *config.KanikoOptions) error {
 			return errors.Wrapf(err, "making transport for registry %q", registryName)
 		}
 		tr := newRetry(rt)
-		if err := checkRemotePushPermission(destRef, creds.GetKeychain(), tr); err != nil {
-			return errors.Wrapf(err, "checking push permission for %q", destRef)
+		if pushErr := checkRemotePushPermission(destRef, creds.GetKeychain(), tr); pushErr != nil {
+			return errors.Wrapf(pushErr, "checking push permission for %q", destRef)
 		}
 		checked[destRef.Context().String()] = true
 	}
@@ -161,7 +162,7 @@ func getDigest(image v1.Image) ([]byte, error) {
 func writeDigestFile(path string, digestByteArray []byte) error {
 	if strings.HasPrefix(path, "https://") {
 		// Do a HTTP PUT to the URL; this could be a pre-signed URL to S3 or GCS or Azure
-		req, err := http.NewRequest("PUT", path, bytes.NewReader(digestByteArray)) //nolint:noctx // context not needed for simple HTTP PUT
+		req, err := http.NewRequest("PUT", path, bytes.NewReader(digestByteArray)) //nolint:noctx // no ctx for HTTP PUT
 		if err != nil {
 			return err
 		}

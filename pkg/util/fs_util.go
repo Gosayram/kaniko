@@ -450,23 +450,22 @@ func extractHardLink(dest, path string, hdr *tar.Header) error {
 	}
 
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, DefaultDirPerm); err != nil {
-		return err
+	if mkdirErr := os.MkdirAll(dir, DefaultDirPerm); mkdirErr != nil {
+		return mkdirErr
 	}
 
-	if err = removeExistingPath(path); err != nil {
-		return errors.Wrapf(err, "error removing %s to make way for new link", hdr.Name)
+	if removeErr := removeExistingPath(path); removeErr != nil {
+		return errors.Wrapf(removeErr, "error removing %s to make way for new link", hdr.Name)
 	}
 
 	// Validate linkname to prevent directory traversal before joining paths
 	if strings.Contains(hdr.Linkname, "..") || strings.HasPrefix(hdr.Linkname, "/") {
 		return fmt.Errorf("invalid linkname: potential directory traversal detected")
 	}
-	// Validate linkname first to prevent directory traversal before constructing the full path
-	if strings.Contains(hdr.Linkname, "..") || strings.HasPrefix(hdr.Linkname, "/") {
-		return fmt.Errorf("invalid linkname: potential directory traversal detected")
-	}
-	link := filepath.Clean(filepath.Join(dest, hdr.Linkname))
+
+	// Construct the link path safely
+	link := filepath.Join(dest, filepath.Clean("/"+hdr.Linkname))
+	link = filepath.Clean(link)
 
 	// Additional security check: ensure the link destination is within the destination directory
 	absDest, err := filepath.Abs(dest)

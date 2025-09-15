@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package util
+package util //nolint:revive // package name 'util' is intentionally generic
 
 import (
 	"crypto/tls"
@@ -114,7 +114,9 @@ func MakeTransport(opts *config.RegistryOptions, registryName string) (http.Roun
 
 	if clientCertificatePath := opts.RegistriesClientCertificates[registryName]; clientCertificatePath != "" {
 		certFiles := strings.Split(clientCertificatePath, ",")
-		if len(certFiles) != 2 { // expected format: cert_path,key_path
+		const expectedCertFilesCount = 2 // expected format: cert_path,key_path
+
+		if len(certFiles) != expectedCertFilesCount {
 			return nil, fmt.Errorf("failed to load client certificate/key '%s=%s', "+
 				"expected format: %s=/path/to/cert,/path/to/key",
 				registryName, clientCertificatePath, registryName)

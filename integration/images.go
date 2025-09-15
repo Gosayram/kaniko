@@ -184,7 +184,6 @@ func FindDockerFiles(dir, dockerfilesPattern string) ([]string, error) {
 		// Remove the leading directory from the path
 		dockerfile = dockerfile[len("dockerfiles/"):]
 		dockerfiles = append(dockerfiles, dockerfile)
-
 	}
 	return dockerfiles, err
 }
@@ -477,7 +476,9 @@ func (d *DockerFileBuilder) buildCachedImage(config *integrationTestConfig, cach
 
 // buildRelativePathsImage builds the images for testing
 // passing relatives paths to Kaniko
-func (d *DockerFileBuilder) buildRelativePathsImage(imageRepo, dockerfile, serviceAccount, buildContextPath string) error {
+func (d *DockerFileBuilder) buildRelativePathsImage(
+	imageRepo, dockerfile, serviceAccount, buildContextPath string,
+) error {
 	_, ex, _, _ := runtime.Caller(0)
 	cwd := filepath.Dir(ex)
 

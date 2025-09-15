@@ -91,7 +91,7 @@ func getTarFromBucket(bucketName, filepathInBucket, directory string) (string, e
 	defer reader.Close()
 	tarPath := filepath.Join(directory, constants.ContextTar)
 	// 0o600 permissions provide read/write access for owner only (standard for sensitive files)
-	if err := util.CreateFile(tarPath, reader, 0o600, 0, 0); err != nil { //nolint:mnd // 0o600 is standard file permissions
+	if err := util.CreateFile(tarPath, reader, 0o600, 0, 0); err != nil { //nolint:mnd // standard file permissions
 		return "", err
 	}
 	logrus.Debugf("Copied tarball %s from GCS bucket %s to %s", constants.ContextTar, bucketName, tarPath)

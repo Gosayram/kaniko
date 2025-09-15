@@ -112,8 +112,8 @@ func newStageBuilder(
 		return nil, err
 	}
 
-	if err := resolveOnBuild(stage, &imageConfig.Config, stageNameToIdx); err != nil {
-		return nil, err
+	if resolveErr := resolveOnBuild(stage, &imageConfig.Config, stageNameToIdx); resolveErr != nil {
+		return nil, resolveErr
 	}
 
 	err = util.InitIgnoreList()
@@ -846,8 +846,8 @@ func initBuildStages(opts *config.KanikoOptions) ([]config.KanikoStage, map[stri
 
 	stageNameToIdx := ResolveCrossStageInstructions(kanikoStages)
 
-	if err := fetchExtraStages(kanikoStages, opts); err != nil {
-		return nil, nil, util.FileContext{}, err
+	if fetchErr := fetchExtraStages(kanikoStages, opts); fetchErr != nil {
+		return nil, nil, util.FileContext{}, fetchErr
 	}
 
 	fileContext, err := util.NewFileContextFromDockerfile(opts.DockerfilePath, opts.SrcContext)

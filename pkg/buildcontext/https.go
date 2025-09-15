@@ -50,7 +50,7 @@ func (h *HTTPSTar) UnpackTarFromBuildContext() (directory string, err error) {
 	// Download tar file from remote https server
 	// and save it into the target tar file
 	client := &http.Client{
-		CheckRedirect: func(_ *http.Request, via []*http.Request) error {
+		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
 			return http.ErrUseLastResponse
 		},
 	}
@@ -74,7 +74,7 @@ func (h *HTTPSTar) UnpackTarFromBuildContext() (directory string, err error) {
 
 	logrus.Info("Retrieved https tar file")
 
-	if err = util.UnpackCompressedTar(tarPath, directory); err != nil {
+	if err := util.UnpackCompressedTar(tarPath, directory); err != nil {
 		return directory, err
 	}
 

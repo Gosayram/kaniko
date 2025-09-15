@@ -78,8 +78,9 @@ func (w *WorkdirCommand) ExecuteCommand(config *v1.Config, buildArgs *dockerfile
 
 		logrus.Infof("Creating directory %s with uid %d and gid %d", config.WorkingDir, uid, gid)
 		w.snapshotFiles = append(w.snapshotFiles, config.WorkingDir)
-		// 0o755 permissions provide read/write/execute for owner, read/execute for group and others (standard for directories)
-		if err := mkdirAllWithPermissions(config.WorkingDir, 0o755, uid, gid); err != nil { //nolint:mnd // 0o755 is standard directory permissions
+		// 0o755 permissions provide read/write/execute for owner,
+		// read/execute for group and others (standard for directories)
+		if err := mkdirAllWithPermissions(config.WorkingDir, 0o755, uid, gid); err != nil { //nolint:mnd // standard dir perms
 			return errors.Wrapf(err, "creating workdir %s", config.WorkingDir)
 		}
 	}

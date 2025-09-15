@@ -44,13 +44,14 @@ func (r *ArgCommand) ExecuteCommand(config *v1.Config, buildArgs *dockerfile.Bui
 }
 
 // ParseArg parses and resolves ARG key/value pairs with environment variable substitution
-func ParseArg(key string, val *string, env []string, ba *dockerfile.BuildArgs) (string, *string, error) {
+func ParseArg(key string, val *string, env []string,
+	ba *dockerfile.BuildArgs) (resolvedKey string, resolvedValue *string, err error) {
 	replacementEnvs := ba.ReplacementEnvs(env)
-	resolvedKey, err := util.ResolveEnvironmentReplacement(key, replacementEnvs, false)
+	resolvedKey, err = util.ResolveEnvironmentReplacement(key, replacementEnvs, false)
 	if err != nil {
 		return "", nil, err
 	}
-	var resolvedValue *string
+
 	if val != nil {
 		value, err := util.ResolveEnvironmentReplacement(*val, replacementEnvs, false)
 		if err != nil {

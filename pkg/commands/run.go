@@ -66,8 +66,8 @@ func runCommandInExec(config *v1.Config, buildArgs *dockerfile.BuildArgs, cmdRun
 		return err
 	}
 
-	if err := validateCommand(newCommand); err != nil {
-		return err
+	if validationErr := validateCommand(newCommand); validationErr != nil {
+		return validationErr
 	}
 
 	cmd, err := createExecCommand(config, buildArgs, newCommand)

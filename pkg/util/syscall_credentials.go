@@ -15,7 +15,7 @@ limitations under the License.
 */
 
 // Package util provides various utility functions for filesystem operations, system calls, and other common tasks.
-package util
+package util //nolint:revive // package name 'util' is intentionally generic
 
 import (
 	"fmt"
