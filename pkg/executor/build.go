@@ -46,6 +46,7 @@ import (
 	"github.com/Gosayram/kaniko/pkg/dockerfile"
 	image_util "github.com/Gosayram/kaniko/pkg/image"
 	"github.com/Gosayram/kaniko/pkg/image/remote"
+	"github.com/Gosayram/kaniko/pkg/multiplatform"
 	"github.com/Gosayram/kaniko/pkg/snapshot"
 	"github.com/Gosayram/kaniko/pkg/timing"
 	"github.com/Gosayram/kaniko/pkg/util"
@@ -1229,4 +1230,10 @@ func (s *stageBuilder) initSnapshotWithTimings() error {
 	}
 	timing.DefaultRun.Stop(t)
 	return nil
+}
+
+// InitMultiPlatformBuild initializes the multi-platform build functionality
+func InitMultiPlatformBuild() {
+	// Set the build function for multi-platform coordinator
+	multiplatform.SetBuildFunc(DoBuild)
 }

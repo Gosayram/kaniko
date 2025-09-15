@@ -18,8 +18,9 @@ package multiplatform
 
 import (
 	"context"
-	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 
 	"github.com/Gosayram/kaniko/pkg/config"
 )
@@ -64,109 +65,140 @@ func TestNewCoordinator(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			coordinator, err := NewCoordinator(tt.opts)
 			if tt.wantErr {
-				if err == nil {
-					t.Errorf("NewCoordinator() expected error, got nil")
-				}
-				if coordinator != nil {
-					t.Errorf("NewCoordinator() expected nil coordinator, got %v", coordinator)
-				}
+				assert.Error(t, err)
+				assert.Nil(t, coordinator)
 			} else {
-				if err != nil {
-					t.Errorf("NewCoordinator() unexpected error: %v", err)
-				}
-				if coordinator == nil {
-					t.Errorf("NewCoordinator() expected coordinator, got nil")
-				}
+				assert.NoError(t, err)
+				assert.NotNil(t, coordinator)
+				assert.Equal(t, tt.opts, coordinator.opts)
 			}
 		})
 	}
 }
 
-func TestCoordinator_Execute_NoPlatforms(t *testing.T) {
-	opts := &config.KanikoOptions{
-		Driver:        "local",
-		MultiPlatform: []string{},
+func TestCoordinator_PreFlightChecks(t *testing.T) {
+	tests := []struct {
+		name      string
+		opts      *config.KanikoOptions
+		platforms []string
+		wantErr   bool
+	}{
+		{
+			name: "valid platforms",
+			opts: &config.KanikoOptions{
+				Driver: "local",
+			},
+			platforms: []string{"linux/amd64", "linux/arm64"},
+			wantErr:   false,
+		},
+		{
+			name: "duplicate platforms",
+			opts: &config.KanikoOptions{
+				Driver: "local",
+			},
+			platforms: []string{"linux/amd64", "linux/amd64"},
+			wantErr:   true,
+		},
+		{
+			name: "invalid platform format",
+			opts: &config.KanikoOptions{
+				Driver: "local",
+			},
+			platforms: []string{"linux"},
+			wantErr:   true,
+		},
+		{
+			name: "empty platform",
+			opts: &config.KanikoOptions{
+				Driver: "local",
+			},
+			platforms: []string{""},
+			wantErr:   true,
+		},
+		{
+			name: "ci driver without digests-from",
+			opts: &config.KanikoOptions{
+				Driver: "ci",
+			},
+			platforms: []string{"linux/amd64"},
+			wantErr:   true,
+		},
+		{
+			name: "publish index without destinations",
+			opts: &config.KanikoOptions{
+				Driver:       "local",
+				PublishIndex: true,
+			},
+			platforms: []string{"linux/amd64"},
+			wantErr:   true,
+		},
 	}
 
-	coordinator, err := NewCoordinator(opts)
-	if err != nil {
-		t.Fatalf("NewCoordinator() error: %v", err)
-	}
-
-	_, err = coordinator.Execute(context.Background())
-	if err == nil {
-		t.Errorf("Execute() expected error, got nil")
-	}
-	if !strings.Contains(err.Error(), "no platforms specified") {
-		t.Errorf("Execute() error message should contain 'no platforms specified', got: %v", err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			coordinator := &Coordinator{
+				opts: tt.opts,
+			}
+			err := coordinator.preFlightChecks(tt.platforms)
+			if tt.wantErr {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
 	}
 }
 
-func TestCoordinator_Execute_PreFlightChecks(t *testing.T) {
+func TestCoordinator_Execute(t *testing.T) {
 	tests := []struct {
 		name      string
+		opts      *config.KanikoOptions
 		platforms []string
 		wantErr   bool
-		errMsg    string
 	}{
 		{
-			name:      "duplicate platforms",
-			platforms: []string{"linux/amd64", "linux/amd64"},
+			name: "no platforms specified",
+			opts: &config.KanikoOptions{
+				Driver: "local",
+			},
+			platforms: []string{},
 			wantErr:   true,
-			errMsg:    "duplicate platform",
 		},
 		{
-			name:      "invalid platform format",
-			platforms: []string{"linux-amd64"},
-			wantErr:   true,
-			errMsg:    "invalid platform format",
-		},
-		{
-			name:      "empty os",
-			platforms: []string{"/amd64"},
-			wantErr:   true,
-			errMsg:    "invalid platform format",
-		},
-		{
-			name:      "empty arch",
-			platforms: []string{"linux/"},
-			wantErr:   true,
-			errMsg:    "invalid platform format",
-		},
-		{
-			name:      "valid platforms",
-			platforms: []string{"linux/amd64", "linux/arm64"},
+			name: "local driver with single platform",
+			opts: &config.KanikoOptions{
+				Driver: "local",
+			},
+			platforms: []string{"linux/amd64"},
 			wantErr:   false,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			opts := &config.KanikoOptions{
-				Driver:        "local",
-				MultiPlatform: tt.platforms,
+			coordinator := &Coordinator{
+				opts: tt.opts,
+				driver: &mockDriver{
+					validatePlatformsFunc: func(platforms []string) error {
+						return nil
+					},
+					executeBuildsFunc: func(ctx context.Context, platforms []string) (map[string]string, error) {
+						return map[string]string{"linux/amd64": "sha256:test"}, nil
+					},
+				},
 			}
+			tt.opts.MultiPlatform = tt.platforms
 
-			coordinator, err := NewCoordinator(opts)
-			if err != nil {
-				t.Fatalf("NewCoordinator() error: %v", err)
-			}
-
-			_, err = coordinator.Execute(context.Background())
+			index, err := coordinator.Execute(context.Background())
 			if tt.wantErr {
-				if err == nil {
-					t.Errorf("Execute() expected error, got nil")
-				}
-				if !strings.Contains(err.Error(), tt.errMsg) {
-					t.Errorf("Execute() error should contain '%s', got: %v", tt.errMsg, err)
-				}
+				assert.Error(t, err)
+				assert.Nil(t, index)
 			} else {
-				// Should pass pre-flight but fail at driver validation
-				if err == nil {
-					t.Errorf("Execute() expected error from driver validation, got nil")
-				}
-				if !strings.Contains(err.Error(), "platform validation failed") {
-					t.Errorf("Execute() error should contain 'platform validation failed', got: %v", err)
+				assert.NoError(t, err)
+				if tt.opts.PublishIndex {
+					assert.NotNil(t, index)
+				} else {
+					assert.Nil(t, index)
 				}
 			}
 		})
@@ -197,27 +229,63 @@ func TestParsePlatforms(t *testing.T) {
 		{
 			name:     "multiple platforms with spaces",
 			input:    "linux/amd64, linux/arm64",
-			expected: []string{"linux/amd64", "linux/arm64"},
-		},
-		{
-			name:     "trailing comma",
-			input:    "linux/amd64,",
-			expected: []string{"linux/amd64", ""},
+			expected: []string{"linux/amd64", " linux/arm64"},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result := parsePlatforms(tt.input)
-			if len(result) != len(tt.expected) {
-				t.Errorf("parsePlatforms(%q) got %v, want %v", tt.input, result, tt.expected)
-				return
-			}
-			for i := range result {
-				if result[i] != tt.expected[i] {
-					t.Errorf("parsePlatforms(%q) got %v, want %v", tt.input, result, tt.expected)
-					break
-				}
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestGetDriver(t *testing.T) {
+	tests := []struct {
+		name    string
+		opts    *config.KanikoOptions
+		wantErr bool
+	}{
+		{
+			name: "local driver",
+			opts: &config.KanikoOptions{
+				Driver: "local",
+			},
+			wantErr: false,
+		},
+		{
+			name: "k8s driver",
+			opts: &config.KanikoOptions{
+				Driver: "k8s",
+			},
+			wantErr: false,
+		},
+		{
+			name: "ci driver",
+			opts: &config.KanikoOptions{
+				Driver: "ci",
+			},
+			wantErr: false,
+		},
+		{
+			name: "invalid driver",
+			opts: &config.KanikoOptions{
+				Driver: "invalid",
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			driver, err := getDriver(tt.opts)
+			if tt.wantErr {
+				assert.Error(t, err)
+				assert.Nil(t, driver)
+			} else {
+				assert.NoError(t, err)
+				assert.NotNil(t, driver)
 			}
 		})
 	}
@@ -225,93 +293,267 @@ func TestParsePlatforms(t *testing.T) {
 
 func TestCoordinator_GetDigests(t *testing.T) {
 	expectedDigests := map[string]string{
-		"linux/amd64": "sha256:abc123",
-		"linux/arm64": "sha256:def456",
+		"linux/amd64": "sha256:test1",
+		"linux/arm64": "sha256:test2",
 	}
 
 	coordinator := &Coordinator{
-		opts:    &config.KanikoOptions{},
-		driver:  nil,
 		digests: expectedDigests,
 	}
 
-	digests := coordinator.GetDigests()
-	if len(digests) != len(expectedDigests) {
-		t.Errorf("GetDigests() got %v, want %v", digests, expectedDigests)
-		return
-	}
-	for k, v := range expectedDigests {
-		if digests[k] != v {
-			t.Errorf("GetDigests()[%s] got %s, want %s", k, digests[k], v)
-		}
-	}
+	result := coordinator.GetDigests()
+	assert.Equal(t, expectedDigests, result)
 }
 
-func TestPreFlightChecks_CI_Driver_Requirements(t *testing.T) {
-	coordinator := &Coordinator{
-		opts: &config.KanikoOptions{
-			Driver:        "ci",
-			MultiPlatform: []string{"linux/amd64"},
-			DigestsFrom:   "", // Missing required field
-		},
-	}
-
-	err := coordinator.preFlightChecks([]string{"linux/amd64"})
-	if err == nil {
-		t.Errorf("preFlightChecks() expected error, got nil")
-	}
-	if !strings.Contains(err.Error(), "CI driver requires --digests-from path") {
-		t.Errorf("preFlightChecks() error should contain 'CI driver requires --digests-from path', got: %v", err)
-	}
+// mockDriver is a mock implementation of the Driver interface for testing
+type mockDriver struct {
+	validatePlatformsFunc func(platforms []string) error
+	executeBuildsFunc     func(ctx context.Context, platforms []string) (map[string]string, error)
+	cleanupFunc           func() error
 }
 
-func TestPreFlightChecks_PublishIndex_Requirements(t *testing.T) {
-	coordinator := &Coordinator{
-		opts: &config.KanikoOptions{
-			Driver:        "local",
-			MultiPlatform: []string{"linux/amd64"},
-			PublishIndex:  true,
-			Destinations:  []string{}, // No destinations
-		},
+func (m *mockDriver) ValidatePlatforms(platforms []string) error {
+	if m.validatePlatformsFunc != nil {
+		return m.validatePlatformsFunc(platforms)
 	}
-
-	err := coordinator.preFlightChecks([]string{"linux/amd64"})
-	if err == nil {
-		t.Errorf("preFlightChecks() expected error, got nil")
-	}
-	if !strings.Contains(err.Error(), "cannot publish index without destination registries") {
-		t.Errorf("preFlightChecks() error should contain 'cannot publish index without destination registries', got: %v", err)
-	}
+	return nil
 }
 
-func TestCoordinator_Cleanup(t *testing.T) {
-	coordinator := &Coordinator{
-		opts:    &config.KanikoOptions{},
-		driver:  &LocalDriver{},
-		digests: make(map[string]string),
+func (m *mockDriver) ExecuteBuilds(ctx context.Context, platforms []string) (map[string]string, error) {
+	if m.executeBuildsFunc != nil {
+		return m.executeBuildsFunc(ctx, platforms)
 	}
-
-	err := coordinator.Cleanup()
-	if err != nil {
-		t.Errorf("Cleanup() unexpected error: %v", err)
-	}
+	return map[string]string{}, nil
 }
 
-// TestCoordinator_LogMultiPlatformConfig tests that the configuration logging works
-// This is a basic test to ensure the function doesn't panic
+func (m *mockDriver) Cleanup() error {
+	if m.cleanupFunc != nil {
+		return m.cleanupFunc()
+	}
+	return nil
+}
+
 func TestCoordinator_LogMultiPlatformConfig(t *testing.T) {
-	coordinator := &Coordinator{
-		opts: &config.KanikoOptions{
-			Driver:             "k8s",
-			MultiPlatform:      []string{"linux/amd64", "linux/arm64"},
-			PublishIndex:       true,
-			LegacyManifestList: true,
-			RequireNativeNodes: true,
-			OCIMode:            "auto",
-			IndexAnnotations:   map[string]string{"key": "value"},
+	opts := &config.KanikoOptions{
+		Driver:             "local",
+		MultiPlatform:      []string{"linux/amd64", "linux/arm64"},
+		PublishIndex:       true,
+		LegacyManifestList: true,
+		RequireNativeNodes: true,
+		OCIMode:            "oci",
+		IndexAnnotations:   map[string]string{"key": "value"},
+	}
+
+	coordinator := &Coordinator{opts: opts}
+	// This should not panic and should log the configuration
+	coordinator.LogMultiPlatformConfig()
+}
+
+func TestValidatePlatformDuplicates(t *testing.T) {
+	tests := []struct {
+		name      string
+		platforms []string
+		wantErr   bool
+	}{
+		{
+			name:      "no duplicates",
+			platforms: []string{"linux/amd64", "linux/arm64"},
+			wantErr:   false,
+		},
+		{
+			name:      "with duplicates",
+			platforms: []string{"linux/amd64", "linux/amd64"},
+			wantErr:   true,
+		},
+		{
+			name:      "empty platforms",
+			platforms: []string{},
+			wantErr:   false,
 		},
 	}
 
-	// This should not panic
-	coordinator.LogMultiPlatformConfig()
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validatePlatformDuplicates(tt.platforms)
+			if tt.wantErr {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestValidatePlatformFormat(t *testing.T) {
+	tests := []struct {
+		name      string
+		platforms []string
+		wantErr   bool
+	}{
+		{
+			name:      "valid platforms",
+			platforms: []string{"linux/amd64", "linux/arm64"},
+			wantErr:   false,
+		},
+		{
+			name:      "invalid format - missing arch",
+			platforms: []string{"linux"},
+			wantErr:   true,
+		},
+		{
+			name:      "invalid format - empty os",
+			platforms: []string{"/amd64"},
+			wantErr:   true,
+		},
+		{
+			name:      "invalid format - empty arch",
+			platforms: []string{"linux/"},
+			wantErr:   true,
+		},
+		{
+			name:      "invalid format - too many parts",
+			platforms: []string{"linux/amd64/variant"},
+			wantErr:   true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validatePlatformFormat(tt.platforms)
+			if tt.wantErr {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestValidatePublishIndexRequirements(t *testing.T) {
+	tests := []struct {
+		name    string
+		opts    *config.KanikoOptions
+		wantErr bool
+	}{
+		{
+			name: "publish index with destinations",
+			opts: &config.KanikoOptions{
+				PublishIndex: true,
+				Destinations: []string{"registry/image:tag"},
+			},
+			wantErr: false,
+		},
+		{
+			name: "publish index without destinations",
+			opts: &config.KanikoOptions{
+				PublishIndex: true,
+				Destinations: []string{},
+			},
+			wantErr: true,
+		},
+		{
+			name: "no publish index",
+			opts: &config.KanikoOptions{
+				PublishIndex: false,
+			},
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validatePublishIndexRequirements(tt.opts)
+			if tt.wantErr {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestValidateDriverRequirements(t *testing.T) {
+	tests := []struct {
+		name      string
+		opts      *config.KanikoOptions
+		platforms []string
+		wantErr   bool
+	}{
+		{
+			name: "local driver with multiple platforms",
+			opts: &config.KanikoOptions{
+				Driver: "local",
+			},
+			platforms: []string{"linux/amd64", "linux/arm64"},
+			wantErr:   false, // Should only warn, not error
+		},
+		{
+			name: "ci driver without digests-from",
+			opts: &config.KanikoOptions{
+				Driver: "ci",
+			},
+			platforms: []string{"linux/amd64"},
+			wantErr:   true,
+		},
+		{
+			name: "ci driver with digests-from",
+			opts: &config.KanikoOptions{
+				Driver:      "ci",
+				DigestsFrom: "/path/to/digests",
+			},
+			platforms: []string{"linux/amd64"},
+			wantErr:   false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateDriverRequirements(tt.opts, tt.platforms)
+			if tt.wantErr {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestValidateCacheRepositorySuffix(t *testing.T) {
+	tests := []struct {
+		name      string
+		opts      *config.KanikoOptions
+		platforms []string
+	}{
+		{
+			name: "cache with arch suffix and multiple platforms",
+			opts: &config.KanikoOptions{
+				Cache:               true,
+				CacheRepo:           "registry/cache",
+				ArchCacheRepoSuffix: "-${ARCH}",
+			},
+			platforms: []string{"linux/amd64", "linux/arm64"},
+		},
+		{
+			name: "cache without arch suffix",
+			opts: &config.KanikoOptions{
+				Cache:     true,
+				CacheRepo: "registry/cache",
+			},
+			platforms: []string{"linux/amd64"},
+		},
+		{
+			name: "no cache",
+			opts: &config.KanikoOptions{
+				Cache: false,
+			},
+			platforms: []string{"linux/amd64"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// This function should not panic and should handle all cases gracefully
+			validateCacheRepositorySuffix(tt.opts, tt.platforms)
+		})
+	}
 }

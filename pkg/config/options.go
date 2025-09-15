@@ -101,7 +101,10 @@ type KanikoOptions struct {
 	Driver              string           // --driver=[local|k8s|ci]
 	DigestsFrom         string           // --digests-from=/path
 	RequireNativeNodes  bool             // --require-native-nodes=true
-	OCIMode             string           // --oci-mode=[oci|auto]
+	OCIMode             string           // --oci-mode=[oci|auto|docker]
+	SignImages          bool             // --sign-images[=true|false]
+	CosignKeyPath       string           // --cosign-key-path=/path/to/key
+	CosignKeyPassword   string           // --cosign-key-password=secret
 }
 
 // KanikoGitOptions represents Git-specific configuration options

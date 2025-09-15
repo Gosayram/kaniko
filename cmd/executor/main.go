@@ -25,6 +25,7 @@ import (
 	"github.com/Gosayram/kaniko/cmd/executor/cmd"
 	"github.com/Gosayram/kaniko/internal/version"
 	"github.com/Gosayram/kaniko/pkg/config"
+	"github.com/Gosayram/kaniko/pkg/executor"
 	"github.com/Gosayram/kaniko/pkg/util"
 
 	"github.com/google/slowjam/pkg/stacklog"
@@ -34,6 +35,9 @@ func main() {
 	// Initialize configuration
 	config.Initialize()
 	util.Initialize()
+
+	// Initialize multi-platform build functionality
+	executor.InitMultiPlatformBuild()
 
 	// Handle --version flag before cobra initialization
 	showVersion := flag.Bool("version", false, "Print version information and exit")

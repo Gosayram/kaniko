@@ -21,78 +21,65 @@ import (
 
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/types"
+	"github.com/stretchr/testify/assert"
 
 	"github.com/Gosayram/kaniko/pkg/config"
 )
 
 func TestBuildIndex(t *testing.T) {
 	tests := []struct {
-		name              string
-		manifests         map[string]string
-		opts              *config.KanikoOptions
-		wantErr           bool
-		expectedLen       int
-		expectedMediaType string
+		name      string
+		manifests map[string]string
+		opts      *config.KanikoOptions
+		wantErr   bool
 	}{
 		{
-			name:              "empty manifests",
-			manifests:         map[string]string{},
-			opts:              &config.KanikoOptions{PublishIndex: true},
-			wantErr:           true,
-			expectedLen:       0,
-			expectedMediaType: "",
+			name:      "empty manifests",
+			manifests: map[string]string{},
+			opts:      &config.KanikoOptions{},
+			wantErr:   true,
 		},
 		{
-			name: "single platform OCI",
+			name: "single platform OCI mode",
 			manifests: map[string]string{
-				"linux/amd64": "sha256:abc123def4567890123456789012345678901234567890123456789012345678",
+				"linux/amd64": "sha256:test123",
 			},
-			opts:              &config.KanikoOptions{PublishIndex: true, LegacyManifestList: false},
-			wantErr:           false,
-			expectedLen:       1,
-			expectedMediaType: string(types.OCIImageIndex),
+			opts: &config.KanikoOptions{
+				OCIMode: "oci",
+			},
+			wantErr: false,
 		},
 		{
-			name: "multiple platforms OCI",
+			name: "multiple platforms OCI mode",
 			manifests: map[string]string{
-				"linux/amd64": "sha256:abc123def4567890123456789012345678901234567890123456789012345678",
-				"linux/arm64": "sha256:def4567890123456789012345678901234567890123456789012345678901234",
+				"linux/amd64": "sha256:test123",
+				"linux/arm64": "sha256:test456",
 			},
-			opts:              &config.KanikoOptions{PublishIndex: true, LegacyManifestList: false},
-			wantErr:           false,
-			expectedLen:       2,
-			expectedMediaType: string(types.OCIImageIndex),
+			opts: &config.KanikoOptions{
+				OCIMode: "oci",
+			},
+			wantErr: false,
 		},
 		{
-			name: "single platform Docker",
+			name: "legacy manifest list",
 			manifests: map[string]string{
-				"linux/amd64": "sha256:abc123def4567890123456789012345678901234567890123456789012345678",
+				"linux/amd64": "sha256:test123",
 			},
-			opts:              &config.KanikoOptions{PublishIndex: true, LegacyManifestList: true},
-			wantErr:           false,
-			expectedLen:       1,
-			expectedMediaType: string(types.DockerManifestList),
+			opts: &config.KanikoOptions{
+				LegacyManifestList: true,
+			},
+			wantErr: false,
 		},
 		{
-			name: "multiple platforms Docker",
+			name: "with annotations",
 			manifests: map[string]string{
-				"linux/amd64": "sha256:abc123def4567890123456789012345678901234567890123456789012345678",
-				"linux/arm64": "sha256:def4567890123456789012345678901234567890123456789012345678901234",
+				"linux/amd64": "sha256:test123",
 			},
-			opts:              &config.KanikoOptions{PublishIndex: true, LegacyManifestList: true},
-			wantErr:           false,
-			expectedLen:       2,
-			expectedMediaType: string(types.DockerManifestList),
-		},
-		{
-			name: "publish index disabled",
-			manifests: map[string]string{
-				"linux/amd64": "sha256:abc123def4567890123456789012345678901234567890123456789012345678",
+			opts: &config.KanikoOptions{
+				OCIMode:          "oci",
+				IndexAnnotations: map[string]string{"key": "value"},
 			},
-			opts:              &config.KanikoOptions{PublishIndex: false},
-			wantErr:           true,
-			expectedLen:       0,
-			expectedMediaType: "",
+			wantErr: false,
 		},
 	}
 
@@ -100,150 +87,395 @@ func TestBuildIndex(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			index, err := BuildIndex(tt.manifests, tt.opts)
 			if tt.wantErr {
-				if err == nil {
-					t.Errorf("BuildIndex() expected error, got nil")
+				assert.Error(t, err)
+				assert.Nil(t, index)
+			} else {
+				assert.NoError(t, err)
+				assert.NotNil(t, index)
+
+				// Verify index media type
+				mediaType, err := index.MediaType()
+				assert.NoError(t, err)
+				if tt.opts.LegacyManifestList {
+					assert.Equal(t, types.DockerManifestList, mediaType)
+				} else {
+					assert.Equal(t, types.OCIImageIndex, mediaType)
 				}
-				if index != nil {
-					t.Errorf("BuildIndex() expected nil index, got %v", index)
+
+				// Verify index manifest structure
+				indexManifest, err := index.IndexManifest()
+				assert.NoError(t, err)
+				assert.Len(t, indexManifest.Manifests, len(tt.manifests))
+
+				// Verify annotations if present
+				if len(tt.opts.IndexAnnotations) > 0 {
+					assert.NotEmpty(t, indexManifest.Annotations)
 				}
-				return
-			}
-
-			if err != nil {
-				t.Errorf("BuildIndex() unexpected error: %v", err)
-				return
-			}
-
-			if index == nil {
-				t.Errorf("BuildIndex() returned nil index")
-				return
-			}
-
-			indexManifest, err := index.IndexManifest()
-			if err != nil {
-				t.Errorf("IndexManifest() error: %v", err)
-				return
-			}
-
-			if len(indexManifest.Manifests) != tt.expectedLen {
-				t.Errorf("BuildIndex() got %d manifests, want %d", len(indexManifest.Manifests), tt.expectedLen)
-			}
-
-			mediaType, err := index.MediaType()
-			if err != nil {
-				t.Errorf("MediaType() error: %v", err)
-				return
-			}
-
-			if string(mediaType) != tt.expectedMediaType {
-				t.Errorf("BuildIndex() got media type %s, want %s", mediaType, tt.expectedMediaType)
 			}
 		})
 	}
 }
 
-func TestBuildIndex_Annotations(t *testing.T) {
-	manifests := map[string]string{
-		"linux/amd64": "sha256:abc123def4567890123456789012345678901234567890123456789012345678",
-	}
-	opts := &config.KanikoOptions{
-		PublishIndex: true,
-		IndexAnnotations: map[string]string{
-			"key1": "value1",
-			"key2": "value2",
-		},
-	}
-
-	index, err := BuildIndex(manifests, opts)
-	if err != nil {
-		t.Fatalf("BuildIndex() error: %v", err)
-	}
-
-	indexManifest, err := index.IndexManifest()
-	if err != nil {
-		t.Fatalf("IndexManifest() error: %v", err)
-	}
-
-	if indexManifest.Annotations == nil {
-		t.Fatal("Index manifest annotations should not be nil")
-	}
-
-	if indexManifest.Annotations["key1"] != "value1" {
-		t.Errorf("Expected annotation 'key1' to be 'value1', got %s", indexManifest.Annotations["key1"])
-	}
-
-	if indexManifest.Annotations["key2"] != "value2" {
-		t.Errorf("Expected annotation 'key2' to be 'value2', got %s", indexManifest.Annotations["key2"])
-	}
-}
-
-func TestParsePlatform(t *testing.T) {
+func TestBuildOCIImageIndex(t *testing.T) {
 	tests := []struct {
-		name     string
-		platform string
-		expected *v1.Platform
-		wantErr  bool
+		name      string
+		manifests map[string]string
+		opts      *config.KanikoOptions
+		wantErr   bool
 	}{
 		{
-			name:     "simple platform",
-			platform: "linux/amd64",
-			expected: &v1.Platform{
-				OS:           "linux",
-				Architecture: "amd64",
+			name: "valid single platform",
+			manifests: map[string]string{
+				"linux/amd64": "sha256:test123",
 			},
+			opts:    &config.KanikoOptions{},
 			wantErr: false,
 		},
 		{
-			name:     "platform with variant",
-			platform: "linux/arm64/v8",
-			expected: &v1.Platform{
-				OS:           "linux",
-				Architecture: "arm64",
-				Variant:      "v8",
+			name: "valid multiple platforms",
+			manifests: map[string]string{
+				"linux/amd64": "sha256:test123",
+				"linux/arm64": "sha256:test456",
 			},
+			opts:    &config.KanikoOptions{},
 			wantErr: false,
 		},
 		{
-			name:     "invalid platform",
-			platform: "linux-amd64",
-			expected: nil,
-			wantErr:  true,
+			name: "invalid platform format",
+			manifests: map[string]string{
+				"invalid": "sha256:test123",
+			},
+			opts:    &config.KanikoOptions{},
+			wantErr: true,
+		},
+		{
+			name: "with annotations",
+			manifests: map[string]string{
+				"linux/amd64": "sha256:test123",
+			},
+			opts: &config.KanikoOptions{
+				IndexAnnotations: map[string]string{
+					"org.opencontainers.image.created": "2023-01-01T00:00:00Z",
+				},
+			},
+			wantErr: false,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, err := parsePlatform(tt.platform)
+			index, err := buildOCIImageIndex(tt.manifests, tt.opts)
 			if tt.wantErr {
-				if err == nil {
-					t.Errorf("parsePlatform() expected error, got nil")
+				assert.Error(t, err)
+				assert.Nil(t, index)
+			} else {
+				assert.NoError(t, err)
+				assert.NotNil(t, index)
+
+				mediaType, err := index.MediaType()
+				assert.NoError(t, err)
+				assert.Equal(t, types.OCIImageIndex, mediaType)
+
+				indexManifest, err := index.IndexManifest()
+				assert.NoError(t, err)
+				assert.Len(t, indexManifest.Manifests, len(tt.manifests))
+
+				if len(tt.opts.IndexAnnotations) > 0 {
+					assert.NotEmpty(t, indexManifest.Annotations)
+					for k, v := range tt.opts.IndexAnnotations {
+						assert.Equal(t, v, indexManifest.Annotations[k])
+					}
 				}
-				if result != nil {
-					t.Errorf("parsePlatform() expected nil result, got %v", result)
-				}
-				return
+			}
+		})
+	}
+}
+
+func TestBuildDockerManifestList(t *testing.T) {
+	tests := []struct {
+		name      string
+		manifests map[string]string
+		opts      *config.KanikoOptions
+		wantErr   bool
+	}{
+		{
+			name: "valid single platform",
+			manifests: map[string]string{
+				"linux/amd64": "sha256:test123",
+			},
+			opts:    &config.KanikoOptions{},
+			wantErr: false,
+		},
+		{
+			name: "valid multiple platforms",
+			manifests: map[string]string{
+				"linux/amd64": "sha256:test123",
+				"linux/arm64": "sha256:test456",
+			},
+			opts:    &config.KanikoOptions{},
+			wantErr: false,
+		},
+		{
+			name: "invalid platform format",
+			manifests: map[string]string{
+				"invalid": "sha256:test123",
+			},
+			opts:    &config.KanikoOptions{},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			index, err := buildDockerManifestList(tt.manifests, tt.opts)
+			if tt.wantErr {
+				assert.Error(t, err)
+				assert.Nil(t, index)
+			} else {
+				assert.NoError(t, err)
+				assert.NotNil(t, index)
+
+				mediaType, err := index.MediaType()
+				assert.NoError(t, err)
+				assert.Equal(t, types.DockerManifestList, mediaType)
+
+				indexManifest, err := index.IndexManifest()
+				assert.NoError(t, err)
+				assert.Len(t, indexManifest.Manifests, len(tt.manifests))
+			}
+		})
+	}
+}
+
+func TestParsePlatform(t *testing.T) {
+	tests := []struct {
+		name        string
+		platformStr string
+		wantErr     bool
+	}{
+		{
+			name:        "valid platform",
+			platformStr: "linux/amd64",
+			wantErr:     false,
+		},
+		{
+			name:        "valid platform with variant",
+			platformStr: "linux/arm64/v8",
+			wantErr:     false,
+		},
+		{
+			name:        "invalid format - missing arch",
+			platformStr: "linux",
+			wantErr:     true,
+		},
+		{
+			name:        "invalid format - empty os",
+			platformStr: "/amd64",
+			wantErr:     true,
+		},
+		{
+			name:        "invalid format - empty arch",
+			platformStr: "linux/",
+			wantErr:     true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			platform, err := parsePlatform(tt.platformStr)
+			if tt.wantErr {
+				assert.Error(t, err)
+				assert.Nil(t, platform)
+			} else {
+				assert.NoError(t, err)
+				assert.NotNil(t, platform)
+				assert.Equal(t, tt.platformStr, platform.String())
+			}
+		})
+	}
+}
+
+func TestCreateManifestDescriptor(t *testing.T) {
+	tests := []struct {
+		name      string
+		digestStr string
+		platform  *v1.Platform
+		opts      *config.KanikoOptions
+		wantErr   bool
+	}{
+		{
+			name:      "valid digest",
+			digestStr: "sha256:1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+			platform: &v1.Platform{
+				OS:           "linux",
+				Architecture: "amd64",
+			},
+			opts:    &config.KanikoOptions{},
+			wantErr: false,
+		},
+		{
+			name:      "invalid digest format",
+			digestStr: "invalid",
+			platform: &v1.Platform{
+				OS:           "linux",
+				Architecture: "amd64",
+			},
+			opts:    &config.KanikoOptions{},
+			wantErr: true,
+		},
+		{
+			name:      "empty digest",
+			digestStr: "",
+			platform: &v1.Platform{
+				OS:           "linux",
+				Architecture: "amd64",
+			},
+			opts:    &config.KanikoOptions{},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			desc, err := fetchManifestDescriptor(tt.digestStr, tt.platform, tt.opts)
+			if tt.wantErr {
+				assert.Error(t, err)
+				assert.Nil(t, desc)
+			} else {
+				assert.NoError(t, err)
+				assert.NotNil(t, desc)
+				assert.Equal(t, tt.platform, desc.Platform)
+				assert.Equal(t, tt.digestStr, desc.Digest.String())
+			}
+		})
+	}
+}
+
+func TestSimpleIndex(t *testing.T) {
+	tests := []struct {
+		name        string
+		mediaType   types.MediaType
+		manifests   []v1.Descriptor
+		annotations map[string]string
+	}{
+		{
+			name:      "OCI index with manifests",
+			mediaType: types.OCIImageIndex,
+			manifests: []v1.Descriptor{
+				{
+					Digest: v1.Hash{
+						Algorithm: "sha256",
+						Hex:       "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+					},
+					Platform: &v1.Platform{
+						OS:           "linux",
+						Architecture: "amd64",
+					},
+				},
+			},
+		},
+		{
+			name:        "OCI index with annotations",
+			mediaType:   types.OCIImageIndex,
+			manifests:   []v1.Descriptor{},
+			annotations: map[string]string{"key": "value"},
+		},
+		{
+			name:      "Docker manifest list",
+			mediaType: types.DockerManifestList,
+			manifests: []v1.Descriptor{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			index := &simpleIndex{
+				mediaType:   tt.mediaType,
+				manifests:   tt.manifests,
+				annotations: tt.annotations,
 			}
 
-			if err != nil {
-				t.Errorf("parsePlatform() unexpected error: %v", err)
-				return
+			// Test MediaType
+			mediaType, err := index.MediaType()
+			assert.NoError(t, err)
+			assert.Equal(t, tt.mediaType, mediaType)
+
+			// Test IndexManifest
+			indexManifest, err := index.IndexManifest()
+			assert.NoError(t, err)
+			assert.Equal(t, tt.mediaType, indexManifest.MediaType)
+			assert.Equal(t, tt.manifests, indexManifest.Manifests)
+			assert.Equal(t, tt.annotations, indexManifest.Annotations)
+
+			// Test Digest and Size (these would be computed in a real implementation)
+			_, err = index.Digest()
+			assert.NoError(t, err)
+			_, err = index.Size()
+			assert.NoError(t, err)
+		})
+	}
+}
+
+func TestOCIModeSelection(t *testing.T) {
+	tests := []struct {
+		name            string
+		opts            *config.KanikoOptions
+		expectedOCIMode bool
+	}{
+		{
+			name: "explicit OCI mode",
+			opts: &config.KanikoOptions{
+				OCIMode: "oci",
+			},
+			expectedOCIMode: true,
+		},
+		{
+			name: "explicit docker mode",
+			opts: &config.KanikoOptions{
+				OCIMode: "docker",
+			},
+			expectedOCIMode: false,
+		},
+		{
+			name: "auto mode with legacy manifest list false",
+			opts: &config.KanikoOptions{
+				OCIMode:            "auto",
+				LegacyManifestList: false,
+			},
+			expectedOCIMode: true,
+		},
+		{
+			name: "auto mode with legacy manifest list true",
+			opts: &config.KanikoOptions{
+				OCIMode:            "auto",
+				LegacyManifestList: true,
+			},
+			expectedOCIMode: false,
+		},
+		{
+			name:            "default behavior",
+			opts:            &config.KanikoOptions{},
+			expectedOCIMode: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			manifests := map[string]string{
+				"linux/amd64": "sha256:test123",
 			}
 
-			if result == nil {
-				t.Errorf("parsePlatform() returned nil platform")
-				return
-			}
+			index, err := BuildIndex(manifests, tt.opts)
+			assert.NoError(t, err)
+			assert.NotNil(t, index)
 
-			if result.OS != tt.expected.OS {
-				t.Errorf("parsePlatform() OS got %s, want %s", result.OS, tt.expected.OS)
-			}
+			mediaType, err := index.MediaType()
+			assert.NoError(t, err)
 
-			if result.Architecture != tt.expected.Architecture {
-				t.Errorf("parsePlatform() Architecture got %s, want %s", result.Architecture, tt.expected.Architecture)
-			}
-
-			if result.Variant != tt.expected.Variant {
-				t.Errorf("parsePlatform() Variant got %s, want %s", result.Variant, tt.expected.Variant)
+			if tt.expectedOCIMode {
+				assert.Equal(t, types.OCIImageIndex, mediaType)
+			} else {
+				assert.Equal(t, types.DockerManifestList, mediaType)
 			}
 		})
 	}

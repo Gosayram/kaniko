@@ -109,6 +109,16 @@ func (d *CIDriver) Cleanup() error {
 	return nil
 }
 
+// readDigestFromFile reads digest from file for a specific platform
+func (d *CIDriver) readDigestFromFile(platform string) (string, error) {
+	return d.readDigestForPlatform(platform)
+}
+
+// getDigestFilename returns the expected filename for a platform's digest
+func (d *CIDriver) getDigestFilename(platform string) string {
+	return strings.ReplaceAll(platform, "/", "-") + ".digest"
+}
+
 // ExpectedDigestFileFormat returns the expected format for digest files
 func (d *CIDriver) ExpectedDigestFileFormat() string {
 	return `
