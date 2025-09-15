@@ -1,8 +1,8 @@
-# Kaniko Modernization Plan with Built-in Multi-Arch Support
+# Kaniko Modernization Plan with Built-in Multi-Arch Support and OCI 1.1 Compliance
 
 ## Current State Analysis
 
-The project is in transition from legacy systems to modern Go 1.24+ practices with a focus on adding secure multi-architecture support without privileged operations.
+The project is in transition from legacy systems to modern Go 1.24+ practices with a focus on adding secure multi-architecture support without privileged operations and comprehensive OCI 1.1 compliance.
 
 ### ✅ Existing Infrastructure
 - **Makefile**: Uses modern `internal/version` package with `.release-version` integration
@@ -10,11 +10,31 @@ The project is in transition from legacy systems to modern Go 1.24+ practices wi
 - **Version Management**: Single source of truth via `.release-version` file
 - **Build System**: Functional with modern Go practices
 - **Architecture**: Single-binary executor with Dockerfile parsing and image building capabilities
+- **OCI Compliance**: Strong OCI 1.1 support with comprehensive media type handling
 
 ### 🆕 Modern Components Already Added
 - [`internal/version`](internal/version/version.go): Modern version package following Go 1.24+ best practices
 - [`.release-version`](.release-version): Single source of truth for version (1.24.0)
 - **CI/CD**: GitHub Actions removed, needs replacement strategy
+- **OCI Support**: Full OCI 1.1 media type compliance and multi-platform capabilities
+
+### ✅ OCI 1.1 Compliance Status
+Kaniko demonstrates **excellent compliance** with OCI Image Format Specification v1.1:
+
+**Fully Supported OCI 1.1 Features:**
+- ✅ **Media Types**: Full OCI media type spectrum (`application/vnd.oci.image.*`)
+- ✅ **Image Index**: Proper OCI Image Index implementation
+- ✅ **Content Digests**: SHA-256 content addressing
+- ✅ **Platform Fields**: OS, Architecture, Variant support
+- ✅ **Layer Compression**: Gzip and Zstd with proper media types
+- ✅ **Annotations**: Basic index-level annotations
+
+**OCI Compliance Rating: 9/10** - Excellent for production use in OCI-based environments
+
+**Key Dependencies:**
+- `github.com/google/go-containerregistry v0.20.6`
+- `github.com/opencontainers/image-spec v1.1.1`
+- `github.com/opencontainers/go-digest v1.0.0`
 
 ## Multi-Architecture Modernization Goals
 
@@ -40,7 +60,11 @@ ArchCacheRepoSuffix   string          // --arch-cache-repo-suffix=-${ARCH}
 Driver                string          // --driver=[local|k8s|ci]
 DigestsFrom           string          // --digests-from=/path
 RequireNativeNodes    bool            // --require-native-nodes=true
-OCIMode               string          // --oci-mode=[oci|auto]
+OCIMode               string          // --oci-mode=[oci|auto|docker]
+Compression           string          // --compression=[gzip|zstd]
+SignImages           bool            // --sign-images[=true|false]
+CosignKeyPath        string          // --cosign-key-path=/path/to/key
+CosignKeyPassword    string          // --cosign-key-password=secret
 ```
 
 **Architecture Changes:**
@@ -127,7 +151,8 @@ func BuildIndex(manifests map[string]v1.Descriptor, opts *config.KanikoOptions) 
     // Create OCI Image Index (application/vnd.oci.image.index.v1+json)
     // Optionally create Docker Manifest List for legacy compatibility
     // Add platform-specific annotations and metadata
-    // Support cosign signing and SBOM attachment
+    // Support cosign signing and SBOM attachment (optional)
+    // Handle OCI vs Docker media types based on OCIMode
 }
 ```
 
@@ -149,6 +174,15 @@ func (d *KubernetesDriver) createBuildJob(platform string) (*batchv1.Job, error)
 - No qemu/binfmt emulation
 - No privileged mount operations
 - Standard Linux capabilities only
+- **Security First**: Kaniko remains secure by default, avoiding unsafe features from other builders
+
+**OCI Security Features:**
+- **Optional Image Signing**: Cosign support available but not enabled by default
+- **No Unsafe Features**: Security-sensitive OCI features are implemented as opt-in only
+- **Content Trust**: Digest-based verification prevents tampering
+- **Minimal Attack Surface**: No execution of arbitrary code during build process
+- **Safe Defaults**: OCI features disabled by default, require explicit opt-in
+- **No Automatic Conversions**: Prevents unexpected behavior changes
 
 **Kubernetes RBAC Minimum:**
 ```yaml
@@ -169,6 +203,12 @@ rules:
 - Workload Identity (GCP)
 - Pod Identity (Azure)
 - IAM Roles (AWS)
+
+**Image Signing Security:**
+- **Optional Feature**: Signing requires explicit opt-in via `--sign-images`
+- **Key Management**: Keys stored securely, not embedded in images
+- **No Automatic Signing**: Prevents accidental exposure of signing keys
+- **Audit Trail**: Signed images provide cryptographic proof of origin
 
 ## Usage Examples
 
@@ -198,18 +238,43 @@ spec:
 
 ### Local Development
 ```bash
-# Build for host architecture only
-kaniko --multi-platform=linux/amd64 --driver=local
+# Build for host architecture only with OCI compliance
+kaniko --multi-platform=linux/amd64 --driver=local --oci-mode=oci
 
-# Force build (will fail for non-native platforms)
-kaniko --multi-platform=linux/arm64 --driver=local --require-native-nodes=false
+# Force build with OCI zstd compression
+kaniko --multi-platform=linux/arm64 --driver=local --require-native-nodes=false \
+       --oci-mode=oci --compression=zstd
+
+# Build with optional image signing
+kaniko --destination=ghcr.io/org/app:1.2.3 --sign-images=true \
+       --cosign-key-path=/secrets/cosign.key
 ```
 
 ### CI Integration
 ```bash
-# Matrix build per architecture, then aggregate
+# Matrix build per architecture with OCI compliance
 kaniko --multi-platform=linux/amd64,linux/arm64 --driver=ci \
-       --digests-from=/artifacts/digests --publish-index=true
+       --digests-from=/artifacts/digests --publish-index=true \
+       --oci-mode=oci --compression=zstd
+
+# Full OCI 1.1 compliant build with annotations
+kaniko --oci-mode=oci --compression=zstd --publish-index=true \
+       --index-annotations=org.opencontainers.image.created=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+```
+
+### Production OCI Configuration
+```bash
+# Recommended production configuration for full OCI compliance
+kaniko --oci-mode=oci \          # Strict OCI compliance
+       --compression=zstd \      # OCI zstd layer compression
+       --publish-index=true \    # Create OCI Image Index
+       --index-annotations="org.opencontainers.image.source=https://github.com/org/repo" \
+       --index-annotations="org.opencontainers.image.licenses=Apache-2.0"
+
+# Legacy compatibility mode (Docker format)
+kaniko --oci-mode=docker \       # Docker compatibility mode
+       --compression=gzip \      # Traditional gzip compression
+       --legacy-manifest-list=true
 ```
 
 ## Testing Strategy
@@ -260,3 +325,54 @@ kaniko --multi-platform=linux/amd64,linux/arm64 --driver=ci \
 4. **Q4**: Observability features and performance optimization
 
 This plan ensures Kaniko remains the premier unprivileged container builder while adding comprehensive multi-architecture support for modern CI/CD and Kubernetes environments.
+
+## Documentation Strategy
+
+### High-Quality Documentation Requirements
+
+**Comprehensive Usage Guides:**
+- **Basic Usage**: Simple examples for standard use cases
+- **OCI Compliance**: Detailed OCI 1.1 configuration guide
+- **Multi-Platform**: Step-by-step multi-architecture building
+- **Security**: Security best practices and configuration
+- **Troubleshooting**: Common issues and solutions
+
+**Documentation Structure:**
+```
+docs/
+├── oci-compliance.md          # OCI 1.1 compliance guide
+├── multi-arch-guide.md        # Multi-platform building
+├── security-best-practices.md # Security configuration
+├── signing-guide.md           # Image signing with cosign
+├── advanced-configuration.md  # Advanced OCI features
+└── troubleshooting.md        # Common issues and solutions
+```
+
+**Key Documentation Features:**
+- Clear argument explanations with examples
+- Use case-based configuration examples
+- Security considerations for each feature
+- Registry-specific compatibility notes
+- Performance optimization tips
+
+### OCI Documentation Focus Areas
+
+**For Standard Users:**
+```bash
+# Simple usage - just works
+kaniko --destination=registry/app:tag
+```
+
+**For OCI Compliance:**
+```bash
+# Full OCI 1.1 compliance
+kaniko --oci-mode=oci --compression=zstd --publish-index=true
+```
+
+**For Security-Conscious Users:**
+```bash
+# Secure build with signing
+kaniko --sign-images=true --cosign-key-path=/secrets/key
+```
+
+This documentation approach ensures that Kaniko remains accessible to all users while providing advanced features for those who need OCI compliance and enhanced security.
