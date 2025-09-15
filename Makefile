@@ -186,3 +186,23 @@ install-container-diff:
 .PHONY: k3s-setup
 k3s-setup:
 	@ ./scripts/k3s-setup.sh
+
+.PHONY: tidy
+tidy:
+	@ echo "Tidying up go.mod and go.sum..."
+	GOFLAGS="" go mod tidy
+	GOFLAGS="" go mod vendor
+	@ echo "Done."
+
+.PHONY: update-deps
+update-deps:
+	@echo "Updating all Go packages to their latest minor or patch releases..."
+	@pkgs=$$(go list ./... | grep -v '/vendor/'); \
+	if [ -n "$$pkgs" ]; then \
+		GOFLAGS="" go get -u $$pkgs; \
+	else \
+		echo "No packages to update."; \
+	fi
+	GOFLAGS="" go mod tidy
+	GOFLAGS="" go mod vendor
+	@echo "Done."
