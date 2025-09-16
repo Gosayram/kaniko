@@ -175,15 +175,15 @@ func (v *Validator) validateDescriptor(desc *v1.Descriptor, context string) erro
 }
 
 // validateConfig validates the image configuration descriptor
-func (v *Validator) validateConfig(config *v1.Descriptor) error {
-	if err := v.validateDescriptor(config, "config"); err != nil {
+func (v *Validator) validateConfig(cfg *v1.Descriptor) error {
+	if err := v.validateDescriptor(cfg, "config"); err != nil {
 		return err
 	}
 
 	// OCI config must have specific media type
-	if config.MediaType != "application/vnd.oci.image.config.v1+json" {
+	if cfg.MediaType != "application/vnd.oci.image.config.v1+json" {
 		return fmt.Errorf("config media type must be %s, got %s",
-			"application/vnd.oci.image.config.v1+json", config.MediaType)
+			"application/vnd.oci.image.config.v1+json", cfg.MediaType)
 	}
 
 	return nil
@@ -244,7 +244,10 @@ func (v *Validator) validatePlatform(platform *v1.Platform) error {
 	}
 
 	// Validate architecture values
-	validArch := []string{"amd64", "arm64", "ppc64le", "s390x", "386", "arm", "mips64", "mips64le", "mips", "mipsle", "riscv64"}
+	validArch := []string{
+		"amd64", "arm64", "ppc64le", "s390x", "386", "arm",
+		"mips64", "mips64le", "mips", "mipsle", "riscv64",
+	}
 	if !v.contains(validArch, platform.Architecture) {
 		return fmt.Errorf("invalid architecture: %s. Valid values: %v", platform.Architecture, validArch)
 	}

@@ -19,8 +19,9 @@ package errors
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/binary"
 	"fmt"
-	"math/rand"
 	"net/http"
 	"strings"
 	"time"
@@ -38,14 +39,23 @@ type RetryConfig struct {
 	BackoffFactor float64
 }
 
+// Default retry configuration constants
+const (
+	defaultMaxAttempts   = 5
+	defaultBaseDelay     = 100 * time.Millisecond
+	defaultMaxDelay      = 30 * time.Second
+	defaultJitterFactor  = 0.2
+	defaultBackoffFactor = 2.0
+)
+
 // DefaultRetryConfig returns a sensible default retry configuration.
 func DefaultRetryConfig() RetryConfig {
 	return RetryConfig{
-		MaxAttempts:   5,
-		BaseDelay:     100 * time.Millisecond,
-		MaxDelay:      30 * time.Second,
-		JitterFactor:  0.2,
-		BackoffFactor: 2.0,
+		MaxAttempts:   defaultMaxAttempts,
+		BaseDelay:     defaultBaseDelay,
+		MaxDelay:      defaultMaxDelay,
+		JitterFactor:  defaultJitterFactor,
+		BackoffFactor: defaultBackoffFactor,
 	}
 }
 
@@ -53,26 +63,35 @@ func DefaultRetryConfig() RetryConfig {
 type ErrorType string
 
 const (
-	// Network errors (retryable)
-	ErrorTypeNetwork    ErrorType = "network"
-	ErrorTypeTimeout    ErrorType = "timeout"
+	// ErrorTypeNetwork represents network-related errors (retryable)
+	ErrorTypeNetwork ErrorType = "network"
+	// ErrorTypeTimeout represents timeout-related errors (retryable)
+	ErrorTypeTimeout ErrorType = "timeout"
+	// ErrorTypeConnection represents connection-related errors (retryable)
 	ErrorTypeConnection ErrorType = "connection"
 
-	// Registry errors
-	ErrorTypeRateLimit  ErrorType = "rate_limit"
-	ErrorTypeAuth       ErrorType = "authentication"
+	// ErrorTypeRateLimit represents rate limit errors from registries (retryable)
+	ErrorTypeRateLimit ErrorType = "rate_limit"
+	// ErrorTypeAuth represents authentication errors (not retryable)
+	ErrorTypeAuth ErrorType = "authentication"
+	// ErrorTypePermission represents permission errors (not retryable)
 	ErrorTypePermission ErrorType = "permission"
-	ErrorTypeNotFound   ErrorType = "not_found"
+	// ErrorTypeNotFound represents resource not found errors (not retryable)
+	ErrorTypeNotFound ErrorType = "not_found"
 
-	// Build errors (usually not retryable)
-	ErrorTypeBuild      ErrorType = "build"
-	ErrorTypeConfig     ErrorType = "configuration"
+	// ErrorTypeBuild represents build-related errors (usually not retryable)
+	ErrorTypeBuild ErrorType = "build"
+	// ErrorTypeConfig represents configuration errors (not retryable)
+	ErrorTypeConfig ErrorType = "configuration"
+	// ErrorTypeValidation represents validation errors (not retryable)
 	ErrorTypeValidation ErrorType = "validation"
 
-	// System errors
+	// ErrorTypeResource represents resource-related system errors (retryable)
 	ErrorTypeResource ErrorType = "resource"
-	ErrorTypeIO       ErrorType = "io"
-	ErrorTypeUnknown  ErrorType = "unknown"
+	// ErrorTypeIO represents I/O-related errors (some may be retryable)
+	ErrorTypeIO ErrorType = "io"
+	// ErrorTypeUnknown represents unknown error types
+	ErrorTypeUnknown ErrorType = "unknown"
 )
 
 // ClassifiedError wraps an error with classification information.
@@ -107,73 +126,117 @@ func ClassifyError(err error) *ClassifiedError {
 
 	errorMsg := strings.ToLower(err.Error())
 
-	// Network-related errors
+	// Check error types in order of priority
+	if classifyNetworkError(errorMsg, classified) {
+		return classified
+	}
+	if classifyTimeoutError(errorMsg, classified) {
+		return classified
+	}
+	if classifyRateLimitError(errorMsg, classified) {
+		return classified
+	}
+	if classifyAuthError(errorMsg, classified) {
+		return classified
+	}
+	if classifyPermissionError(errorMsg, classified) {
+		return classified
+	}
+	if classifyNotFoundError(errorMsg, classified) {
+		return classified
+	}
+	if classifyIOError(errorMsg, classified) {
+		return classified
+	}
+
+	return classified
+}
+
+// classifyNetworkError checks if the error is network-related
+func classifyNetworkError(errorMsg string, classified *ClassifiedError) bool {
 	if strings.Contains(errorMsg, "network") ||
 		strings.Contains(errorMsg, "connection") ||
 		strings.Contains(errorMsg, "socket") ||
 		strings.Contains(errorMsg, "dial") {
 		classified.Type = ErrorTypeNetwork
 		classified.Retryable = true
-		return classified
+		return true
 	}
+	return false
+}
 
-	// Timeout errors
+// classifyTimeoutError checks if the error is timeout-related
+func classifyTimeoutError(errorMsg string, classified *ClassifiedError) bool {
 	if strings.Contains(errorMsg, "timeout") ||
 		strings.Contains(errorMsg, "deadline") ||
 		strings.Contains(errorMsg, "context deadline") {
 		classified.Type = ErrorTypeTimeout
 		classified.Retryable = true
-		return classified
+		return true
 	}
+	return false
+}
 
-	// Rate limiting
+// classifyRateLimitError checks if the error is rate limit-related
+func classifyRateLimitError(errorMsg string, classified *ClassifiedError) bool {
 	if strings.Contains(errorMsg, "rate limit") ||
 		strings.Contains(errorMsg, "429") ||
 		strings.Contains(errorMsg, "too many requests") {
 		classified.Type = ErrorTypeRateLimit
 		classified.Retryable = true
-		return classified
+		return true
 	}
+	return false
+}
 
-	// Authentication errors
+// classifyAuthError checks if the error is authentication-related
+func classifyAuthError(errorMsg string, classified *ClassifiedError) bool {
 	if strings.Contains(errorMsg, "auth") ||
 		strings.Contains(errorMsg, "unauthorized") ||
 		strings.Contains(errorMsg, "401") ||
 		strings.Contains(errorMsg, "credential") {
 		classified.Type = ErrorTypeAuth
 		classified.Retryable = false
-		return classified
+		return true
 	}
+	return false
+}
 
-	// Permission errors
+// classifyPermissionError checks if the error is permission-related
+func classifyPermissionError(errorMsg string, classified *ClassifiedError) bool {
 	if strings.Contains(errorMsg, "permission") ||
 		strings.Contains(errorMsg, "403") ||
 		strings.Contains(errorMsg, "forbidden") {
 		classified.Type = ErrorTypePermission
 		classified.Retryable = false
-		return classified
+		return true
 	}
+	return false
+}
 
-	// Not found errors
+// classifyNotFoundError checks if the error is not found-related
+func classifyNotFoundError(errorMsg string, classified *ClassifiedError) bool {
 	if strings.Contains(errorMsg, "not found") ||
 		strings.Contains(errorMsg, "404") ||
 		strings.Contains(errorMsg, "no such") {
 		classified.Type = ErrorTypeNotFound
 		classified.Retryable = false
-		return classified
+		return true
 	}
+	return false
+}
 
-	// I/O errors
+// classifyIOError checks if the error is I/O-related
+func classifyIOError(errorMsg string, classified *ClassifiedError) bool {
 	if strings.Contains(errorMsg, "io") ||
 		strings.Contains(errorMsg, "file") ||
 		strings.Contains(errorMsg, "disk") ||
 		strings.Contains(errorMsg, "space") {
 		classified.Type = ErrorTypeIO
 		classified.Retryable = true // Some IO errors might be temporary
-		return classified
+		return true
 	}
-
-	return classified
+	return false
 }
 
 // WithRetry executes a function with retry logic based on error classification.
@@ -192,7 +255,7 @@ func WithRetry(ctx context.Context, config RetryConfig, operation func() error) 
 			select {
 			case <-time.After(delay):
 			case <-ctx.Done():
-				return errors.Wrap(ctx.Err(), "operation cancelled during retry")
+				return errors.Wrap(ctx.Err(), "operation canceled during retry")
 			}
 		}
 
@@ -235,9 +298,14 @@ func calculateDelay(config RetryConfig, attempt int) time.Duration {
 		delay = config.MaxDelay
 	}
 
-	// Add jitter
-	jitter := rand.Float64() * config.JitterFactor * float64(delay)
-	delay = delay + time.Duration(jitter)
+	// Add jitter using crypto/rand for secure random number generation
+	jitter, err := secureRandomFloat64()
+	if err != nil {
+		// Fallback to zero jitter if crypto random fails
+		jitter = 0
+	}
+	jitterAmount := jitter * config.JitterFactor * float64(delay)
+	delay += time.Duration(jitterAmount)
 
 	return delay
 }
@@ -308,7 +376,7 @@ func ClassifyHTTPError(statusCode int, message string) error {
 	case statusCode == http.StatusRequestTimeout || statusCode == 408:
 		errorType = ErrorTypeTimeout
 		retryable = true
-	case statusCode >= 500:
+	case statusCode >= http.StatusInternalServerError:
 		errorType = ErrorTypeNetwork // Server errors
 		retryable = true
 	case statusCode == http.StatusUnauthorized || statusCode == 401:
@@ -362,4 +430,21 @@ func WithMaxDelay(delay time.Duration) func(*RetryConfig) {
 	return func(c *RetryConfig) {
 		c.MaxDelay = delay
 	}
+}
+
+// secureRandomFloat64 generates a cryptographically secure random float64 between 0 and 1
+func secureRandomFloat64() (float64, error) {
+	var buf [8]byte
+	_, err := rand.Read(buf[:])
+	if err != nil {
+		return 0, err
+	}
+
+	// Convert the random bytes to a uint64
+	randomUint := binary.BigEndian.Uint64(buf[:])
+
+	// Convert to float64 in range [0, 1)
+	// We use 2^53-1 as the maximum value to avoid precision issues
+	const maxUint53 = 1<<53 - 1
+	return float64(randomUint&maxUint53) / float64(maxUint53), nil
 }

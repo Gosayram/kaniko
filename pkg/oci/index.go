@@ -131,7 +131,8 @@ func buildDockerManifestList(manifests map[string]string, opts *config.KanikoOpt
 }
 
 // fetchManifestDescriptor fetches the actual manifest and creates a proper descriptor
-func fetchManifestDescriptor(digestStr string, platform *v1.Platform, opts *config.KanikoOptions) (v1.Descriptor, error) {
+func fetchManifestDescriptor(digestStr string, platform *v1.Platform,
+	opts *config.KanikoOptions) (v1.Descriptor, error) {
 	if len(opts.Destinations) == 0 {
 		return v1.Descriptor{}, errors.New("no destinations available to fetch manifest")
 	}
@@ -181,58 +182,6 @@ func fetchManifestDescriptor(digestStr string, platform *v1.Platform, opts *conf
 	}, nil
 }
 
-// setIndexMediaType sets the media type for the index
-func setIndexMediaType(index v1.ImageIndex, mediaType types.MediaType) v1.ImageIndex {
-	// This would be implemented using the go-containerregistry index manipulation utilities
-	// For now, we return the index as-is since empty.Index already has the correct media type
-	return index
-}
-
-// addManifestToIndex adds a manifest descriptor to the index
-func addManifestToIndex(index v1.ImageIndex, desc v1.Descriptor) (v1.ImageIndex, error) {
-	// This would use the go-containerregistry index manipulation utilities
-	// For now, we return a simple implementation
-	return &simpleIndex{
-		mediaType:   types.OCIImageIndex,
-		manifests:   append(indexManifests(index), desc),
-		annotations: indexAnnotations(index),
-	}, nil
-}
-
-// addIndexAnnotations adds annotations to the index
-func addIndexAnnotations(index v1.ImageIndex, annotations map[string]string) v1.ImageIndex {
-	existingAnnotations := indexAnnotations(index)
-	for k, v := range annotations {
-		existingAnnotations[k] = v
-	}
-
-	return &simpleIndex{
-		mediaType:   indexMediaType(index),
-		manifests:   indexManifests(index),
-		annotations: existingAnnotations,
-	}
-}
-
-// addOCIComplianceAnnotations adds OCI compliance annotations to the index
-func addOCIComplianceAnnotations(index v1.ImageIndex) v1.ImageIndex {
-	annotations := indexAnnotations(index)
-	if annotations == nil {
-		annotations = make(map[string]string)
-	}
-
-	// Add OCI compliance annotations
-	annotations["org.opencontainers.image.created"] = time.Now().UTC().Format(time.RFC3339)
-	annotations["org.opencontainers.image.vendor"] = "Kaniko"
-	annotations["org.opencontainers.image.authors"] = "Kaniko Project"
-	annotations["org.opencontainers.image.licenses"] = "Apache-2.0"
-
-	return &simpleIndex{
-		mediaType:   indexMediaType(index),
-		manifests:   indexManifests(index),
-		annotations: annotations,
-	}
-}
-
 // createPlatformAnnotations creates annotations for a specific platform
 func createPlatformAnnotations(platform *v1.Platform) map[string]string {
 	if platform == nil {
@@ -268,43 +217,6 @@ func getRemoteOptions(opts *config.KanikoOptions) []remote.Option {
 		remote.WithAuth(nil), // Anonymous auth
 		remote.WithTransport(createTransport(opts)),
 	}
-}
-
-// Helper functions for index manipulation (would be implemented using go-containerregistry utilities)
-func indexManifests(index v1.ImageIndex) []v1.Descriptor {
-	if idx, ok := index.(*simpleIndex); ok {
-		return idx.manifests
-	}
-	// Fallback: try to get manifests from real index
-	manifest, err := index.IndexManifest()
-	if err != nil {
-		return nil
-	}
-	return manifest.Manifests
-}
-
-func indexAnnotations(index v1.ImageIndex) map[string]string {
-	if idx, ok := index.(*simpleIndex); ok {
-		return idx.annotations
-	}
-	// Fallback: try to get annotations from real index
-	manifest, err := index.IndexManifest()
-	if err != nil {
-		return nil
-	}
-	return manifest.Annotations
-}
-
-func indexMediaType(index v1.ImageIndex) types.MediaType {
-	if idx, ok := index.(*simpleIndex); ok {
-		return idx.mediaType
-	}
-	// Fallback: try to get media type from real index
-	mediaType, err := index.MediaType()
-	if err != nil {
-		return types.OCIImageIndex
-	}
-	return mediaType
 }
 
 // simpleIndex is a basic implementation of v1.ImageIndex
@@ -395,7 +307,7 @@ func PushIndex(index v1.ImageIndex, opts *config.KanikoOptions) error {
 }
 
 // createTransport creates HTTP transport based on Kaniko configuration
-func createTransport(opts *config.KanikoOptions) *http.Transport {
+func createTransport(_ *config.KanikoOptions) *http.Transport {
 	// Create a basic HTTP transport - this would be enhanced with proper configuration
 	// based on KanikoOptions (TLS settings, timeouts, etc.)
 	return &http.Transport{
