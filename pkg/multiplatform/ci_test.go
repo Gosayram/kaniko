@@ -167,11 +167,11 @@ func TestCIDriver_readDigestFromFile(t *testing.T) {
 	tempDir := t.TempDir()
 
 	tests := []struct {
-		name      string
-		setup     func()
-		platform  string
+		name       string
+		setup      func()
+		platform   string
 		wantDigest string
-		wantErr   bool
+		wantErr    bool
 	}{
 		{
 			name: "valid digest file",
@@ -187,24 +187,24 @@ func TestCIDriver_readDigestFromFile(t *testing.T) {
 			setup: func() {
 				// No file created
 			},
-			platform:  "linux/amd64",
-			wantErr:   true,
+			platform: "linux/amd64",
+			wantErr:  true,
 		},
 		{
 			name: "empty file",
 			setup: func() {
 				os.WriteFile(filepath.Join(tempDir, "linux-amd64.digest"), []byte(""), 0644)
 			},
-			platform:  "linux/amd64",
-			wantErr:   true,
+			platform: "linux/amd64",
+			wantErr:  true,
 		},
 		{
 			name: "invalid digest format",
 			setup: func() {
 				os.WriteFile(filepath.Join(tempDir, "linux-amd64.digest"), []byte("invalid"), 0644)
 			},
-			platform:  "linux/amd64",
-			wantErr:   true,
+			platform: "linux/amd64",
+			wantErr:  true,
 		},
 	}
 

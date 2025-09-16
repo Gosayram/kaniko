@@ -19,7 +19,7 @@ package oci
 import (
 	"testing"
 
-	"github.com/google/go-containerregistry/pkg/v1"
+	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/types"
 	"github.com/stretchr/testify/assert"
 
@@ -207,7 +207,7 @@ func TestValidator_ValidatePlatform(t *testing.T) {
 	validator := NewValidator(&config.KanikoOptions{})
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := validator.validatePlatform(tt.platform)
+			err := validator.validatePlatform(&tt.platform)
 			if tt.wantErr {
 				assert.Error(t, err)
 			} else {
@@ -219,43 +219,43 @@ func TestValidator_ValidatePlatform(t *testing.T) {
 
 func TestValidator_ValidateAnnotationKey(t *testing.T) {
 	tests := []struct {
-		name string
-		key  string
+		name    string
+		key     string
 		wantErr bool
 	}{
 		{
-			name: "valid OCI annotation",
-			key:  "org.opencontainers.image.created",
+			name:    "valid OCI annotation",
+			key:     "org.opencontainers.image.created",
 			wantErr: false,
 		},
 		{
-			name: "valid custom annotation",
-			key:  "com.example.custom",
+			name:    "valid custom annotation",
+			key:     "com.example.custom",
 			wantErr: false,
 		},
 		{
-			name: "invalid single part",
-			key:  "simplekey",
+			name:    "invalid single part",
+			key:     "simplekey",
 			wantErr: true,
 		},
 		{
-			name: "invalid consecutive dots",
-			key:  "com..example",
+			name:    "invalid consecutive dots",
+			key:     "com..example",
 			wantErr: true,
 		},
 		{
-			name: "invalid starts with dot",
-			key:  ".com.example",
+			name:    "invalid starts with dot",
+			key:     ".com.example",
 			wantErr: true,
 		},
 		{
-			name: "invalid ends with dot",
-			key:  "com.example.",
+			name:    "invalid ends with dot",
+			key:     "com.example.",
 			wantErr: true,
 		},
 		{
-			name: "empty key",
-			key:  "",
+			name:    "empty key",
+			key:     "",
 			wantErr: true,
 		},
 	}
@@ -275,45 +275,45 @@ func TestValidator_ValidateAnnotationKey(t *testing.T) {
 
 func TestValidator_ValidateAnnotationValue(t *testing.T) {
 	tests := []struct {
-		name  string
-		key   string
-		value string
+		name    string
+		key     string
+		value   string
 		wantErr bool
 	}{
 		{
-			name:  "valid RFC3339 date",
-			key:   "org.opencontainers.image.created",
-			value: "2023-01-01T00:00:00Z",
+			name:    "valid RFC3339 date",
+			key:     "org.opencontainers.image.created",
+			value:   "2023-01-01T00:00:00Z",
 			wantErr: false,
 		},
 		{
-			name:  "invalid RFC3339 date",
-			key:   "org.opencontainers.image.created",
-			value: "2023-01-01",
+			name:    "invalid RFC3339 date",
+			key:     "org.opencontainers.image.created",
+			value:   "2023-01-01",
 			wantErr: true,
 		},
 		{
-			name:  "valid URL",
-			key:   "org.opencontainers.image.url",
-			value: "https://example.com",
+			name:    "valid URL",
+			key:     "org.opencontainers.image.url",
+			value:   "https://example.com",
 			wantErr: false,
 		},
 		{
-			name:  "invalid URL",
-			key:   "org.opencontainers.image.url",
-			value: "example.com",
+			name:    "invalid URL",
+			key:     "org.opencontainers.image.url",
+			value:   "example.com",
 			wantErr: true,
 		},
 		{
-			name:  "empty value",
-			key:   "org.opencontainers.image.authors",
-			value: "",
+			name:    "empty value",
+			key:     "org.opencontainers.image.authors",
+			value:   "",
 			wantErr: true,
 		},
 		{
-			name:  "non-OCI annotation",
-			key:   "custom.annotation",
-			value: "any value",
+			name:    "non-OCI annotation",
+			key:     "custom.annotation",
+			value:   "any value",
 			wantErr: false,
 		},
 	}
@@ -333,24 +333,24 @@ func TestValidator_ValidateAnnotationValue(t *testing.T) {
 
 func TestValidator_ValidateCompression(t *testing.T) {
 	tests := []struct {
-		name       string
+		name        string
 		compression config.Compression
-		wantErr    bool
+		wantErr     bool
 	}{
 		{
-			name:       "valid gzip",
+			name:        "valid gzip",
 			compression: config.GZip,
-			wantErr:    false,
+			wantErr:     false,
 		},
 		{
-			name:       "valid zstd",
+			name:        "valid zstd",
 			compression: config.ZStd,
-			wantErr:    false,
+			wantErr:     false,
 		},
 		{
-			name:       "invalid compression",
+			name:        "invalid compression",
 			compression: config.Compression("invalid"),
-			wantErr:    true,
+			wantErr:     true,
 		},
 	}
 

@@ -2,7 +2,7 @@
 Copyright 2018 Google LLC
 
 Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this this file except in compliance with the License.
+you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
 
     http://www.apache.org/licenses/LICENSE-2.0
@@ -20,7 +20,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/google/go-containerregistry/pkg/v1"
+	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/types"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
@@ -73,7 +73,7 @@ func (v *Validator) ValidateImageIndex(index v1.ImageIndex) error {
 }
 
 // ValidateImageManifest validates an OCI Image Manifest for compliance
-func (v *Validator) ValidateImageManifest(manifest v1.Manifest) error {
+func (v *Validator) ValidateImageManifest(manifest *v1.Manifest) error {
 	logrus.Info("Validating OCI Image Manifest compliance")
 
 	// Validate media type
@@ -87,7 +87,7 @@ func (v *Validator) ValidateImageManifest(manifest v1.Manifest) error {
 	}
 
 	// Validate config
-	if err := v.validateConfig(manifest.Config); err != nil {
+	if err := v.validateConfig(&manifest.Config); err != nil {
 		return err
 	}
 
@@ -128,8 +128,9 @@ func (v *Validator) validateMediaType(mediaType types.MediaType) error {
 
 // validateSchemaVersion validates schema version compliance
 func (v *Validator) validateSchemaVersion(version int) error {
-	if version != 2 {
-		return fmt.Errorf("unsupported schema version: %d. Expected: 2", version)
+	const expectedSchemaVersion = 2
+	if version != expectedSchemaVersion {
+		return fmt.Errorf("unsupported schema version: %d. Expected: %d", version, expectedSchemaVersion)
 	}
 	return nil
 }
@@ -140,14 +141,14 @@ func (v *Validator) validateManifests(manifests []v1.Descriptor) error {
 		return errors.New("index contains no manifests")
 	}
 
-	for i, manifest := range manifests {
-		if err := v.validateDescriptor(manifest, fmt.Sprintf("manifest[%d]", i)); err != nil {
+	for i := range manifests {
+		if err := v.validateDescriptor(&manifests[i], fmt.Sprintf("manifest[%d]", i)); err != nil {
 			return err
 		}
 
 		// Validate platform information for multi-platform images
-		if manifest.Platform != nil {
-			if err := v.validatePlatform(*manifest.Platform); err != nil {
+		if manifests[i].Platform != nil {
+			if err := v.validatePlatform(manifests[i].Platform); err != nil {
 				return errors.Wrapf(err, "invalid platform in manifest %d", i)
 			}
 		}
@@ -157,7 +158,7 @@ func (v *Validator) validateManifests(manifests []v1.Descriptor) error {
 }
 
 // validateDescriptor validates a descriptor object
-func (v *Validator) validateDescriptor(desc v1.Descriptor, context string) error {
+func (v *Validator) validateDescriptor(desc *v1.Descriptor, context string) error {
 	if desc.Digest.Hex == "" {
 		return fmt.Errorf("%s: empty digest", context)
 	}
@@ -174,7 +175,7 @@ func (v *Validator) validateDescriptor(desc v1.Descriptor, context string) error
 }
 
 // validateConfig validates the image configuration descriptor
-func (v *Validator) validateConfig(config v1.Descriptor) error {
+func (v *Validator) validateConfig(config *v1.Descriptor) error {
 	if err := v.validateDescriptor(config, "config"); err != nil {
 		return err
 	}
@@ -194,14 +195,14 @@ func (v *Validator) validateLayers(layers []v1.Descriptor) error {
 		return errors.New("no layers in manifest")
 	}
 
-	for i, layer := range layers {
-		if err := v.validateDescriptor(layer, fmt.Sprintf("layer[%d]", i)); err != nil {
+	for i := range layers {
+		if err := v.validateDescriptor(&layers[i], fmt.Sprintf("layer[%d]", i)); err != nil {
 			return err
 		}
 
 		// Validate layer media types
-		if !v.isValidLayerMediaType(layer.MediaType) {
-			return fmt.Errorf("layer[%d]: invalid media type: %s", i, layer.MediaType)
+		if !v.isValidLayerMediaType(layers[i].MediaType) {
+			return fmt.Errorf("layer[%d]: invalid media type: %s", i, layers[i].MediaType)
 		}
 	}
 
@@ -227,7 +228,7 @@ func (v *Validator) isValidLayerMediaType(mediaType types.MediaType) bool {
 }
 
 // validatePlatform validates platform specification
-func (v *Validator) validatePlatform(platform v1.Platform) error {
+func (v *Validator) validatePlatform(platform *v1.Platform) error {
 	if platform.OS == "" {
 		return errors.New("platform OS cannot be empty")
 	}
@@ -251,8 +252,8 @@ func (v *Validator) validatePlatform(platform v1.Platform) error {
 	// Validate variant if present
 	if platform.Variant != "" {
 		validVariants := map[string][]string{
-			"arm":   {"v6", "v7", "v8"},
-			"arm64": {"v8"},
+			"arm":     {"v6", "v7", "v8"},
+			"arm64":   {"v8"},
 			"ppc64le": {"power8", "power9"},
 		}
 
@@ -312,7 +313,8 @@ func (v *Validator) validateAnnotationKey(key string) error {
 
 	// For custom annotations, require reverse domain notation
 	parts := strings.Split(key, ".")
-	if len(parts) < 2 {
+	const minPartsCount = 2
+	if len(parts) < minPartsCount {
 		return errors.New("custom annotation keys must use reverse domain notation (e.g., com.example.key)")
 	}
 
@@ -333,7 +335,7 @@ func (v *Validator) validateAnnotationValue(key, value string) error {
 		}
 	case "org.opencontainers.image.authors":
 		// Basic validation for authors
-		if len(value) == 0 {
+		if value == "" {
 			return errors.New("authors cannot be empty")
 		}
 	case "org.opencontainers.image.url":
@@ -401,11 +403,11 @@ func (v *Validator) GetValidationReport(index v1.ImageIndex) (map[string]interfa
 
 	// Platform distribution
 	platforms := make(map[string]int)
-	for _, m := range manifest.Manifests {
-		if m.Platform != nil {
-			platformKey := fmt.Sprintf("%s/%s", m.Platform.OS, m.Platform.Architecture)
-			if m.Platform.Variant != "" {
-				platformKey += "/" + m.Platform.Variant
+	for i := range manifest.Manifests {
+		if manifest.Manifests[i].Platform != nil {
+			platformKey := fmt.Sprintf("%s/%s", manifest.Manifests[i].Platform.OS, manifest.Manifests[i].Platform.Architecture)
+			if manifest.Manifests[i].Platform.Variant != "" {
+				platformKey += "/" + manifest.Manifests[i].Platform.Variant
 			}
 			platforms[platformKey]++
 		}

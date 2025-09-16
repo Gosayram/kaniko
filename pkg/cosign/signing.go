@@ -140,10 +140,10 @@ func (s *Signer) executeCosign(ctx context.Context, args []string) error {
 	logrus.Debugf("Executing cosign command: cosign %s", strings.Join(args, " "))
 
 	cmd := exec.CommandContext(ctx, "cosign", args...)
-	
+
 	// Capture output for logging
 	output, err := cmd.CombinedOutput()
-	
+
 	if err != nil {
 		logrus.Errorf("Cosign command failed: %s", string(output))
 		return errors.Wrap(err, "cosign command execution failed")

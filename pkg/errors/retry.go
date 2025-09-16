@@ -27,7 +27,6 @@ import (
 
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
-
 )
 
 // RetryConfig configuration for retry operations.
@@ -55,25 +54,25 @@ type ErrorType string
 
 const (
 	// Network errors (retryable)
-	ErrorTypeNetwork      ErrorType = "network"
-	ErrorTypeTimeout      ErrorType = "timeout"
-	ErrorTypeConnection   ErrorType = "connection"
-	
+	ErrorTypeNetwork    ErrorType = "network"
+	ErrorTypeTimeout    ErrorType = "timeout"
+	ErrorTypeConnection ErrorType = "connection"
+
 	// Registry errors
-	ErrorTypeRateLimit    ErrorType = "rate_limit"
-	ErrorTypeAuth         ErrorType = "authentication"
-	ErrorTypePermission   ErrorType = "permission"
-	ErrorTypeNotFound     ErrorType = "not_found"
-	
+	ErrorTypeRateLimit  ErrorType = "rate_limit"
+	ErrorTypeAuth       ErrorType = "authentication"
+	ErrorTypePermission ErrorType = "permission"
+	ErrorTypeNotFound   ErrorType = "not_found"
+
 	// Build errors (usually not retryable)
-	ErrorTypeBuild        ErrorType = "build"
-	ErrorTypeConfig       ErrorType = "configuration"
-	ErrorTypeValidation   ErrorType = "validation"
-	
+	ErrorTypeBuild      ErrorType = "build"
+	ErrorTypeConfig     ErrorType = "configuration"
+	ErrorTypeValidation ErrorType = "validation"
+
 	// System errors
-	ErrorTypeResource     ErrorType = "resource"
-	ErrorTypeIO           ErrorType = "io"
-	ErrorTypeUnknown      ErrorType = "unknown"
+	ErrorTypeResource ErrorType = "resource"
+	ErrorTypeIO       ErrorType = "io"
+	ErrorTypeUnknown  ErrorType = "unknown"
 )
 
 // ClassifiedError wraps an error with classification information.
@@ -107,7 +106,7 @@ func ClassifyError(err error) *ClassifiedError {
 	}
 
 	errorMsg := strings.ToLower(err.Error())
-	
+
 	// Network-related errors
 	if strings.Contains(errorMsg, "network") ||
 		strings.Contains(errorMsg, "connection") ||
@@ -180,16 +179,16 @@ func ClassifyError(err error) *ClassifiedError {
 // WithRetry executes a function with retry logic based on error classification.
 func WithRetry(ctx context.Context, config RetryConfig, operation func() error) error {
 	start := time.Now()
-	
+
 	var lastErr error
 	var attempt int
 
 	for attempt = 0; attempt < config.MaxAttempts; attempt++ {
 		if attempt > 0 {
 			delay := calculateDelay(config, attempt)
-			logrus.Infof("Retrying operation (attempt %d/%d, delay: %v)", 
+			logrus.Infof("Retrying operation (attempt %d/%d, delay: %v)",
 				attempt+1, config.MaxAttempts, delay)
-			
+
 			select {
 			case <-time.After(delay):
 			case <-ctx.Done():
@@ -205,13 +204,12 @@ func WithRetry(ctx context.Context, config RetryConfig, operation func() error) 
 		lastErr = err
 		classified := ClassifyError(err)
 
-
 		if !classified.Retryable {
 			logrus.Debugf("Non-retryable error: %s", classified.Error())
 			break
 		}
 
-		logrus.Warnf("Retryable error (attempt %d/%d): %s", 
+		logrus.Warnf("Retryable error (attempt %d/%d): %s",
 			attempt+1, config.MaxAttempts, classified.Error())
 	}
 

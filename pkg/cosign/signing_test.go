@@ -70,7 +70,7 @@ func TestSigner_ValidateCosignConfig(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			signer := NewSigner(tt.opts)
 			err := signer.validateCosignConfig()
-			
+
 			if tt.wantErr {
 				assert.Error(t, err)
 			} else {
@@ -176,7 +176,7 @@ func TestSigner_GetPublicKey(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			signer := NewSigner(tt.opts)
 			_, err := signer.GetPublicKey(context.Background())
-			
+
 			if tt.wantErr {
 				assert.Error(t, err)
 			} else {
@@ -200,7 +200,7 @@ func TestSigner_GenerateKeyPair(t *testing.T) {
 
 	signer := NewSigner(opts)
 	err = signer.GenerateKeyPair(context.Background(), tempDir)
-	
+
 	// This will fail because cosign isn't available in test environment,
 	// but we can verify the function structure is correct
 	assert.Error(t, err) // Should fail due to missing cosign binary
@@ -213,7 +213,7 @@ func TestSigner_IsImageSigned(t *testing.T) {
 
 	signer := NewSigner(opts)
 	isSigned, err := signer.IsImageSigned(context.Background(), "registry/image:tag")
-	
+
 	// This will fail because cosign isn't available in test environment,
 	// but we can verify the function structure is correct
 	assert.Error(t, err) // Should fail due to missing cosign binary
@@ -227,7 +227,7 @@ func TestSigner_VerifyImage(t *testing.T) {
 
 	signer := NewSigner(opts)
 	err := signer.VerifyImage(context.Background(), "registry/image:tag")
-	
+
 	// This will fail because cosign isn't available in test environment,
 	// but we can verify the function structure is correct
 	assert.Error(t, err) // Should fail due to missing cosign binary
@@ -240,7 +240,7 @@ func TestSigner_ExecuteCosign(t *testing.T) {
 
 	signer := NewSigner(opts)
 	err := signer.executeCosign(context.Background(), []string{"version"})
-	
+
 	// This will fail because cosign isn't available in test environment
 	assert.Error(t, err)
 }
@@ -275,7 +275,7 @@ func TestSigner_IntegrationScenarios(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			signer := NewSigner(tt.opts)
 			err := tt.testFn(signer)
-			
+
 			if tt.wantErr {
 				assert.Error(t, err)
 			} else {
@@ -292,14 +292,14 @@ func TestSigner_SecurityFeatures(t *testing.T) {
 	}
 
 	signer := NewSigner(opts)
-	
+
 	// Signing should be no-op when disabled
 	err := signer.SignImage(context.Background(), "registry/image:tag")
 	assert.NoError(t, err)
-	
+
 	err = signer.SignIndex(context.Background(), "registry/image-index:tag")
 	assert.NoError(t, err)
-	
+
 	// Verification should attempt to work regardless
 	err = signer.VerifyImage(context.Background(), "registry/image:tag")
 	assert.Error(t, err) // Due to missing cosign, but structure is correct
@@ -312,11 +312,11 @@ func TestSigner_ErrorHandling(t *testing.T) {
 	}
 
 	signer := NewSigner(opts)
-	
+
 	// Should fail validation due to invalid key path
 	err := signer.validateCosignConfig()
 	assert.Error(t, err)
-	
+
 	// Should still build args correctly
 	args := signer.buildCosignArgs("registry/image:tag")
 	expected := []string{"sign", "--key", "/invalid/path/to/key", "registry/image:tag"}
