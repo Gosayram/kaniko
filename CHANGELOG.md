@@ -1,20 +1,20 @@
 # v1.24.1 Release 2025-09-16
 The executor images in this release are:
 ```
-gcr.io/kaniko-project/executor:v1.24.1
-gcr.io/kaniko-project/executor:latest
+gcr.io/Gosayram/executor:v1.24.1
+gcr.io/Gosayram/executor:latest
 ```
 
 The debug images are available at:
 ```
-gcr.io/kaniko-project/executor:debug
-gcr.io/kaniko-project/executor:v1.24.1-debug
+gcr.io/Gosayram/executor:debug
+gcr.io/Gosayram/executor:v1.24.1-debug
 ```
 
 The slim executor images which don't contain any authentication binaries are available at:
 ```
-gcr.io/kaniko-project/executor:slim
-gcr.io/kaniko-project/executor:v1.24.1-slim
+gcr.io/Gosayram/executor:slim
+gcr.io/Gosayram/executor:v1.24.1-slim
 ```
 
 
