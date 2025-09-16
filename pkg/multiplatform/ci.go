@@ -18,6 +18,7 @@ package multiplatform
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -36,22 +37,60 @@ type CIDriver struct {
 
 // NewCIDriver creates a new CI driver instance
 func NewCIDriver(opts *config.KanikoOptions) (*CIDriver, error) {
+	// Auto-detect DigestsFrom if not set
+	if opts.DigestsFrom == "" {
+		if workspace := os.Getenv("GITHUB_WORKSPACE"); workspace != "" {
+			opts.DigestsFrom = filepath.Join(workspace, "digests")
+			logrus.Infof("Detected GitHub Actions; using %s for digests", opts.DigestsFrom)
+		} else if ciDir := os.Getenv("CI_DIGESTS_DIR"); ciDir != "" {
+			opts.DigestsFrom = ciDir
+			logrus.Infof("Using CI_DIGESTS_DIR %s for digests", opts.DigestsFrom)
+		} else {
+			// Fallback to temp dir for local CI-like runs
+			opts.DigestsFrom = filepath.Join(os.TempDir(), "kaniko-digests")
+			logrus.Infof("No CI env detected; using %s for digests", opts.DigestsFrom)
+		}
+		// Ensure dir exists
+		if err := os.MkdirAll(opts.DigestsFrom, 0755); err != nil {
+			return nil, fmt.Errorf("failed to create digests dir %s: %w", opts.DigestsFrom, err)
+		}
+	}
 	return &CIDriver{
 		opts: opts,
 	}, nil
 }
 
 // ValidatePlatforms validates that digest files are available for requested platforms
-func (d *CIDriver) ValidatePlatforms(_ []string) error {
-	if d.opts.DigestsFrom == "" {
-		return errors.New("CI driver requires --digests-from path to read digest files")
-	}
-
-	// Check if digest directory exists
+func (d *CIDriver) ValidatePlatforms(platforms []string) error {
 	if _, err := os.Stat(d.opts.DigestsFrom); os.IsNotExist(err) {
-		return errors.Errorf("digests directory %s does not exist", d.opts.DigestsFrom)
+		return fmt.Errorf("digests directory does not exist: %s", d.opts.DigestsFrom)
 	}
-
+	if len(platforms) == 0 {
+		// Auto mode: check has at least one .digest
+		entries, err := os.ReadDir(d.opts.DigestsFrom)
+		if err != nil {
+			return fmt.Errorf("failed to read digests dir: %w", err)
+		}
+		hasDigest := false
+		for _, entry := range entries {
+			if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".digest") {
+				hasDigest = true
+				break
+			}
+		}
+		if !hasDigest {
+			return errors.New("no .digest files found in " + d.opts.DigestsFrom + " for auto-collection")
+		}
+	} else {
+		// Specific platforms: check each file exists
+		for _, platform := range platforms {
+			filename := d.getDigestFilename(platform)
+			path := filepath.Join(d.opts.DigestsFrom, filename)
+			if _, err := os.Stat(path); os.IsNotExist(err) {
+				return fmt.Errorf("digest file missing for %s: %s", platform, path)
+			}
+		}
+	}
 	return nil
 }
 
@@ -61,13 +100,44 @@ func (d *CIDriver) ExecuteBuilds(_ context.Context, platforms []string) (map[str
 
 	logrus.Infof("Reading digests from directory: %s", d.opts.DigestsFrom)
 
-	for _, platform := range platforms {
-		digest, err := d.readDigestForPlatform(platform)
+	if len(platforms) == 0 {
+		// Auto-collect all .digest files (matrix mode)
+		entries, err := os.ReadDir(d.opts.DigestsFrom)
 		if err != nil {
-			return nil, errors.Wrapf(err, "failed to read digest for platform %s", platform)
+			return nil, fmt.Errorf("failed to read digests dir: %w", err)
 		}
-		digests[platform] = digest
-		logrus.Infof("Platform %s: %s", platform, digest)
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+			filename := entry.Name()
+			if !strings.HasSuffix(filename, ".digest") {
+				continue
+			}
+			platform := strings.TrimSuffix(filename, ".digest")
+			platform = strings.ReplaceAll(platform, "-", "/") // Restore os/arch
+			path := filepath.Join(d.opts.DigestsFrom, filename)
+			digest, err := d.readDigestFromFile(path)
+			if err != nil {
+				logrus.Warnf("Skipping %s: %v", filename, err)
+				continue
+			}
+			digests[platform] = digest
+			logrus.Infof("Auto-collected %s: %s", platform, digest)
+		}
+		if len(digests) == 0 {
+			return nil, errors.New("no valid .digest files found for auto-collection")
+		}
+	} else {
+		// Specific platforms
+		for _, platform := range platforms {
+			digest, err := d.readDigestForPlatform(platform)
+			if err != nil {
+				return nil, err
+			}
+			digests[platform] = digest
+			logrus.Infof("Platform %s: %s", platform, digest)
+		}
 	}
 
 	return digests, nil
@@ -110,8 +180,19 @@ func (d *CIDriver) Cleanup() error {
 }
 
 // readDigestFromFile reads digest from file for a specific platform
-func (d *CIDriver) readDigestFromFile(platform string) (string, error) {
-	return d.readDigestForPlatform(platform)
+func (d *CIDriver) readDigestFromFile(filename string) (string, error) {
+	data, err := os.ReadFile(filename)
+	if err != nil {
+		return "", err
+	}
+	digest := strings.TrimSpace(string(data))
+	if digest == "" {
+		return "", fmt.Errorf("empty digest file: %s", filename)
+	}
+	if !strings.HasPrefix(digest, "sha256:") || len(digest) != 71 {
+		return "", fmt.Errorf("invalid digest format in %s: %s (expected sha256:64hex)", filename, digest)
+	}
+	return digest, nil
 }
 
 // getDigestFilename returns the expected filename for a platform's digest

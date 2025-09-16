@@ -20,6 +20,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/google/go-github/github"
 	"github.com/sirupsen/logrus"
@@ -61,8 +62,15 @@ func main() {
 func printPullRequests() {
 	client := getClient()
 
-	releases, _, _ := client.Repositories.ListReleases(context.Background(), org, repo, &github.ListOptions{})
-	lastReleaseTime := *releases[0].PublishedAt
+	var lastReleaseTime *github.Timestamp
+	releases, _, err := client.Repositories.ListReleases(context.Background(), org, repo, &github.ListOptions{})
+	if err != nil || len(releases) == 0 {
+		// If no releases found, use a very old date to include all PRs
+		oldDate := github.Timestamp{Time: time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)}
+		lastReleaseTime = &oldDate
+	} else {
+		lastReleaseTime = releases[0].PublishedAt
+	}
 
 	listSize := 1
 	seen := map[int]bool{}

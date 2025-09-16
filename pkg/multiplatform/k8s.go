@@ -17,6 +17,7 @@ limitations under the License.
 package multiplatform
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -28,9 +29,12 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/remotecommand"
 	"k8s.io/utils/ptr"
 
 	"github.com/Gosayram/kaniko/pkg/config"
@@ -45,6 +49,7 @@ const (
 // KubernetesDriver implements the Driver interface for Kubernetes-based multi-platform builds
 type KubernetesDriver struct {
 	opts      *config.KanikoOptions
+	config    *rest.Config
 	client    *kubernetes.Clientset
 	namespace string
 }
@@ -71,6 +76,7 @@ func NewKubernetesDriver(opts *config.KanikoOptions) (*KubernetesDriver, error) 
 
 	return &KubernetesDriver{
 		opts:      opts,
+		config:    kubeConfig,
 		client:    clientset,
 		namespace: namespace,
 	}, nil
@@ -233,6 +239,12 @@ func (d *KubernetesDriver) createBuildJob(platform string) (*batchv1.Job, error)
 		args = append(args, fmt.Sprintf("--cache-ttl=%s", d.opts.CacheTTL))
 	}
 
+	// Assume registry secret name from env or default "dockerconfigjson"
+	registrySecret := os.Getenv("KANIKO_REGISTRY_SECRET")
+	if registrySecret == "" {
+		registrySecret = "dockerconfigjson"
+	}
+
 	job := &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      jobName,
@@ -245,7 +257,8 @@ func (d *KubernetesDriver) createBuildJob(platform string) (*batchv1.Job, error)
 			BackoffLimit: ptr.To[int32](0),
 			Template: corev1.PodTemplateSpec{
 				Spec: corev1.PodSpec{
-					RestartPolicy: corev1.RestartPolicyNever,
+					ServiceAccountName: "kaniko-builder", // From plan example
+					RestartPolicy:      corev1.RestartPolicyNever,
 					NodeSelector: map[string]string{
 						"kubernetes.io/arch": arch,
 						"kubernetes.io/os":   osName,
@@ -267,13 +280,32 @@ func (d *KubernetesDriver) createBuildJob(platform string) (*batchv1.Job, error)
 							},
 							VolumeMounts: []corev1.VolumeMount{
 								{
+									Name:      "docker-config",
+									MountPath: "/kaniko/.docker/",
+									ReadOnly:  true,
+								},
+								{
 									Name:      "output",
 									MountPath: "/output",
+								},
+							},
+							Env: []corev1.EnvVar{
+								{
+									Name:  "DOCKER_CONFIG",
+									Value: "/kaniko/.docker/",
 								},
 							},
 						},
 					},
 					Volumes: []corev1.Volume{
+						{
+							Name: "docker-config",
+							VolumeSource: corev1.VolumeSource{
+								Secret: &corev1.SecretVolumeSource{
+									SecretName: registrySecret,
+								},
+							},
+						},
 						{
 							Name: "output",
 							VolumeSource: corev1.VolumeSource{
@@ -329,16 +361,52 @@ func (d *KubernetesDriver) readDigestFromPod(ctx context.Context, jobName, platf
 		return "", fmt.Errorf("no pods found for job %s", jobName)
 	}
 
-	// In real implementation, we would read the digest from the pod's output volume
-	// For now, we'll use the filename pattern as in the CI driver
-	filename := d.getDigestFilename(platform)
-	expectedDigestFile := fmt.Sprintf("/output/%s", filename)
+	// Assume first (and only) pod from job
+	pod := &pods.Items[0]
+	if pod.Status.Phase != corev1.PodSucceeded {
+		return "", fmt.Errorf("pod %s/%s not succeeded: %s", d.namespace, pod.Name, pod.Status.Phase)
+	}
 
-	logrus.Infof("Digest should be available at: %s", expectedDigestFile)
+	// Exec into pod to cat /output/digest.txt
+	req := d.client.CoreV1().RESTClient().Post().
+		Resource("pods").
+		Name(pod.Name).
+		Namespace(d.namespace).
+		SubResource("exec").
+		VersionedParams(&corev1.PodExecOptions{
+			Command: []string{"cat", "/output/digest.txt"},
+			Stdin:   false,
+			Stdout:  true,
+			Stderr:  true,
+			TTY:     false,
+		}, runtime.NewParameterCodec(scheme.Scheme))
 
-	// In a real implementation, we would use the Kubernetes API to read the file
-	// from the pod's volume or use a sidecar container to extract the digest
-	return "sha256:placeholder-digest-" + strings.ReplaceAll(platform, "/", "-"), nil
+	exec, err := remotecommand.NewSPDYExecutor(d.config, "POST", req.URL())
+	if err != nil {
+		return "", fmt.Errorf("failed to create exec: %w", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	err = exec.Stream(remotecommand.StreamOptions{
+		Stdout: &stdout,
+		Stderr: &stderr,
+		Tty:    false,
+	})
+	if err != nil {
+		return "", fmt.Errorf("exec failed: %w; stderr: %s", err, stderr.String())
+	}
+
+	digest := strings.TrimSpace(stdout.String())
+	if digest == "" {
+		return "", fmt.Errorf("empty digest from /output/digest.txt")
+	}
+
+	if !strings.HasPrefix(digest, "sha256:") {
+		return "", fmt.Errorf("invalid digest format: %s", digest)
+	}
+
+	logrus.Infof("Retrieved digest for %s: %s", platform, digest)
+	return digest, nil
 }
 
 // getDigestFilename returns the expected filename for a platform's digest

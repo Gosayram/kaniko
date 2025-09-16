@@ -17,12 +17,19 @@
 DIR=$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )
 EXAMPLES_DIR=${DIR}/../examples
 
-# Prompt the user for the version
-echo -n "Enter the version for this release - ex: v1.14.0: "
-read VERSION
-
-# Remove 'v' prefix from version
-MAKEFILE_VERSION=$(echo $VERSION | sed 's/^[v]//')
+# Read version from .release-version file
+if [ -f .release-version ]; then
+    MAKEFILE_VERSION=$(cat .release-version)
+    VERSION="v$MAKEFILE_VERSION"
+    echo "Using version from .release-version: $VERSION"
+else
+    # Prompt the user for the version
+    echo -n "Enter the version for this release - ex: v1.14.0: "
+    read VERSION
+    
+    # Remove 'v' prefix from version
+    MAKEFILE_VERSION=$(echo $VERSION | sed 's/^[v]//')
+fi
 
 # Extract major, minor, and build version numbers
 VERSION_MAJOR=$(echo $MAKEFILE_VERSION | cut -d. -f1)
@@ -37,15 +44,22 @@ DATE=$(date +'%Y-%m-%d')
 # you can pass your github token with --token here if you run out of requests
 # Capture output and replace newline characters with a placeholder
 PULL_REQS=$(go run ${DIR}/release_notes/listpullreqs.go | tr '\n' '|')
-CONTRIBUTORS=$(git log "$(git describe  --abbrev=0)".. --format="%aN" --reverse | sort | uniq | awk '{printf "- %s\n", $0 }' | tr '\n' '|')
+# Get contributors - handle case when no tags exist
+if git describe --tags --abbrev=0 >/dev/null 2>&1; then
+    LATEST_TAG=$(git describe --tags --abbrev=0)
+    CONTRIBUTORS=$(git log --format="%aN" --reverse "$LATEST_TAG"..HEAD | sort | uniq | awk '{printf "- %s\n", $0 }' | tr '\n' '|')
+else
+    # If no tags exist, get all contributors from beginning
+    CONTRIBUTORS=$(git log --format="%aN" --reverse | sort | uniq | awk '{printf "- %s\n", $0 }' | tr '\n' '|')
+fi
 
 # Substitute placeholders with actual data in the template
 TEMP_CHANGELOG=$(mktemp)
 TEMP_CHANGELOG_FIXED=$(mktemp)
-sed -e "s@{{PULL_REQUESTS}}@${PULL_REQS}@g" \
-    -e "s@{{CONTRIBUTORS}}@${CONTRIBUTORS}@g" \
-    -e "s@{{VERSION}}@${VERSION}@g" \
-    -e "s@{{DATE}}@${DATE}@g" \
+sed -e "s#{{PULL_REQUESTS}}#${PULL_REQS}#g" \
+    -e "s#{{CONTRIBUTORS}}#${CONTRIBUTORS}#g" \
+    -e "s#{{VERSION}}#${VERSION}#g" \
+    -e "s#{{DATE}}#${DATE}#g" \
     ${DIR}/release_notes/changelog_template.txt > $TEMP_CHANGELOG
 
 # Replace '|' with '\n' in temporary changelog

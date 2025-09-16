@@ -27,9 +27,9 @@ VERSION_PACKAGE = $(REPOPATH)/internal/version
 # Single source of truth for version from .release-version file
 VERSION ?= $(shell cat .release-version 2>/dev/null || echo v1.24.0)
 # Extract version components for backward compatibility
-VERSION_MAJOR ?= $(shell echo $(VERSION) | sed 's/^v//' | cut -d. -f1)
-VERSION_MINOR ?= $(shell echo $(VERSION) | sed 's/^v//' | cut -d. -f2)
-VERSION_BUILD ?= $(shell echo $(VERSION) | sed 's/^v//' | cut -d. -f3)
+VERSION_MAJOR ?= 1
+VERSION_MINOR ?= 24
+VERSION_BUILD ?= 1
 
 GOPATH ?= $(shell go env GOPATH)
 GOLANGCI_LINT = $(GOPATH)/bin/golangci-lint
