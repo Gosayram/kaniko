@@ -15,7 +15,9 @@ The project is in transition from legacy systems to modern Go 1.24+ practices wi
 ### 🆕 Modern Components Already Added
 - [`internal/version`](internal/version/version.go): Modern version package following Go 1.24+ best practices
 - [`.release-version`](.release-version): Single source of truth for version (1.24.0)
-- **CI/CD**: GitHub Actions removed, needs replacement strategy
+- **CI/CD**:  
+  - **CD** is based on scripts located in [`hack/`](hack/) (e.g., `hack/release.sh`, `hack/boilerplate.sh`, `hack/gofmt.sh`, etc.).  
+  - **CI** checks and tests are implemented using the **Makefile** targets and a dedicated test script (e.g., `hack/test.sh`).  
 - **OCI Support**: Full OCI 1.1 media type compliance and multi-platform capabilities
 
 ### ✅ OCI 1.1 Compliance Status
@@ -35,6 +37,33 @@ Kaniko demonstrates **excellent compliance** with OCI Image Format Specification
 - `github.com/google/go-containerregistry v0.20.6`
 - `github.com/opencontainers/image-spec v1.1.1`
 - `github.com/opencontainers/go-digest v1.0.0`
+
+---
+
+## CI/CD Strategy
+
+To replace the removed GitHub Actions, the project adopts a **simple and transparent CI/CD approach**:
+
+- **Continuous Deployment (CD):**  
+  Based entirely on scripts from the [`hack/`](hack/) directory:  
+  - `hack/release.sh` – release automation with GitHub API integration  
+  - `hack/boilerplate.sh` – boilerplate validation  
+  - `hack/gofmt.sh`, `hack/linter.sh` – formatting and lint checks  
+  - `hack/install_golint.sh` – local tooling setup  
+
+- **Continuous Integration (CI):**  
+  Built around the **Makefile** and a dedicated **test script**:  
+  - `make lint` – run static checks and linters  
+  - `make test` – run unit and integration tests  
+  - `make build` – reproducible local builds  
+  - `hack/test.sh` – extended integration/E2E test pipeline for CI environments  
+
+This ensures:
+- Reproducible results (local = CI consistency)  
+- No hidden release mechanism — everything is scripted and visible  
+- Easy portability across different CI systems  
+
+---
 
 ## Multi-Architecture Modernization Goals
 
