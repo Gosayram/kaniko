@@ -84,6 +84,10 @@ func NewKubernetesDriver(opts *config.KanikoOptions) (*KubernetesDriver, error) 
 
 // ValidatePlatforms validates that the requested platforms can be built in the Kubernetes cluster
 func (d *KubernetesDriver) ValidatePlatforms(platforms []string) error {
+	if len(platforms) == 0 {
+		return fmt.Errorf("no platforms specified")
+	}
+
 	if d.opts.RequireNativeNodes {
 		// Check if cluster has nodes for all requested architectures
 		nodes, err := d.client.CoreV1().Nodes().List(context.Background(), metav1.ListOptions{})
@@ -165,6 +169,10 @@ func (d *KubernetesDriver) ExecuteBuilds(ctx context.Context, platforms []string
 
 // Cleanup performs cleanup operations for Kubernetes driver
 func (d *KubernetesDriver) Cleanup() error {
+	if d.client == nil {
+		return fmt.Errorf("kubernetes client not initialized")
+	}
+
 	// Cleanup: delete all jobs created by this driver
 	jobs, err := d.client.BatchV1().Jobs(d.namespace).List(context.Background(), metav1.ListOptions{
 		LabelSelector: "app=kaniko-multiarch-builder",
@@ -323,6 +331,10 @@ func (d *KubernetesDriver) createBuildJob(platform string) (*batchv1.Job, error)
 
 // waitForJobCompletion waits for a Kubernetes Job to complete and returns the digest
 func (d *KubernetesDriver) waitForJobCompletion(ctx context.Context, jobName, platform string) (string, error) {
+	if d.client == nil {
+		return "", fmt.Errorf("kubernetes client not initialized")
+	}
+
 	err := wait.PollUntilContextTimeout(ctx, pollInterval, defaultTimeout, true, func(ctx context.Context) (bool, error) {
 		job, err := d.client.BatchV1().Jobs(d.namespace).Get(ctx, jobName, metav1.GetOptions{})
 		if err != nil {
@@ -350,6 +362,10 @@ func (d *KubernetesDriver) waitForJobCompletion(ctx context.Context, jobName, pl
 
 // readDigestFromPod reads the digest from the completed pod's output
 func (d *KubernetesDriver) readDigestFromPod(ctx context.Context, jobName, platform string) (string, error) {
+	if d.client == nil {
+		return "", fmt.Errorf("kubernetes client not initialized")
+	}
+
 	pods, err := d.client.CoreV1().Pods(d.namespace).List(ctx, metav1.ListOptions{
 		LabelSelector: fmt.Sprintf("job-name=%s", jobName),
 	})

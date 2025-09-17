@@ -43,6 +43,10 @@ func NewLocalDriver(opts *config.KanikoOptions) *LocalDriver {
 func (d *LocalDriver) ValidatePlatforms(platforms []string) error {
 	currentPlatform := fmt.Sprintf("%s/%s", runtime.GOOS, runtime.GOARCH)
 
+	if len(platforms) > 1 {
+		return fmt.Errorf("local driver only supports single platform, got %d platforms", len(platforms))
+	}
+
 	for _, platform := range platforms {
 		if platform != currentPlatform {
 			if d.opts.RequireNativeNodes {

@@ -38,7 +38,7 @@ func TestCIDriver_ValidatePlatforms(t *testing.T) {
 		{
 			name: "valid platforms with digests-from",
 			opts: &config.KanikoOptions{
-				DigestsFrom: "/tmp/digests",
+				DigestsFrom: t.TempDir(),
 			},
 			platforms: []string{"linux/amd64", "linux/arm64"},
 			wantErr:   false,
@@ -54,7 +54,7 @@ func TestCIDriver_ValidatePlatforms(t *testing.T) {
 		{
 			name: "empty platforms",
 			opts: &config.KanikoOptions{
-				DigestsFrom: "/tmp/digests",
+				DigestsFrom: t.TempDir(),
 			},
 			platforms: []string{},
 			wantErr:   true,
@@ -63,6 +63,12 @@ func TestCIDriver_ValidatePlatforms(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			// For valid test case, create the digest files
+			if tt.name == "valid platforms with digests-from" {
+				os.WriteFile(filepath.Join(tt.opts.DigestsFrom, "linux-amd64.digest"), []byte("sha256:abc123def4567890abcdef1234567890abcdef1234567890abcdef1234567890"), 0644)
+				os.WriteFile(filepath.Join(tt.opts.DigestsFrom, "linux-arm64.digest"), []byte("sha256:def456abc1237890abcdef1234567890abcdef1234567890abcdef1234567890"), 0644)
+			}
+			
 			driver := &CIDriver{opts: tt.opts}
 			err := driver.ValidatePlatforms(tt.platforms)
 			if tt.wantErr {
@@ -154,7 +160,7 @@ func TestCIDriver_Cleanup(t *testing.T) {
 func TestNewCIDriver(t *testing.T) {
 	t.Run("create new CI driver", func(t *testing.T) {
 		opts := &config.KanikoOptions{
-			DigestsFrom: "/tmp/digests",
+			DigestsFrom: t.TempDir(),
 		}
 		driver, err := NewCIDriver(opts)
 		require.NoError(t, err)
@@ -176,10 +182,10 @@ func TestCIDriver_readDigestFromFile(t *testing.T) {
 		{
 			name: "valid digest file",
 			setup: func() {
-				os.WriteFile(filepath.Join(tempDir, "linux-amd64.digest"), []byte("sha256:abc123"), 0644)
+				os.WriteFile(filepath.Join(tempDir, "linux-amd64.digest"), []byte("sha256:abc123def4567890abcdef1234567890abcdef1234567890abcdef1234567890"), 0644)
 			},
 			platform:   "linux/amd64",
-			wantDigest: "sha256:abc123",
+			wantDigest: "sha256:abc123def4567890abcdef1234567890abcdef1234567890abcdef1234567890",
 			wantErr:    false,
 		},
 		{
@@ -216,7 +222,8 @@ func TestCIDriver_readDigestFromFile(t *testing.T) {
 			tt.setup()
 
 			driver := &CIDriver{opts: &config.KanikoOptions{DigestsFrom: tempDir}}
-			digest, err := driver.readDigestFromFile(tt.platform)
+			filename := filepath.Join(tempDir, driver.getDigestFilename(tt.platform))
+			digest, err := driver.readDigestFromFile(filename)
 			if tt.wantErr {
 				assert.Error(t, err)
 				assert.Empty(t, digest)

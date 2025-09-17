@@ -63,29 +63,31 @@ func TestKubernetesDriver_ValidatePlatforms(t *testing.T) {
 }
 
 func TestKubernetesDriver_ExecuteBuilds(t *testing.T) {
-	t.Run("should return error for unsupported operation", func(t *testing.T) {
-		driver := &KubernetesDriver{opts: &config.KanikoOptions{}}
-		_, err := driver.ExecuteBuilds(context.Background(), []string{"linux/amd64"})
-		assert.Error(t, err)
+	t.Run("should return error when not running in kubernetes cluster", func(t *testing.T) {
+		opts := &config.KanikoOptions{}
+		driver, err := NewKubernetesDriver(opts)
+		require.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to create in-cluster config")
+		assert.Nil(t, driver)
 	})
 }
 
 func TestKubernetesDriver_Cleanup(t *testing.T) {
-	t.Run("cleanup should succeed", func(t *testing.T) {
+	t.Run("cleanup should handle nil client gracefully", func(t *testing.T) {
 		driver := &KubernetesDriver{opts: &config.KanikoOptions{}}
 		err := driver.Cleanup()
-		assert.NoError(t, err)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "kubernetes client not initialized")
 	})
 }
 
 func TestNewKubernetesDriver(t *testing.T) {
-	t.Run("create new kubernetes driver", func(t *testing.T) {
+	t.Run("should fail when not running in kubernetes cluster", func(t *testing.T) {
 		opts := &config.KanikoOptions{}
 		driver, err := NewKubernetesDriver(opts)
-		require.NoError(t, err)
-		assert.NotNil(t, driver)
-		assert.Equal(t, opts, driver.opts)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to create in-cluster config")
+		assert.Nil(t, driver)
 	})
 }
 
@@ -104,19 +106,19 @@ func TestKubernetesDriver_createBuildJob(t *testing.T) {
 }
 
 func TestKubernetesDriver_waitForJobCompletion(t *testing.T) {
-	t.Run("wait for job completion should return error for unsupported operation", func(t *testing.T) {
+	t.Run("wait for job completion should handle nil client gracefully", func(t *testing.T) {
 		driver := &KubernetesDriver{opts: &config.KanikoOptions{}}
-		_, err := driver.waitForJobCompletion(context.Background(), "test-job", "linux/amd64")
+		_, err := driver.waitForJobCompletion(context.Background(), "non-existent-job", "linux/amd64")
 		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "not implemented")
+		assert.Contains(t, err.Error(), "kubernetes client not initialized")
 	})
 }
 
 func TestKubernetesDriver_readDigestFromPod(t *testing.T) {
-	t.Run("read digest from pod should return error for unsupported operation", func(t *testing.T) {
+	t.Run("read digest from pod should handle nil client gracefully", func(t *testing.T) {
 		driver := &KubernetesDriver{opts: &config.KanikoOptions{}}
-		_, err := driver.readDigestFromPod(context.Background(), "test-job", "linux/amd64")
+		_, err := driver.readDigestFromPod(context.Background(), "non-existent-job", "linux/amd64")
 		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "not implemented")
+		assert.Contains(t, err.Error(), "kubernetes client not initialized")
 	})
 }

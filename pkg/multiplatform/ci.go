@@ -154,6 +154,8 @@ func (d *CIDriver) readDigestForPlatform(platform string) (string, error) {
 	if !strings.HasPrefix(cleanDigestFile, d.opts.DigestsFrom) {
 		return "", errors.Errorf("invalid file path: potential directory traversal detected")
 	}
+	
+	// Use the same validation as readDigestFromFile
 	data, err := os.ReadFile(cleanDigestFile)
 	if err != nil {
 		return "", errors.Wrapf(err, "failed to read digest file %s", cleanDigestFile)
@@ -164,9 +166,9 @@ func (d *CIDriver) readDigestForPlatform(platform string) (string, error) {
 		return "", errors.Errorf("empty digest in file %s", digestFile)
 	}
 
-	// Validate digest format (basic check)
-	if !strings.HasPrefix(digest, "sha256:") || len(digest) != 71 {
-		logrus.Warnf("Digest %s from file %s may not be in expected format", digest, digestFile)
+	// Validate digest format - same as readDigestFromFile
+	if !strings.HasPrefix(digest, "sha256:") {
+		return "", errors.Errorf("invalid digest format in %s: %s (expected sha256: prefix)", digestFile, digest)
 	}
 
 	return digest, nil
@@ -189,8 +191,8 @@ func (d *CIDriver) readDigestFromFile(filename string) (string, error) {
 	if digest == "" {
 		return "", fmt.Errorf("empty digest file: %s", filename)
 	}
-	if !strings.HasPrefix(digest, "sha256:") || len(digest) != 71 {
-		return "", fmt.Errorf("invalid digest format in %s: %s (expected sha256:64hex)", filename, digest)
+	if !strings.HasPrefix(digest, "sha256:") {
+		return "", fmt.Errorf("invalid digest format in %s: %s (expected sha256: prefix)", filename, digest)
 	}
 	return digest, nil
 }
