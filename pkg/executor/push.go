@@ -72,7 +72,7 @@ const (
 	filePermission = 0o600
 )
 
-// pushRetryDelay is the delay between push retry attempts in milliseconds
+// pushRetryDelay is the initial delay between push retry attempts in milliseconds
 const pushRetryDelay = 1000
 
 var (
@@ -367,7 +367,13 @@ func pushToDestinations(image v1.Image, opts *config.KanikoOptions, destRefs []n
 			return nil
 		}
 
-		if err := util.Retry(retryFunc, opts.PushRetry, pushRetryDelay); err != nil {
+		// Use configurable exponential backoff retry
+		initialDelay := opts.PushRetryInitialDelay
+		if initialDelay <= 0 {
+			initialDelay = pushRetryDelay // fallback to default
+		}
+		
+		if err := util.RetryWithConfig(retryFunc, opts.PushRetry, initialDelay, opts.PushRetryMaxDelay, opts.PushRetryBackoffMultiplier, 2.0); err != nil {
 			return errors.Wrap(err, fmt.Sprintf("failed to push to destination %s", destRef))
 		}
 	}

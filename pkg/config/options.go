@@ -45,6 +45,9 @@ type RegistryOptions struct {
 	SkipTLSVerifyPull            bool
 	PushIgnoreImmutableTagErrors bool
 	PushRetry                    int
+	PushRetryInitialDelay        int
+	PushRetryMaxDelay            int
+	PushRetryBackoffMultiplier   float64
 	ImageDownloadRetry           int
 }
 

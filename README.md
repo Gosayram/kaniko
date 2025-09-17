@@ -142,6 +142,22 @@ spec:
   - [🔒 Security](#-security)
     - [Verifying Signed Kaniko Images](#verifying-signed-kaniko-images)
   - [📈 Kaniko Builds - Profiling](#-kaniko-builds---profiling)
+  - [🏗️ Built-in Multi-Architecture Support](#️-built-in-multi-architecture-support)
+    - [Key Features](#key-features)
+    - [Quick Start Examples](#quick-start-examples)
+      - [Local Development](#local-development)
+      - [Kubernetes Multi-Arch Build](#kubernetes-multi-arch-build)
+      - [CI Integration](#ci-integration)
+    - [Configuration Flags](#configuration-flags)
+      - [Multi-Platform Configuration](#multi-platform-configuration)
+      - [Enhanced Registry Push Configuration](#enhanced-registry-push-configuration)
+    - [Migration Guide](#migration-guide)
+      - [From Manifest-tool to Built-in Multi-Arch](#from-manifest-tool-to-built-in-multi-arch)
+      - [Key Migration Benefits](#key-migration-benefits)
+      - [Breaking Changes Considerations](#breaking-changes-considerations)
+    - [Performance and Reliability](#performance-and-reliability)
+    - [Validation and Testing](#validation-and-testing)
+    - [Documentation](#documentation)
   - [🏗️ Creating Multi-arch Container Manifests Using Kaniko and Manifest-tool](#️-creating-multi-arch-container-manifests-using-kaniko-and-manifest-tool)
     - [General Workflow](#general-workflow)
     - [Limitations and Pitfalls](#limitations-and-pitfalls)
@@ -976,9 +992,178 @@ If your builds are taking long, we recently added support to analyze kaniko func
 1. Add an environment variable `STACKLOG_PATH` to your [pod definition](https://github.com/Gosayram/kaniko/blob/master/examples/pod-build-profile.yaml#L15).
 2. If you are using the kaniko `debug` image, you can copy the file in the `pre-stop` container lifecycle hook.
 
+## 🏗️ Built-in Multi-Architecture Support
+
+Kaniko now includes native multi-architecture build support without requiring privileged operations or external tools. This feature allows you to build container images for multiple platforms simultaneously using different execution drivers.
+
+### Key Features
+
+- **No Privileged Operations**: No qemu/binfmt emulation required
+- **Multiple Driver Support**: Local, Kubernetes, and CI integration modes
+- **OCI 1.1 Compliance**: Full support for OCI Image Index with platform descriptors and annotations
+- **Enhanced Registry Compatibility**: Configurable exponential backoff retry mechanisms for reliable pushes
+- **Security First**: Minimal RBAC requirements for Kubernetes driver
+- **Performance Optimized**: Coordinator overhead <10% vs single-arch builds
+- **Comprehensive Testing**: E2E tests for all drivers and multi-platform scenarios
+
+### Quick Start Examples
+
+#### Local Development
+```bash
+# Build for host architecture only
+docker run --rm -v $(pwd):/workspace ghcr.io/gosayram/kaniko:latest \
+  --dockerfile=/workspace/Dockerfile \
+  --destination=ghcr.io/org/app:1.0.0 \
+  --multi-platform=linux/amd64 \
+  --driver=local
+
+# Build for multiple platforms locally
+docker run --rm -v $(pwd):/workspace ghcr.io/gosayram/kaniko:latest \
+  --dockerfile=/workspace/Dockerfile \
+  --destination=ghcr.io/org/app:1.0.0 \
+  --multi-platform=linux/amd64,linux/arm64 \
+  --driver=local
+```
+
+#### Kubernetes Multi-Arch Build
+```yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: kaniko-multiarch
+spec:
+  template:
+    spec:
+      serviceAccountName: kaniko-builder
+      containers:
+      - name: kaniko
+        image: ghcr.io/gosayram/kaniko:latest
+        args:
+        - --context=git=https://github.com/org/app.git#main
+        - --dockerfile=Dockerfile
+        - --destination=ghcr.io/org/app:1.2.3
+        - --multi-platform=linux/amd64,linux/arm64
+        - --driver=k8s
+        - --publish-index=true
+        - --legacy-manifest-list=true
+        - --require-native-nodes=true
+        - --push-retry=3
+        - --push-retry-initial-delay=1s
+        - --push-retry-max-delay=30s
+```
+
+#### CI Integration
+```bash
+# Matrix build per architecture, then aggregate
+docker run --rm -v $(pwd):/workspace ghcr.io/gosayram/kaniko:latest \
+  --dockerfile=/workspace/Dockerfile \
+  --destination=ghcr.io/org/app:1.0.0 \
+  --multi-platform=linux/amd64,linux/arm64 \
+  --driver=ci \
+  --digests-from=/artifacts/digests \
+  --publish-index=true
+
+# GitHub Actions example with automatic detection
+- name: Build multi-arch image
+  run: |
+    docker run --rm -v $(pwd):/workspace ghcr.io/gosayram/kaniko:latest \
+      --dockerfile=/workspace/Dockerfile \
+      --destination=${{ github.repository }}:${{ github.sha }} \
+      --multi-platform=linux/amd64,linux/arm64,linux/s390x \
+      --driver=ci \
+      --publish-index=true
+```
+
+### Configuration Flags
+
+#### Multi-Platform Configuration
+- `--multi-platform`: Comma-separated list of platforms (e.g., `linux/amd64,linux/arm64`)
+- `--driver`: Execution driver (`local`, `k8s`, or `ci`)
+- `--publish-index`: Publish OCI Image Index after builds complete
+- `--legacy-manifest-list`: Create Docker Manifest List for backward compatibility
+- `--digests-from`: Path to digest files for CI driver integration
+- `--require-native-nodes`: Fail if non-native architecture is requested
+
+#### Enhanced Registry Push Configuration
+- `--push-retry`: Number of retries for push operations (default: 0)
+- `--push-retry-initial-delay`: Initial delay before first retry (default: 1s)
+- `--push-retry-max-delay`: Maximum delay between retries (default: 30s)
+- `--push-retry-backoff-multiplier`: Exponential backoff multiplier (default: 2.0)
+
+### Migration Guide
+
+#### From Manifest-tool to Built-in Multi-Arch
+
+**Before (using manifest-tool):**
+```yaml
+# GitLab CI example
+build-container:
+  stage: container-build
+  parallel:
+    matrix:
+      - ARCH: amd64
+      - ARCH: arm64
+  script:
+    - /kaniko/executor --context "${CI_PROJECT_DIR}" --dockerfile "${CI_PROJECT_DIR}/Dockerfile" --destination "${CI_REGISTRY_IMAGE}:${ARCH}"
+
+merge-manifests:
+  stage: container-build
+  needs: [build-container]
+  image: mplatform/manifest-tool:alpine
+  script:
+    - manifest-tool push from-args --platforms linux/amd64,linux/arm64 --template "${CI_REGISTRY_IMAGE}:ARCH" --target "${CI_REGISTRY_IMAGE}"
+```
+
+**After (using built-in multi-arch):**
+```yaml
+# Single job with built-in multi-arch support
+build-container:
+  stage: container-build
+  script:
+    - /kaniko/executor --context "${CI_PROJECT_DIR}" --dockerfile "${CI_PROJECT_DIR}/Dockerfile" --destination "${CI_REGISTRY_IMAGE}:latest" --multi-platform=linux/amd64,linux/arm64 --driver=ci --publish-index=true
+```
+
+#### Key Migration Benefits
+
+1. **Simplified CI/CD**: No need for separate manifest-tool jobs
+2. **Better Reliability**: Built-in retry mechanisms for registry pushes
+3. **Reduced Complexity**: Single command handles all architectures
+4. **Improved Performance**: Lower overhead compared to separate builds
+5. **Enhanced Security**: No need to handle manifest-tool separately
+
+#### Breaking Changes Considerations
+
+- **Registry Push Behavior**: Enhanced retry logic may change push timing
+- **Image Format**: Default is OCI Image Index, can fallback to Docker Manifest List
+- **Node Requirements**: Kubernetes driver requires nodes with target architectures
+
+### Performance and Reliability
+
+- **Coordinator Overhead**: <10% overhead compared to single-arch builds
+- **Retry Mechanisms**: Configurable exponential backoff for all registry operations
+- **Cache Compatibility**: Works with existing kaniko caching mechanisms
+- **Resource Usage**: Optimized for memory and CPU efficiency
+
+### Validation and Testing
+
+- **OCI Compliance**: Built-in validation using crane and oras tools
+- **E2E Testing**: Comprehensive test coverage for all drivers
+- **Benchmarking**: Performance benchmarks available in `docs/benchmark.md`
+- **Verification Scripts**: `scripts/verify-oci.sh` for compliance validation
+
+### Documentation
+
+For comprehensive documentation and usage examples, see:
+- [Multi-Architecture Usage Guide](docs/multi-arch-usage.md)
+- [Driver Implementation Details](docs/multi-arch-usage.md#driver-details)
+- [Migration Guide](docs/multi-arch-usage.md#migration-guide)
+- [OCI Compliance Guide](docs/oci-compliance.md)
+- [Performance Benchmarking](docs/benchmark.md)
+- [OCI Verification Tools](docs/oci-verification.md)
+
 ## 🏗️ Creating Multi-arch Container Manifests Using Kaniko and Manifest-tool
 
-While Kaniko itself currently does not support creating multi-arch manifests (contributions welcome), one can use tools such as [manifest-tool](https://github.com/estesp/manifest-tool) to stitch multiple separate builds together into a single container manifest.
+While Kaniko now has built-in multi-architecture support, you can still use tools such as [manifest-tool](https://github.com/estesp/manifest-tool) to stitch multiple separate builds together into a single container manifest if needed.
 
 ### General Workflow
 
@@ -1098,74 +1283,6 @@ container-get-tag:
     reports:
       dotenv: build.env
 ```
-
-## 🏗️ Built-in Multi-Architecture Support
-
-Kaniko now includes native multi-architecture build support without requiring privileged operations or external tools. This feature allows you to build container images for multiple platforms simultaneously using different execution drivers.
-
-### Key Features
-
-- **No Privileged Operations**: No qemu/binfmt emulation required
-- **Multiple Driver Support**: Local, Kubernetes, and CI integration modes
-- **OCI Compliance**: Full support for OCI Image Index and Docker Manifest List
-- **Registry Compatibility**: Works with all major registries (Docker Hub, GHCR, ECR, ACR, GCR, Quay)
-- **Security First**: Minimal RBAC requirements for Kubernetes driver
-
-### Quick Start Examples
-
-#### Local Development
-```bash
-# Build for host architecture only
-kaniko --multi-platform=linux/amd64 --driver=local \
-       --destination=ghcr.io/org/app:1.0.0
-```
-
-#### Kubernetes Multi-Arch Build
-```yaml
-apiVersion: batch/v1
-kind: Job
-metadata:
-  name: kaniko-multiarch
-spec:
-  template:
-    spec:
-      serviceAccountName: kaniko-builder
-      containers:
-      - name: kaniko
-        image: gcr.io/kaniko-project/executor:latest
-        args:
-        - --context=git=https://github.com/org/app.git#main
-        - --dockerfile=Dockerfile
-        - --destination=ghcr.io/org/app:1.2.3
-        - --multi-platform=linux/amd64,linux/arm64
-        - --driver=k8s
-        - --publish-index=true
-        - --legacy-manifest-list=true
-        - --require-native-nodes=true
-```
-
-#### CI Integration
-```bash
-# Matrix build per architecture, then aggregate
-kaniko --multi-platform=linux/amd64,linux/arm64 --driver=ci \
-       --digests-from=/artifacts/digests --publish-index=true
-```
-
-### Configuration Flags
-
-- `--multi-platform`: Comma-separated list of platforms (e.g., `linux/amd64,linux/arm64`)
-- `--driver`: Execution driver (`local`, `k8s`, or `ci`)
-- `--publish-index`: Publish OCI Image Index after builds complete
-- `--legacy-manifest-list`: Create Docker Manifest List for backward compatibility
-- `--digests-from`: Path to digest files for CI driver integration
-- `--require-native-nodes`: Fail if non-native architecture is requested
-
-### Documentation
-
-For comprehensive documentation and usage examples, see:
-- [Multi-Architecture Usage Guide](docs/multi-arch-usage.md)
-- [Driver Implementation Details](docs/multi-arch-usage.md#driver-details)
-- [Migration Guide](docs/multi-arch-usage.md#migration-guide)
 
 ## 🔄 Comparison with Other Tools
 

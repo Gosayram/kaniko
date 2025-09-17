@@ -309,6 +309,12 @@ func addRegistryFlags() {
 		"Pull from insecure registry ignoring TLS verify")
 	RootCmd.PersistentFlags().IntVar(&opts.PushRetry, "push-retry", 0,
 		"Number of retries for the push operation")
+	RootCmd.PersistentFlags().IntVar(&opts.PushRetryInitialDelay, "push-retry-initial-delay", 1000,
+		"Initial delay in milliseconds between push retry attempts")
+	RootCmd.PersistentFlags().IntVar(&opts.PushRetryMaxDelay, "push-retry-max-delay", 30000,
+		"Maximum delay in milliseconds between push retry attempts")
+	RootCmd.PersistentFlags().Float64Var(&opts.PushRetryBackoffMultiplier, "push-retry-backoff-multiplier", 2.0,
+		"Exponential backoff multiplier for push retry delays")
 	RootCmd.PersistentFlags().BoolVar(&opts.PushIgnoreImmutableTagErrors,
 		"push-ignore-immutable-tag-errors", false,
 		"If true, known tag immutability errors are ignored and the push finishes with success.")

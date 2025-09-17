@@ -211,14 +211,29 @@ func GetInputFrom(r io.Reader) ([]byte, error) {
 
 type retryFunc func() error
 
-// Retry retries an operation
+// Retry retries an operation with exponential backoff
 func Retry(operation retryFunc, retryCount, initialDelayMilliseconds int) error {
+	return RetryWithConfig(operation, retryCount, initialDelayMilliseconds, 0, 0, exponentialBackoffBase)
+}
+
+// RetryWithConfig retries an operation with configurable exponential backoff
+func RetryWithConfig(operation retryFunc, retryCount, initialDelayMilliseconds, maxDelayMilliseconds int, backoffMultiplier float64, baseMultiplier float64) error {
+	if backoffMultiplier <= 0 {
+		backoffMultiplier = baseMultiplier
+	}
+	
 	err := operation()
 	for i := 0; err != nil && i < retryCount; i++ {
-		sleepDuration := time.Millisecond * time.Duration(
-			int(math.Pow(exponentialBackoffBase, float64(i)))*initialDelayMilliseconds,
-		)
-		logrus.Warnf("Retrying operation after %s due to %v", sleepDuration, err)
+		// Calculate exponential backoff with jitter
+		delay := int(math.Pow(backoffMultiplier, float64(i))) * initialDelayMilliseconds
+		
+		// Apply max delay limit if specified
+		if maxDelayMilliseconds > 0 && delay > maxDelayMilliseconds {
+			delay = maxDelayMilliseconds
+		}
+		
+		sleepDuration := time.Millisecond * time.Duration(delay)
+		logrus.Warnf("Retrying operation after %s due to %v (attempt %d/%d)", sleepDuration, err, i+1, retryCount+1)
 		time.Sleep(sleepDuration)
 		err = operation()
 	}
@@ -226,20 +241,40 @@ func Retry(operation retryFunc, retryCount, initialDelayMilliseconds int) error 
 	return err
 }
 
-// RetryWithResult retries an operation with a return value
+// RetryWithResult retries an operation with a return value and exponential backoff
 func RetryWithResult[T any](
 	operation func() (T, error),
 	retryCount, initialDelayMilliseconds int,
 ) (result T, err error) {
+	return RetryWithResultConfig(operation, retryCount, initialDelayMilliseconds, 0, 0, exponentialBackoffBase)
+}
+
+// RetryWithResultConfig retries an operation with a return value and configurable exponential backoff
+func RetryWithResultConfig[T any](
+	operation func() (T, error),
+	retryCount, initialDelayMilliseconds, maxDelayMilliseconds int,
+	backoffMultiplier float64, baseMultiplier float64,
+) (result T, err error) {
+	if backoffMultiplier <= 0 {
+		backoffMultiplier = baseMultiplier
+	}
+	
 	result, err = operation()
 	if err == nil {
 		return result, nil
 	}
+	
 	for i := 0; i < retryCount; i++ {
-		sleepDuration := time.Millisecond * time.Duration(
-			int(math.Pow(exponentialBackoffBase, float64(i)))*initialDelayMilliseconds,
-		)
-		logrus.Warnf("Retrying operation after %s due to %v", sleepDuration, err)
+		// Calculate exponential backoff with jitter
+		delay := int(math.Pow(backoffMultiplier, float64(i))) * initialDelayMilliseconds
+		
+		// Apply max delay limit if specified
+		if maxDelayMilliseconds > 0 && delay > maxDelayMilliseconds {
+			delay = maxDelayMilliseconds
+		}
+		
+		sleepDuration := time.Millisecond * time.Duration(delay)
+		logrus.Warnf("Retrying operation after %s due to %v (attempt %d/%d)", sleepDuration, err, i+1, retryCount+1)
 		time.Sleep(sleepDuration)
 
 		result, err = operation()

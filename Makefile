@@ -109,6 +109,53 @@ integration-test-misc:
 	$(eval RUN_ARG=$(shell ./scripts/misc-integration-test.sh))
 	@ ./scripts/integration-test.sh -run "$(RUN_ARG)"
 
+# --------------------------- Multi-Platform Integration ---------------------------
+.PHONY: integration-test-multiplatform
+integration-test-multiplatform:
+	@ ./scripts/integration-test.sh -tags "integration" -run "TestMultiPlatform"
+
+.PHONY: integration-test-local-driver
+integration-test-local-driver:
+	@ ./scripts/integration-test.sh -tags "integration" -run "TestMultiPlatformLocalDriver"
+
+.PHONY: integration-test-ci-driver
+integration-test-ci-driver:
+	@ ./scripts/integration-test.sh -tags "integration" -run "TestMultiPlatformCIDriver"
+
+.PHONY: integration-test-k8s-e2e
+integration-test-k8s-e2e:
+	@ ./scripts/integration-test.sh -tags "integration" -run "TestMultiPlatformK8sE2E"
+
+.PHONY: integration-test-image-verification
+integration-test-image-verification:
+	@ ./scripts/integration-test.sh -tags "integration" -run "TestMultiPlatformImageVerification"
+
+# --------------------------- Benchmarks ---------------------------
+.PHONY: benchmark
+benchmark:
+	@echo "Running multi-platform coordinator overhead benchmark..."
+	BENCHMARK=true go test ./integration/... -run "TestMultiplatformCoordinatorOverhead" -v
+
+.PHONY: benchmark-drivers
+benchmark-drivers:
+	@echo "Running multi-platform driver overhead benchmark..."
+	BENCHMARK=true go test ./integration/... -run "TestMultiplatformDriverOverhead" -v
+
+.PHONY: benchmark-all
+benchmark-all: benchmark benchmark-drivers
+	@echo "All benchmarks completed"
+
+# --------------------------- OCI Verification ---------------------------
+.PHONY: verify-oci
+verify-oci:
+	@echo "Running OCI compliance verification..."
+	@./scripts/verify-oci.sh
+
+.PHONY: verify-oci-quick
+verify-oci-quick:
+	@echo "Running quick OCI verification (uses existing images)..."
+	REGISTRY="gcr.io/kaniko-test" ./scripts/verify-oci.sh
+
 # ------------------------------ Images ------------------------------
 .PHONY: images
 images: DOCKER_BUILDKIT=1

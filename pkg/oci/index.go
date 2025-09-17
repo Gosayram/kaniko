@@ -33,6 +33,7 @@ import (
 	"github.com/sirupsen/logrus"
 
 	"github.com/Gosayram/kaniko/pkg/config"
+	"github.com/Gosayram/kaniko/pkg/util"
 )
 
 // BuildIndex creates an OCI Image Index or Docker Manifest List from platform digests
@@ -282,7 +283,7 @@ func (s *simpleIndex) ImageIndex(v1.Hash) (v1.ImageIndex, error) {
 	return nil, fmt.Errorf("not implemented")
 }
 
-// PushIndex pushes the image index to the registry
+// PushIndex pushes the image index to the registry with retry logic
 func PushIndex(index v1.ImageIndex, opts *config.KanikoOptions) error {
 	if len(opts.Destinations) == 0 {
 		return errors.New("no destinations specified for index push")
@@ -296,8 +297,20 @@ func PushIndex(index v1.ImageIndex, opts *config.KanikoOptions) error {
 
 		logrus.Infof("Pushing image index to %s", destination)
 
-		if err := remote.WriteIndex(destRef, index, getRemoteOptions(opts)...); err != nil {
-			return errors.Wrapf(err, "failed to push index to %s", destination)
+		// Define the push operation with retry logic
+		pushOperation := func() error {
+			return remote.WriteIndex(destRef, index, getRemoteOptions(opts)...)
+		}
+
+		// Use configurable exponential backoff retry
+		initialDelay := opts.PushRetryInitialDelay
+		if initialDelay <= 0 {
+			initialDelay = 1000 // fallback to 1 second
+		}
+		
+		err = util.RetryWithConfig(pushOperation, opts.PushRetry, initialDelay, opts.PushRetryMaxDelay, opts.PushRetryBackoffMultiplier, 2.0)
+		if err != nil {
+			return errors.Wrapf(err, "failed to push index to %s after %d attempts", destination, opts.PushRetry+1)
 		}
 
 		logrus.Infof("Successfully pushed image index to %s", destination)

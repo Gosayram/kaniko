@@ -38,6 +38,13 @@ FLAGS=(
   "--timeout=50m"
 )
 
+# Handle build tags if provided
+if [[ "$1" == "-tags" ]]; then
+  TAGS="$2"
+  shift 2
+  FLAGS+=("-tags=$TAGS")
+fi
+
 if [[ -n $DOCKERFILE_PATTERN ]]; then
   FLAGS+=("--dockerfiles-pattern=$DOCKERFILE_PATTERN")
 fi
