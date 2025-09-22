@@ -26,6 +26,7 @@ import (
 	"github.com/sirupsen/logrus"
 
 	"github.com/Gosayram/kaniko/pkg/config"
+	"github.com/Gosayram/kaniko/pkg/debug"
 	"github.com/Gosayram/kaniko/pkg/oci"
 )
 
@@ -64,37 +65,52 @@ func NewCoordinator(opts *config.KanikoOptions) (*Coordinator, error) {
 
 // Execute performs multi-platform build coordination
 func (c *Coordinator) Execute(ctx context.Context) (v1.ImageIndex, error) {
+	debug.LogComponent("multiplatform", "Starting multi-platform build with platforms: %v", c.opts.MultiPlatform)
+	debug.LogComponent("multiplatform", "Using driver: %s", c.opts.Driver)
+	
 	platforms := c.opts.MultiPlatform
 	if len(platforms) == 0 {
 		return nil, errors.New("no platforms specified for multi-platform build")
 	}
 
 	// Perform pre-flight checks
+	debug.LogComponent("multiplatform", "Performing pre-flight checks for platforms: %v", platforms)
 	if err := c.preFlightChecks(platforms); err != nil {
+		debug.LogComponent("multiplatform", "Pre-flight checks failed: %v", err)
 		return nil, errors.Wrap(err, "pre-flight checks failed")
 	}
 
 	// Validate platforms
+	debug.LogComponent("multiplatform", "Validating platforms: %v", platforms)
 	if err := c.driver.ValidatePlatforms(platforms); err != nil {
+		debug.LogComponent("multiplatform", "Platform validation failed: %v", err)
 		return nil, errors.Wrap(err, "platform validation failed")
 	}
 
 	// Execute builds
+	debug.LogComponent("multiplatform", "Executing builds for platforms: %v", platforms)
 	digests, err := c.driver.ExecuteBuilds(ctx, platforms)
 	if err != nil {
+		debug.LogComponent("multiplatform", "Build execution failed: %v", err)
 		return nil, errors.Wrap(err, "failed to execute multi-platform builds")
 	}
+	
+	debug.LogComponent("multiplatform", "Build results: %v", digests)
 	c.digests = digests
 
 	// Create OCI Image Index or Docker Manifest List
 	if c.opts.PublishIndex {
+		debug.LogComponent("multiplatform", "Creating image index with %d manifests", len(c.digests))
 		index, err := oci.BuildIndex(c.digests, c.opts)
 		if err != nil {
+			debug.LogComponent("multiplatform", "Failed to create image index: %v", err)
 			return nil, errors.Wrap(err, "failed to create image index")
 		}
+		debug.LogComponent("multiplatform", "Successfully created image index")
 		return index, nil
 	}
 
+	debug.LogComponent("multiplatform", "Build completed successfully without publishing index")
 	return nil, nil
 }
 

@@ -108,6 +108,25 @@ type KanikoOptions struct {
 	SignImages          bool             // --sign-images[=true|false]
 	CosignKeyPath       string           // --cosign-key-path=/path/to/key
 	CosignKeyPassword   string           // --cosign-key-password=secret
+
+	// Debug options for enhanced debugging and development
+	DebugOptions
+}
+
+// DebugOptions are options for enhanced debugging and development
+type DebugOptions struct {
+	EnableFullDebug       bool     `json:"enableFullDebug" yaml:"enableFullDebug"`
+	DebugBuildSteps       bool     `json:"debugBuildSteps" yaml:"debugBuildSteps"`
+	DebugMultiPlatform    bool     `json:"debugMultiPlatform" yaml:"debugMultiPlatform"`
+	DebugOCIOperations    bool     `json:"debugOCIOperations" yaml:"debugOCIOperations"`
+	DebugDriverOperations bool     `json:"debugDriverOperations" yaml:"debugDriverOperations"`
+	DebugFilesystem       bool     `json:"debugFilesystem" yaml:"debugFilesystem"`
+	DebugCacheOperations  bool     `json:"debugCacheOperations" yaml:"debugCacheOperations"`
+	DebugRegistry         bool     `json:"debugRegistry" yaml:"debugRegistry"`
+	DebugSigning          bool     `json:"debugSigning" yaml:"debugSigning"`
+	OutputDebugFiles      bool     `json:"outputDebugFiles" yaml:"outputDebugFiles"`
+	DebugLogLevel         string   `json:"debugLogLevel" yaml:"debugLogLevel"` // trace, debug, info
+	DebugComponents       []string `json:"debugComponents" yaml:"debugComponents"` // specific components to debug
 }
 
 // KanikoGitOptions represents Git-specific configuration options

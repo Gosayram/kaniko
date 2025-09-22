@@ -38,6 +38,7 @@ import (
 	"k8s.io/utils/ptr"
 
 	"github.com/Gosayram/kaniko/pkg/config"
+	"github.com/Gosayram/kaniko/pkg/debug"
 )
 
 const (
@@ -139,31 +140,41 @@ func (d *KubernetesDriver) ValidatePlatforms(platforms []string) error {
 
 // ExecuteBuilds creates Kubernetes Jobs for each platform and waits for completion
 func (d *KubernetesDriver) ExecuteBuilds(ctx context.Context, platforms []string) (map[string]string, error) {
+	debug.LogComponent("k8s-driver", "Starting Kubernetes builds for platforms: %v", platforms)
+	
 	digests := make(map[string]string)
 
 	for _, platform := range platforms {
+		debug.LogComponent("k8s-driver", "Creating job for platform: %s", platform)
+		
 		job, err := d.createBuildJob(platform)
 		if err != nil {
+			debug.LogComponent("k8s-driver", "Failed to create job for %s: %v", platform, err)
 			return nil, fmt.Errorf("failed to create job for platform %s: %w", platform, err)
 		}
-
+		
+		debug.LogComponent("k8s-driver", "Created job %s for platform %s", job.Name, platform)
+		
 		// Create the job
 		createdJob, err := d.client.BatchV1().Jobs(d.namespace).Create(ctx, job, metav1.CreateOptions{})
 		if err != nil {
+			debug.LogComponent("k8s-driver", "Failed to create job in cluster: %v", err)
 			return nil, fmt.Errorf("failed to create job for platform %s: %w", platform, err)
 		}
-
-		logrus.Infof("Created build job %s for platform %s", createdJob.Name, platform)
+		
+		debug.LogComponent("k8s-driver", "Job created successfully: %s/%s", d.namespace, createdJob.Name)
 
 		// Wait for job completion
 		digest, err := d.waitForJobCompletion(ctx, createdJob.Name, platform)
 		if err != nil {
+			debug.LogComponent("k8s-driver", "Job completion failed for %s: %v", platform, err)
 			return nil, fmt.Errorf("job failed for platform %s: %w", platform, err)
 		}
-
+		
+		debug.LogComponent("k8s-driver", "Successfully retrieved digest for %s: %s", platform, digest)
 		digests[platform] = digest
 	}
-
+	
 	return digests, nil
 }
 

@@ -40,6 +40,7 @@ import (
 	"github.com/Gosayram/kaniko/pkg/buildcontext"
 	"github.com/Gosayram/kaniko/pkg/config"
 	"github.com/Gosayram/kaniko/pkg/constants"
+	"github.com/Gosayram/kaniko/pkg/debug"
 	"github.com/Gosayram/kaniko/pkg/executor"
 	"github.com/Gosayram/kaniko/pkg/logging"
 	"github.com/Gosayram/kaniko/pkg/multiplatform"
@@ -131,6 +132,27 @@ func validateFlags() {
 	}
 }
 
+// configureDebugFromEnvironment sets debug options from environment variables
+func configureDebugFromEnvironment() {
+	// Enable debug mode if environment variable is set
+	if os.Getenv("KANIKO_DEBUG") == "true" {
+		opts.DebugOptions.EnableFullDebug = true
+		opts.DebugOptions.DebugLogLevel = "trace"
+		opts.DebugOptions.OutputDebugFiles = true
+		logrus.Info("Debug mode enabled via environment variable")
+	}
+	
+	// Set debug level from environment
+	if level := os.Getenv("KANIKO_DEBUG_LEVEL"); level != "" {
+		opts.DebugOptions.DebugLogLevel = level
+	}
+	
+	// Set debug components from environment
+	if components := os.Getenv("KANIKO_DEBUG_COMPONENTS"); components != "" {
+		opts.DebugOptions.DebugComponents = strings.Split(components, ",")
+	}
+}
+
 // RootCmd is the kaniko command that is run
 var RootCmd = &cobra.Command{
 	Use: "executor",
@@ -140,6 +162,14 @@ var RootCmd = &cobra.Command{
 			if err := logging.Configure(logLevel, logFormat, logTimestamp); err != nil {
 				return err
 			}
+
+			// Initialize debug system
+			if _, err := debug.Init(&opts.DebugOptions); err != nil {
+				logrus.Warnf("Failed to initialize debug system: %v", err)
+			}
+			
+			// Initialize performance tracker
+			debug.InitPerformanceTracker()
 
 			validateFlags()
 
@@ -230,6 +260,13 @@ var RootCmd = &cobra.Command{
 			}
 		}
 
+		// Cleanup debug system
+		defer func() {
+			if err := debug.Close(); err != nil {
+				logrus.Warnf("Failed to close debug system: %v", err)
+			}
+		}()
+
 		benchmarkFile := os.Getenv("BENCHMARK_FILE")
 		// false is a keyword for integration tests to turn off benchmarking
 		if benchmarkFile != "" && benchmarkFile != "false" {
@@ -295,6 +332,25 @@ func addBasicFlags() {
 		"Set the target build stage to build")
 	RootCmd.PersistentFlags().Var(&opts.Git, "git",
 		"Branch to clone if build context is a git repository")
+	
+	// Add debug flags
+	addDebugFlags()
+}
+
+// addDebugFlags adds debug configuration flags
+func addDebugFlags() {
+	RootCmd.PersistentFlags().BoolVar(&opts.DebugOptions.EnableFullDebug, "debug-full", false, "Enable comprehensive debug logging for all components")
+	RootCmd.PersistentFlags().BoolVar(&opts.DebugOptions.DebugBuildSteps, "debug-build-steps", false, "Debug individual build steps and commands")
+	RootCmd.PersistentFlags().BoolVar(&opts.DebugOptions.DebugMultiPlatform, "debug-multi-platform", false, "Debug multi-platform build coordination")
+	RootCmd.PersistentFlags().BoolVar(&opts.DebugOptions.DebugOCIOperations, "debug-oci", false, "Debug OCI index and manifest operations")
+	RootCmd.PersistentFlags().BoolVar(&opts.DebugOptions.DebugDriverOperations, "debug-drivers", false, "Debug driver operations (local, k8s, ci)")
+	RootCmd.PersistentFlags().BoolVar(&opts.DebugOptions.DebugFilesystem, "debug-filesystem", false, "Debug filesystem operations and snapshots")
+	RootCmd.PersistentFlags().BoolVar(&opts.DebugOptions.DebugCacheOperations, "debug-cache", false, "Debug cache operations and layer management")
+	RootCmd.PersistentFlags().BoolVar(&opts.DebugOptions.DebugRegistry, "debug-registry", false, "Debug registry push/pull operations")
+	RootCmd.PersistentFlags().BoolVar(&opts.DebugOptions.DebugSigning, "debug-signing", false, "Debug image signing operations")
+	RootCmd.PersistentFlags().BoolVar(&opts.DebugOptions.OutputDebugFiles, "debug-output-files", false, "Output debug information to files")
+	RootCmd.PersistentFlags().StringVar(&opts.DebugOptions.DebugLogLevel, "debug-level", "debug", "Debug log level (trace, debug, info)")
+	RootCmd.PersistentFlags().StringSliceVar(&opts.DebugOptions.DebugComponents, "debug-components", []string{}, "Specific components to debug (comma-separated)")
 }
 
 // addRegistryFlags adds registry-related flags

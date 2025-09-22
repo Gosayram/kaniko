@@ -33,11 +33,20 @@ import (
 	"github.com/sirupsen/logrus"
 
 	"github.com/Gosayram/kaniko/pkg/config"
+	"github.com/Gosayram/kaniko/pkg/debug"
 	"github.com/Gosayram/kaniko/pkg/util"
 )
 
 // BuildIndex creates an OCI Image Index or Docker Manifest List from platform digests
 func BuildIndex(manifests map[string]string, opts *config.KanikoOptions) (v1.ImageIndex, error) {
+	debug.LogComponent("oci-index", "Building image index with %d manifests", len(manifests))
+	debug.LogComponent("oci-index", "OCI Mode: %s", opts.OCIMode)
+	debug.LogComponent("oci-index", "Legacy Manifest List: %t", opts.LegacyManifestList)
+	
+	for platform, digest := range manifests {
+		debug.LogComponent("oci-index", "Adding manifest for %s: %s", platform, digest)
+	}
+	
 	if len(manifests) == 0 {
 		return nil, errors.New("no manifests provided for index creation")
 	}
@@ -48,15 +57,19 @@ func BuildIndex(manifests map[string]string, opts *config.KanikoOptions) (v1.Ima
 	var err error
 
 	if opts.LegacyManifestList {
+		debug.LogComponent("oci-index", "Creating Docker Manifest List")
 		index, err = buildDockerManifestList(manifests, opts)
 	} else {
+		debug.LogComponent("oci-index", "Creating OCI Image Index")
 		index, err = buildOCIImageIndex(manifests, opts)
 	}
 
 	if err != nil {
+		debug.LogComponent("oci-index", "Failed to build index: %v", err)
 		return nil, errors.Wrap(err, "failed to build image index")
 	}
-
+	
+	debug.LogComponent("oci-index", "Successfully created image index")
 	return index, nil
 }
 
