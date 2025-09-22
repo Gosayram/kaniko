@@ -221,17 +221,17 @@ func RetryWithConfig(operation retryFunc, retryCount, initialDelayMilliseconds, 
 	if backoffMultiplier <= 0 {
 		backoffMultiplier = baseMultiplier
 	}
-	
+
 	err := operation()
 	for i := 0; err != nil && i < retryCount; i++ {
 		// Calculate exponential backoff with jitter
 		delay := int(math.Pow(backoffMultiplier, float64(i))) * initialDelayMilliseconds
-		
+
 		// Apply max delay limit if specified
 		if maxDelayMilliseconds > 0 && delay > maxDelayMilliseconds {
 			delay = maxDelayMilliseconds
 		}
-		
+
 		sleepDuration := time.Millisecond * time.Duration(delay)
 		logrus.Warnf("Retrying operation after %s due to %v (attempt %d/%d)", sleepDuration, err, i+1, retryCount+1)
 		time.Sleep(sleepDuration)
@@ -258,21 +258,21 @@ func RetryWithResultConfig[T any](
 	if backoffMultiplier <= 0 {
 		backoffMultiplier = baseMultiplier
 	}
-	
+
 	result, err = operation()
 	if err == nil {
 		return result, nil
 	}
-	
+
 	for i := 0; i < retryCount; i++ {
 		// Calculate exponential backoff with jitter
 		delay := int(math.Pow(backoffMultiplier, float64(i))) * initialDelayMilliseconds
-		
+
 		// Apply max delay limit if specified
 		if maxDelayMilliseconds > 0 && delay > maxDelayMilliseconds {
 			delay = maxDelayMilliseconds
 		}
-		
+
 		sleepDuration := time.Millisecond * time.Duration(delay)
 		logrus.Warnf("Retrying operation after %s due to %v (attempt %d/%d)", sleepDuration, err, i+1, retryCount+1)
 		time.Sleep(sleepDuration)

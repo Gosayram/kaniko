@@ -372,7 +372,7 @@ func pushToDestinations(image v1.Image, opts *config.KanikoOptions, destRefs []n
 		if initialDelay <= 0 {
 			initialDelay = pushRetryDelay // fallback to default
 		}
-		
+
 		if err := util.RetryWithConfig(retryFunc, opts.PushRetry, initialDelay, opts.PushRetryMaxDelay, opts.PushRetryBackoffMultiplier, 2.0); err != nil {
 			return errors.Wrap(err, fmt.Sprintf("failed to push to destination %s", destRef))
 		}

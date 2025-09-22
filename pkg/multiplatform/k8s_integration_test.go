@@ -95,13 +95,13 @@ func TestKubernetesDriverIntegration(t *testing.T) {
 	opts := &kanikoConfig.KanikoOptions{
 		Driver: "k8s",
 	}
-	
+
 	// This should fail since we're not running in a pod, but we can test the error handling
 	_, err = NewKubernetesDriver(opts)
 	if err == nil {
 		t.Fatal("Expected NewKubernetesDriver to fail when not running in a pod")
 	}
-	
+
 	logrus.Infof("Kubernetes driver creation failed as expected: %v", err)
 
 	// Test job creation functionality by creating a mock job

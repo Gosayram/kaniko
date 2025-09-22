@@ -31,11 +31,11 @@ type PerformanceTracker struct {
 }
 
 type MemorySnapshot struct {
-	Timestamp time.Time
-	Alloc     uint64
+	Timestamp  time.Time
+	Alloc      uint64
 	TotalAlloc uint64
-	Sys       uint64
-	NumGC     uint32
+	Sys        uint64
+	NumGC      uint32
 }
 
 var (
@@ -54,51 +54,51 @@ func InitPerformanceTracker() *PerformanceTracker {
 func (pt *PerformanceTracker) RecordMemorySnapshot() {
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
-	
+
 	pt.mu.Lock()
 	defer pt.mu.Unlock()
-	
+
 	pt.memoryPoints = append(pt.memoryPoints, MemorySnapshot{
-		Timestamp: time.Now(),
-		Alloc:     m.Alloc,
+		Timestamp:  time.Now(),
+		Alloc:      m.Alloc,
 		TotalAlloc: m.TotalAlloc,
-		Sys:       m.Sys,
-		NumGC:     m.NumGC,
+		Sys:        m.Sys,
+		NumGC:      m.NumGC,
 	})
 }
 
 func (pt *PerformanceTracker) RecordMetric(name string, value interface{}) {
 	pt.mu.Lock()
 	defer pt.mu.Unlock()
-	
+
 	pt.metrics[name] = value
 }
 
 func (pt *PerformanceTracker) GenerateReport() string {
 	pt.mu.Lock()
 	defer pt.mu.Unlock()
-	
+
 	report := fmt.Sprintf("=== Performance Report ===\n")
 	report += fmt.Sprintf("Total execution time: %v\n", time.Since(pt.startTime))
-	
+
 	if len(pt.memoryPoints) > 0 {
 		lastPoint := pt.memoryPoints[len(pt.memoryPoints)-1]
 		report += fmt.Sprintf("Final memory allocation: %d bytes\n", lastPoint.Alloc)
 		report += fmt.Sprintf("Total memory allocated: %d bytes\n", lastPoint.TotalAlloc)
 		report += fmt.Sprintf("Number of GC cycles: %d\n", lastPoint.NumGC)
 	}
-	
+
 	for name, value := range pt.metrics {
 		report += fmt.Sprintf("%s: %v\n", name, value)
 	}
-	
+
 	return report
 }
 
 func (pt *PerformanceTracker) GetExecutionTime() time.Duration {
 	pt.mu.Lock()
 	defer pt.mu.Unlock()
-	
+
 	return time.Since(pt.startTime)
 }
 

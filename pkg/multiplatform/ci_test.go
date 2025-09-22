@@ -68,7 +68,7 @@ func TestCIDriver_ValidatePlatforms(t *testing.T) {
 				os.WriteFile(filepath.Join(tt.opts.DigestsFrom, "linux-amd64.digest"), []byte("sha256:abc123def4567890abcdef1234567890abcdef1234567890abcdef1234567890"), 0644)
 				os.WriteFile(filepath.Join(tt.opts.DigestsFrom, "linux-arm64.digest"), []byte("sha256:def456abc1237890abcdef1234567890abcdef1234567890abcdef1234567890"), 0644)
 			}
-			
+
 			driver := &CIDriver{opts: tt.opts}
 			err := driver.ValidatePlatforms(tt.platforms)
 			if tt.wantErr {

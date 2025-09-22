@@ -95,13 +95,13 @@ func TestMultiPlatformK8sIntegration(t *testing.T) {
 	opts := &kanikoConfig.KanikoOptions{
 		Driver: "k8s",
 	}
-	
+
 	// This should fail since we're not running in a pod, but we can test the error handling
 	_, err = multiplatform.NewKubernetesDriver(opts)
 	if err == nil {
 		t.Fatal("Expected NewKubernetesDriver to fail when not running in a pod")
 	}
-	
+
 	logrus.Infof("Kubernetes driver creation failed as expected: %v", err)
 
 	// Test job creation functionality by creating a mock job
@@ -117,8 +117,8 @@ func TestMultiPlatformK8sIntegration(t *testing.T) {
 					RestartPolicy:      corev1.RestartPolicyNever,
 					Containers: []corev1.Container{
 						{
-							Name:  "test",
-							Image: "busybox",
+							Name:    "test",
+							Image:   "busybox",
 							Command: []string{"echo", "test"},
 						},
 					},
@@ -151,11 +151,11 @@ func TestMultiPlatformK8sJobTemplate(t *testing.T) {
 	}
 
 	opts := &kanikoConfig.KanikoOptions{
-		SrcContext:      "dir:///workspace",
-		DockerfilePath:  "Dockerfile",
-		Destinations:    []string{"registry.example.com/test:latest"},
-		Cache:           true,
-		CacheRepo:       "registry.example.com/cache",
+		SrcContext:         "dir:///workspace",
+		DockerfilePath:     "Dockerfile",
+		Destinations:       []string{"registry.example.com/test:latest"},
+		Cache:              true,
+		CacheRepo:          "registry.example.com/cache",
 		RequireNativeNodes: true,
 	}
 
@@ -167,7 +167,7 @@ func TestMultiPlatformK8sJobTemplate(t *testing.T) {
 			// Create a mock driver to test job creation
 			// We'll test the createBuildJob function indirectly through validation
 			// since it's an unexported method
-			
+
 			// Test platform validation first
 			driver, err := multiplatform.NewKubernetesDriver(opts)
 			if err != nil {
@@ -182,7 +182,7 @@ func TestMultiPlatformK8sJobTemplate(t *testing.T) {
 			}
 
 			t.Logf("Platform %s validated successfully", platform)
-			
+
 			// Test that platform requirements can be generated
 			requirements, err := multiplatform.PlatformRequirements(platform)
 			if err != nil {

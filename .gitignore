@@ -11,3 +11,4 @@ cosign.key
 audit-reports/*
 test-results/*
 *.backup
+**/**.bkp

@@ -154,7 +154,7 @@ func (d *CIDriver) readDigestForPlatform(platform string) (string, error) {
 	if !strings.HasPrefix(cleanDigestFile, d.opts.DigestsFrom) {
 		return "", errors.Errorf("invalid file path: potential directory traversal detected")
 	}
-	
+
 	// Use the same validation as readDigestFromFile
 	data, err := os.ReadFile(cleanDigestFile)
 	if err != nil {

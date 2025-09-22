@@ -22,14 +22,15 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
-	
+
 	"github.com/sirupsen/logrus"
+
 	"github.com/Gosayram/kaniko/pkg/config"
 )
 
 type DebugManager struct {
-	opts        *config.DebugOptions
-	logFile     *os.File
+	opts          *config.DebugOptions
+	logFile       *os.File
 	componentLogs map[string]*logrus.Logger
 }
 
@@ -39,16 +40,16 @@ var (
 
 func Init(opts *config.DebugOptions) (*DebugManager, error) {
 	dm := &DebugManager{
-		opts:        opts,
+		opts:          opts,
 		componentLogs: make(map[string]*logrus.Logger),
 	}
-	
+
 	if opts.OutputDebugFiles {
 		if err := dm.initDebugFiles(); err != nil {
 			return nil, err
 		}
 	}
-	
+
 	defaultManager = dm
 	return dm, nil
 }
@@ -58,9 +59,9 @@ func (dm *DebugManager) initDebugFiles() error {
 	if err := os.MkdirAll(debugDir, 0755); err != nil {
 		return err
 	}
-	
+
 	timestamp := time.Now().Format("20060102-150405")
-	
+
 	// Create main debug log file
 	logFile := filepath.Join(debugDir, "kaniko-debug-"+timestamp+".log")
 	file, err := os.Create(logFile)
@@ -68,7 +69,7 @@ func (dm *DebugManager) initDebugFiles() error {
 		return err
 	}
 	dm.logFile = file
-	
+
 	// Create organized subdirectories for different log types
 	subDirs := []string{
 		"build-steps",
@@ -78,14 +79,14 @@ func (dm *DebugManager) initDebugFiles() error {
 		"registry",
 		"cache",
 	}
-	
+
 	for _, subDir := range subDirs {
 		fullPath := filepath.Join(debugDir, subDir)
 		if err := os.MkdirAll(fullPath, 0755); err != nil {
 			return err
 		}
 	}
-	
+
 	return nil
 }
 
@@ -93,14 +94,14 @@ func (dm *DebugManager) LogComponent(component string, msg string, args ...inter
 	if !dm.shouldLogComponent(component) {
 		return
 	}
-	
+
 	formattedMsg := fmt.Sprintf(msg, args...)
 	logEntry := fmt.Sprintf("[%s] [%s] %s", time.Now().Format(time.RFC3339), component, formattedMsg)
-	
+
 	if dm.logFile != nil {
 		fmt.Fprintln(dm.logFile, logEntry)
 	}
-	
+
 	logrus.Debugf("[%s] %s", component, formattedMsg)
 }
 
@@ -108,17 +109,17 @@ func (dm *DebugManager) shouldLogComponent(component string) bool {
 	if dm.opts.EnableFullDebug {
 		return true
 	}
-	
+
 	if len(dm.opts.DebugComponents) == 0 {
 		return false
 	}
-	
+
 	for _, comp := range dm.opts.DebugComponents {
 		if comp == component {
 			return true
 		}
 	}
-	
+
 	return false
 }
 
@@ -134,15 +135,15 @@ func (dm *DebugManager) LogToComponentFile(component string, msg string, args ..
 	if !dm.opts.OutputDebugFiles {
 		return nil
 	}
-	
+
 	if !dm.shouldLogComponent(component) {
 		return nil
 	}
-	
+
 	formattedMsg := fmt.Sprintf(msg, args...)
 	timestamp := time.Now().Format(time.RFC3339)
 	logEntry := fmt.Sprintf("[%s] %s", timestamp, formattedMsg)
-	
+
 	// Determine the appropriate subdirectory based on component
 	var subDir string
 	switch {
@@ -161,21 +162,21 @@ func (dm *DebugManager) LogToComponentFile(component string, msg string, args ..
 	default:
 		subDir = "other"
 	}
-	
+
 	debugDir := filepath.Join(config.KanikoDir, "debug", subDir)
 	filename := fmt.Sprintf("%s.log", component)
-	
+
 	filePath := filepath.Join(debugDir, filename)
 	file, err := os.OpenFile(filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		return err
 	}
 	defer file.Close()
-	
+
 	if _, err := file.WriteString(logEntry + "\n"); err != nil {
 		return err
 	}
-	
+
 	return nil
 }
 

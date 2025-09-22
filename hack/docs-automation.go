@@ -23,30 +23,28 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"go/types"
 	"log"
 	"os"
 	"path/filepath"
 	"regexp"
-	"sort"
 	"strings"
-	"text/template"
 	"time"
 
 	"github.com/Gosayram/kaniko/internal/version"
+	"github.com/Gosayram/kaniko/pkg/config"
 	"github.com/Gosayram/kaniko/pkg/debug"
 )
 
-// CLICommand represents a CLI command
+// CLICommand models a CLI command with flags and examples.
 type CLICommand struct {
-	Name        string            `json:"name"`
-	Description string            `json:"description"`
-	Flags       []CLIFlag         `json:"flags"`
-	Examples    []CLIExample      `json:"examples"`
-	Subcommands []CLICommand      `json:"subcommands"`
+	Name        string       `json:"name"`
+	Description string       `json:"description"`
+	Flags       []CLIFlag    `json:"flags"`
+	Examples    []CLIExample `json:"examples"`
+	Subcommands []CLICommand `json:"subcommands"`
 }
 
-// CLIFlag represents a CLI flag
+// CLIFlag models a CLI flag.
 type CLIFlag struct {
 	Name         string `json:"name"`
 	Shorthand    string `json:"shorthand"`
@@ -56,13 +54,13 @@ type CLIFlag struct {
 	Required     bool   `json:"required"`
 }
 
-// CLIExample represents a CLI usage example
+// CLIExample models a CLI usage example line.
 type CLIExample struct {
-	Command string `json:"command"`
+	Command     string `json:"command"`
 	Description string `json:"description"`
 }
 
-// DocumentationConfig contains configuration for documentation generation
+// DocumentationConfig defines input/output config for docs generation.
 type DocumentationConfig struct {
 	ProjectName    string `json:"projectName"`
 	Version        string `json:"version"`
@@ -73,41 +71,36 @@ type DocumentationConfig struct {
 	IncludePrivate bool   `json:"includePrivate"`
 }
 
-// DocumentationGenerator handles documentation generation
+// DocumentationGenerator holds state and results of the docs build.
 type DocumentationGenerator struct {
 	config     DocumentationConfig
 	fset       *token.FileSet
-	pkgs       map[string]*types.Package
+	filesByPkg map[string][]*ast.File // collected AST files by package name
 	commands   []CLICommand
 	version    string
 }
 
-// NewDocumentationGenerator creates a new documentation generator
+// NewDocumentationGenerator constructs the generator.
 func NewDocumentationGenerator(config DocumentationConfig) *DocumentationGenerator {
 	return &DocumentationGenerator{
-		config:   config,
-		fset:     token.NewFileSet(),
-		pkgs:     make(map[string]*types.Package),
-		commands: make([]CLICommand, 0),
-		version:  version.Version,
+		config:     config,
+		fset:       token.NewFileSet(),
+		filesByPkg: make(map[string][]*ast.File),
+		commands:   make([]CLICommand, 0),
+		version:    version.Version,
 	}
 }
 
-// GenerateCLIDocs generates CLI documentation
+// GenerateCLIDocs performs the end-to-end documentation generation.
 func (dg *DocumentationGenerator) GenerateCLIDocs() error {
 	debug.LogComponent("docs", "Generating CLI documentation from source code")
 
-	// Parse Go source files
 	if err := dg.parseSourceFiles(); err != nil {
 		return fmt.Errorf("failed to parse source files: %w", err)
 	}
-
-	// Extract CLI commands and flags
 	if err := dg.extractCLICommands(); err != nil {
 		return fmt.Errorf("failed to extract CLI commands: %w", err)
 	}
-
-	// Generate documentation files
 	if err := dg.generateDocumentationFiles(); err != nil {
 		return fmt.Errorf("failed to generate documentation files: %w", err)
 	}
@@ -116,81 +109,55 @@ func (dg *DocumentationGenerator) GenerateCLIDocs() error {
 	return nil
 }
 
-// parseSourceFiles parses Go source files in the source directory
+// parseSourceFiles walks the source tree and parses .go files into ASTs.
 func (dg *DocumentationGenerator) parseSourceFiles() error {
 	debug.LogComponent("docs", "Parsing source files from: %s", dg.config.SourceDir)
 
-	// Walk through the source directory
-	err := filepath.Walk(dg.config.SourceDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
+	err := filepath.Walk(dg.config.SourceDir, func(path string, info os.FileInfo, werr error) error {
+		if werr != nil {
+			return werr
 		}
-
-		// Skip non-Go files
+		// Skip non-Go files.
 		if !info.IsDir() && !strings.HasSuffix(path, ".go") {
 			return nil
 		}
-
-		// Skip vendor directories and test files if not included
-		if strings.Contains(path, "vendor") || (strings.Contains(path, "_test.go") && !dg.config.IncludeTests) {
+		// Skip vendor and optionally tests.
+		if strings.Contains(path, "vendor") || (strings.HasSuffix(path, "_test.go") && !dg.config.IncludeTests) {
 			return nil
 		}
-
-		// Parse Go files
+		// Parse Go file.
 		if !info.IsDir() && strings.HasSuffix(path, ".go") {
-			// Parse the file using the type checker instead of deprecated ast.Package
-			f, err := parser.ParseFile(dg.fset, path, nil, parser.ParseComments)
-			if err != nil {
-				return fmt.Errorf("failed to parse file %s: %w", path, err)
+			f, perr := parser.ParseFile(dg.fset, path, nil, parser.ParseComments)
+			if perr != nil {
+				return fmt.Errorf("failed to parse file %s: %w", path, perr)
 			}
-
-			// Create a type checker and check the file
-			conf := types.Config{Importer: nil}
-			info := &types.Info{
-				Defs:  make(map[*ast.Ident]types.Object),
-				Uses:  make(map[*ast.Ident]types.Object),
-				Types: make(map[ast.Expr]types.TypeAndValue),
-			}
-
-			// Create a package for the file
-			pkg := types.NewPackage(filepath.Dir(path), "")
-			pkg.SetPath(filepath.Dir(path))
-
-			// Type check the file
-			if err := conf.Check(path, dg.fset, []*ast.File{f}, info); err != nil {
-				return fmt.Errorf("failed to type check file %s: %w", path, err)
-			}
-
-			// Store the package
-			pkgName := filepath.Base(filepath.Dir(path))
-			dg.pkgs[pkgName] = pkg
+			pkgName := f.Name.Name
+			dg.filesByPkg[pkgName] = append(dg.filesByPkg[pkgName], f)
 		}
-
 		return nil
 	})
-
 	if err != nil {
 		return fmt.Errorf("failed to walk source directory: %w", err)
 	}
 
-	debug.LogComponent("docs", "Parsed %d packages", len(dg.pkgs))
+	debug.LogComponent("docs", "Parsed packages: %d", len(dg.filesByPkg))
 	return nil
 }
 
-// extractCLICommands extracts CLI commands and flags from the source code
+// extractCLICommands inspects ASTs and collects commands/flags/examples.
 func (dg *DocumentationGenerator) extractCLICommands() error {
 	debug.LogComponent("docs", "Extracting CLI commands and flags")
 
-	// Look for command definitions in cmd/executor directory
-	if executorPkg, exists := dg.pkgs["executor"]; exists {
-		if err := dg.extractExecutorCommands(executorPkg); err != nil {
+	// Executor commands (package likely named "executor")
+	if files, ok := dg.filesByPkg["executor"]; ok {
+		if err := dg.extractCommandsFromFiles(files, "executor", "Kaniko executor for building container images"); err != nil {
 			return err
 		}
 	}
 
-	// Look for warmer commands
-	if warmerPkg, exists := dg.pkgs["warmer"]; exists {
-		if err := dg.extractWarmerCommands(warmerPkg); err != nil {
+	// Warmer commands (package likely named "warmer")
+	if files, ok := dg.filesByPkg["warmer"]; ok {
+		if err := dg.extractCommandsFromFiles(files, "warmer", "Kaniko warmer for pre-warming cache"); err != nil {
 			return err
 		}
 	}
@@ -199,21 +166,28 @@ func (dg *DocumentationGenerator) extractCLICommands() error {
 	return nil
 }
 
-// extractCommandsFromPackage extracts commands from a package with given name and description
-func (dg *DocumentationGenerator) extractCommandsFromPackage(pkg *types.Package, commandName, commandDescription string) error {
-	for _, file := range pkg.Files {
-		// Look for command definitions
+// extractCommandsFromFiles looks for command root variables and associated flags.
+func (dg *DocumentationGenerator) extractCommandsFromFiles(files []*ast.File, commandName, commandDescription string) error {
+	for _, file := range files {
 		ast.Inspect(file, func(n ast.Node) bool {
-			if cmdDecl, ok := n.(*ast.GenDecl); ok {
-				for _, spec := range cmdDecl.Specs {
-					if valueSpec, ok := spec.(*ast.ValueSpec); ok {
-						for _, name := range valueSpec.Names {
-							if strings.Contains(name.Name, "RootCmd") {
-								// Found a command definition
-								if cmd, err := dg.parseCommandDefinition(valueSpec, commandName, commandDescription); err == nil {
-									dg.commands = append(dg.commands, cmd)
-								}
-							}
+			// Heuristic: find value specs with names containing "RootCmd"
+			decl, ok := n.(*ast.GenDecl)
+			if !ok || decl.Tok != token.VAR && decl.Tok != token.CONST {
+				return true
+			}
+			for _, spec := range decl.Specs {
+				vs, ok := spec.(*ast.ValueSpec)
+				if !ok {
+					continue
+				}
+				for _, ident := range vs.Names {
+					if strings.Contains(ident.Name, "RootCmd") {
+						// Parse command definition with any flags we can discover nearby.
+						cmd, err := dg.parseCommandDefinition(vs, commandName, commandDescription)
+						if err == nil {
+							dg.commands = append(dg.commands, cmd)
+						} else {
+							debug.LogComponent("docs", "Warning: failed to parse command: %v", err)
 						}
 					}
 				}
@@ -224,17 +198,7 @@ func (dg *DocumentationGenerator) extractCommandsFromPackage(pkg *types.Package,
 	return nil
 }
 
-// extractExecutorCommands extracts commands from the executor package
-func (dg *DocumentationGenerator) extractExecutorCommands(pkg *types.Package) error {
-	return dg.extractCommandsFromPackage(pkg, "executor", "Kaniko executor for building container images")
-}
-
-// extractWarmerCommands extracts commands from the warmer package
-func (dg *DocumentationGenerator) extractWarmerCommands(pkg *types.Package) error {
-	return dg.extractCommandsFromPackage(pkg, "warmer", "Kaniko warmer for pre-warming cache")
-}
-
-// parseCommandDefinition parses a command definition from AST
+// parseCommandDefinition extracts flags and examples from a candidate command var.
 func (dg *DocumentationGenerator) parseCommandDefinition(valueSpec *ast.ValueSpec, commandName, commandDescription string) (CLICommand, error) {
 	cmd := CLICommand{
 		Name:        commandName,
@@ -243,15 +207,13 @@ func (dg *DocumentationGenerator) parseCommandDefinition(valueSpec *ast.ValueSpe
 		Examples:    make([]CLIExample, 0),
 	}
 
-	// Extract flags from the command
+	// Very conservative: look for function calls inside the RHS of the var to detect flags.
 	if len(valueSpec.Values) > 0 {
 		if callExpr, ok := valueSpec.Values[0].(*ast.CallExpr); ok {
 			for _, arg := range callExpr.Args {
 				if flagCall, ok := arg.(*ast.CallExpr); ok {
 					if flag, err := dg.parseFlagCall(flagCall); err == nil {
 						cmd.Flags = append(cmd.Flags, flag)
-					} else {
-						debug.LogComponent("docs", "Warning: failed to parse flag: %v", err)
 					}
 				}
 			}
@@ -261,52 +223,48 @@ func (dg *DocumentationGenerator) parseCommandDefinition(valueSpec *ast.ValueSpe
 	return cmd, nil
 }
 
-// parseFlagCall parses a flag call from AST
+// parseFlagCall attempts to interpret an expression like pflag.String("name", "desc", "default").
 func (dg *DocumentationGenerator) parseFlagCall(callExpr *ast.CallExpr) (CLIFlag, error) {
 	flag := CLIFlag{}
 
-	// Check if this is a pflag call
+	// Require at least name and description.
 	if len(callExpr.Args) < 2 {
 		return flag, fmt.Errorf("invalid flag call: insufficient arguments")
 	}
 
-	// Extract flag name (first argument)
-	if nameExpr, ok := callExpr.Args[0].(*ast.BasicLit); ok {
-		if nameExpr.Kind == token.STRING {
-			// Remove quotes from string literal
-			flag.Name = strings.Trim(nameExpr.Value, `"`)
-		}
+	// Name (arg 0)
+	if nameExpr, ok := callExpr.Args[0].(*ast.BasicLit); ok && nameExpr.Kind == token.STRING {
+		flag.Name = strings.Trim(nameExpr.Value, `"`)
 	}
 
-	// Extract description (second argument)
-	if descExpr, ok := callExpr.Args[1].(*ast.BasicLit); ok {
-		if descExpr.Kind == token.STRING {
-			flag.Description = strings.Trim(descExpr.Value, `"`)
-		}
+	// Description (arg 1)
+	if descExpr, ok := callExpr.Args[1].(*ast.BasicLit); ok && descExpr.Kind == token.STRING {
+		flag.Description = strings.Trim(descExpr.Value, `"`)
 	}
 
-	// Extract default value if available (third argument)
+	// Default (arg 2 optional)
 	if len(callExpr.Args) > 2 {
-		if defaultExpr, ok := callExpr.Args[2].(*ast.BasicLit); ok {
-			if defaultExpr.Kind == token.STRING {
-				flag.DefaultValue = strings.Trim(defaultExpr.Value, `"`)
-			} else if defaultExpr.Kind == token.INT || defaultExpr.Kind == token.FLOAT {
-				flag.DefaultValue = defaultExpr.Value
-			} else if defaultExpr.Kind == token.CHAR {
-				flag.DefaultValue = strings.Trim(defaultExpr.Value, "'")
+		if defExpr, ok := callExpr.Args[2].(*ast.BasicLit); ok {
+			switch defExpr.Kind {
+			case token.STRING:
+				flag.DefaultValue = strings.Trim(defExpr.Value, `"`)
+			case token.INT, token.FLOAT, token.CHAR:
+				flag.DefaultValue = strings.Trim(defExpr.Value, "'")
 			}
 		}
 	}
 
-	// Extract type information from function name
+	// Infer type from function identifier if possible.
 	if ident, ok := callExpr.Fun.(*ast.Ident); ok {
 		flag.Type = inferFlagType(ident.Name)
+	} else {
+		flag.Type = "string"
 	}
 
 	return flag, nil
 }
 
-// inferFlagType infers flag type from function name
+// inferFlagType maps common flag function names to a primitive type.
 func inferFlagType(funcName string) string {
 	switch {
 	case strings.Contains(funcName, "String"):
@@ -324,26 +282,20 @@ func inferFlagType(funcName string) string {
 	}
 }
 
-// generateDocumentationFiles generates documentation files from templates
+// generateDocumentationFiles writes out generated docs (CLI ref, README, migration).
 func (dg *DocumentationGenerator) generateDocumentationFiles() error {
 	debug.LogComponent("docs", "Generating documentation files in: %s", dg.config.OutputDir)
 
-	// Create output directory if it doesn't exist
-	if err := os.MkdirAll(dg.config.OutputDir, 0755); err != nil {
+	if err := os.MkdirAll(dg.config.OutputDir, 0o755); err != nil {
 		return fmt.Errorf("failed to create output directory: %w", err)
 	}
 
-	// Generate CLI reference
 	if err := dg.generateCLIReference(); err != nil {
 		return fmt.Errorf("failed to generate CLI reference: %w", err)
 	}
-
-	// Generate README updates
 	if err := dg.generateReadmeUpdates(); err != nil {
 		return fmt.Errorf("failed to generate README updates: %w", err)
 	}
-
-	// Generate migration guides
 	if err := dg.generateMigrationGuides(); err != nil {
 		return fmt.Errorf("failed to generate migration guides: %w", err)
 	}
@@ -351,27 +303,23 @@ func (dg *DocumentationGenerator) generateDocumentationFiles() error {
 	return nil
 }
 
-// generateCLIReference generates CLI reference documentation
+// generateCLIReference renders a markdown reference of commands and flags.
 func (dg *DocumentationGenerator) generateCLIReference() error {
 	debug.LogComponent("docs", "Generating CLI reference documentation")
 
-	// Create CLI reference data
-	cliData := struct {
-		Commands   []CLICommand
-		Version    string
-		Generated  time.Time
+	data := struct {
+		Commands  []CLICommand
+		Version   string
+		Generated time.Time
 	}{
 		Commands:  dg.commands,
 		Version:   dg.version,
 		Generated: time.Now(),
 	}
 
-	// Generate markdown documentation
-	markdownContent := dg.generateCLIReferenceMarkdown(cliData)
-
-	// Write to file
+	content := dg.generateCLIReferenceMarkdown(data)
 	outputPath := filepath.Join(dg.config.OutputDir, "cli-reference.md")
-	if err := os.WriteFile(outputPath, []byte(markdownContent), 0644); err != nil {
+	if err := os.WriteFile(outputPath, []byte(content), 0o644); err != nil {
 		return fmt.Errorf("failed to write CLI reference: %w", err)
 	}
 
@@ -379,27 +327,24 @@ func (dg *DocumentationGenerator) generateCLIReference() error {
 	return nil
 }
 
-// generateCLIReferenceMarkdown generates CLI reference in markdown format
+// generateCLIReferenceMarkdown builds the markdown for CLI reference.
 func (dg *DocumentationGenerator) generateCLIReferenceMarkdown(data struct {
-	Commands   []CLICommand
-	Version    string
-	Generated  time.Time
+	Commands  []CLICommand
+	Version   string
+	Generated time.Time
 }) string {
 	var buf bytes.Buffer
 
-	// Header
 	buf.WriteString("# Kaniko CLI Reference\n\n")
 	buf.WriteString(fmt.Sprintf("Version: %s\n", data.Version))
 	buf.WriteString(fmt.Sprintf("Generated: %s\n\n", data.Generated.Format("2006-01-02 15:04:05")))
 	buf.WriteString("This document provides a comprehensive reference for all Kaniko CLI commands and flags.\n\n")
 
-	// Table of contents
 	buf.WriteString("## Table of Contents\n\n")
 	buf.WriteString("- [Executor Command](#executor-command)\n")
 	buf.WriteString("- [Warmer Command](#warmer-command)\n")
 	buf.WriteString("- [Common Flags](#common-flags)\n\n")
 
-	// Generate documentation for each command
 	for _, cmd := range data.Commands {
 		dg.generateCommandDocumentation(&buf, cmd)
 	}
@@ -407,45 +352,47 @@ func (dg *DocumentationGenerator) generateCLIReferenceMarkdown(data struct {
 	return buf.String()
 }
 
-// generateCommandDocumentation generates documentation for a single command
+// titleCase provides a simple title-casing for section headers.
+func titleCase(s string) string {
+	if s == "" {
+		return s
+	}
+	return strings.ToUpper(s[:1]) + s[1:]
+}
+
+// generateCommandDocumentation appends a single command section to the buffer.
 func (dg *DocumentationGenerator) generateCommandDocumentation(buf *bytes.Buffer, cmd CLICommand) {
-	buf.WriteString(fmt.Sprintf("## %s Command\n\n", strings.Title(cmd.Name)))
+	buf.WriteString(fmt.Sprintf("## %s Command\n\n", titleCase(cmd.Name)))
 	buf.WriteString(fmt.Sprintf("%s\n\n", cmd.Description))
 
-	// Command syntax
 	buf.WriteString("### Syntax\n\n")
 	buf.WriteString(fmt.Sprintf("```bash\nkaniko %s [OPTIONS]\n```\n\n", cmd.Name))
 
-	// Flags
 	if len(cmd.Flags) > 0 {
 		buf.WriteString("### Options\n\n")
 		buf.WriteString("| Flag | Description | Default | Required |\n")
 		buf.WriteString("|------|-------------|---------|----------|\n")
-
 		for _, flag := range cmd.Flags {
-			defaultValue := flag.DefaultValue
-			if defaultValue == "" {
-				defaultValue = "none"
+			def := flag.DefaultValue
+			if def == "" {
+				def = "none"
 			}
-
-			required := "No"
+			req := "No"
 			if flag.Required {
-				required = "Yes"
+				req = "Yes"
 			}
-
-			buf.WriteString(fmt.Sprintf("| `--%s` | %s | %s | %s |\n", 
-				flag.Name, flag.Description, defaultValue, required))
+			buf.WriteString(fmt.Sprintf("| `--%s` | %s | %s | %s |\n",
+				flag.Name, flag.Description, def, req))
 		}
 		buf.WriteString("\n")
 	}
 
-	// Examples
 	if len(cmd.Examples) > 0 {
 		buf.WriteString("### Examples\n\n")
-		for _, example := range cmd.Examples {
-			buf.WriteString(fmt.Sprintf("```bash\n%s\n```\n", example.Command))
-			if example.Description != "" {
-				buf.WriteString(fmt.Sprintf("%s\n\n", example.Description))
+		for _, ex := range cmd.Examples {
+			buf.WriteString(fmt.Sprintf("```bash\n%s\n```\n", ex.Command))
+			if ex.Description != "" {
+				buf.WriteString(fmt.Sprintf("%s\n\n", ex.Description))
 			}
 		}
 	}
@@ -453,22 +400,18 @@ func (dg *DocumentationGenerator) generateCommandDocumentation(buf *bytes.Buffer
 	buf.WriteString("\n")
 }
 
-// generateReadmeUpdates generates updated README content
+// generateReadmeUpdates updates README.md with version and optional sections.
 func (dg *DocumentationGenerator) generateReadmeUpdates() error {
 	debug.LogComponent("docs", "Generating README updates")
 
-	// Read existing README
 	readmePath := filepath.Join(dg.config.SourceDir, "..", "README.md")
 	readmeContent, err := os.ReadFile(readmePath)
 	if err != nil {
 		return fmt.Errorf("failed to read README: %w", err)
 	}
 
-	// Update README with current information
-	updatedContent := dg.updateReadmeContent(string(readmeContent))
-
-	// Write updated README
-	if err := os.WriteFile(readmePath, []byte(updatedContent), 0644); err != nil {
+	updated := dg.updateReadmeContent(string(readmeContent))
+	if err := os.WriteFile(readmePath, []byte(updated), 0o644); err != nil {
 		return fmt.Errorf("failed to write updated README: %w", err)
 	}
 
@@ -476,26 +419,23 @@ func (dg *DocumentationGenerator) generateReadmeUpdates() error {
 	return nil
 }
 
-// updateReadmeContent updates README content with current information
+// updateReadmeContent injects the current version and performance section.
 func (dg *DocumentationGenerator) updateReadmeContent(content string) string {
-	// Update version information
 	versionRegex := regexp.MustCompile(`Version: [^\n]+`)
 	content = versionRegex.ReplaceAllString(content, fmt.Sprintf("Version: %s", dg.version))
 
-	// Update installation instructions with latest version
 	installRegex := regexp.MustCompile(`kaniko-project/executor:\d+\.\d+\.\d+`)
 	content = installRegex.ReplaceAllString(content, fmt.Sprintf("kaniko-project/executor:%s", dg.version))
 
-	// Add performance benchmarks if available
 	if strings.Contains(content, "## Performance") {
-		benchmarkSection := dg.generateBenchmarkSection()
-		content = strings.Replace(content, "## Performance", benchmarkSection, 1)
+		benchmark := dg.generateBenchmarkSection()
+		content = strings.Replace(content, "## Performance", benchmark, 1)
 	}
 
 	return content
 }
 
-// generateBenchmarkSection generates performance benchmark section
+// generateBenchmarkSection returns a canned performance section.
 func (dg *DocumentationGenerator) generateBenchmarkSection() string {
 	return `## Performance
 
@@ -520,23 +460,18 @@ For detailed benchmark results, see [docs/benchmark.md](docs/benchmark.md).
 `
 }
 
-// generateMigrationGuides generates migration guides for version changes
+// generateMigrationGuides writes the migration guide for the current version.
 func (dg *DocumentationGenerator) generateMigrationGuides() error {
 	debug.LogComponent("docs", "Generating migration guides")
 
-	// Get current version
 	currentVersion := dg.version
+	content := dg.generateMigrationGuideContent(currentVersion)
 
-	// Create migration guide content
-	migrationContent := dg.generateMigrationGuideContent(currentVersion)
-
-	// Write migration guide
 	migrationPath := filepath.Join(dg.config.OutputDir, "migration-guides", fmt.Sprintf("migration-to-%s.md", currentVersion))
-	if err := os.MkdirAll(filepath.Dir(migrationPath), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(migrationPath), 0o755); err != nil {
 		return fmt.Errorf("failed to create migration guides directory: %w", err)
 	}
-
-	if err := os.WriteFile(migrationPath, []byte(migrationContent), 0644); err != nil {
+	if err := os.WriteFile(migrationPath, []byte(content), 0o644); err != nil {
 		return fmt.Errorf("failed to write migration guide: %w", err)
 	}
 
@@ -544,167 +479,145 @@ func (dg *DocumentationGenerator) generateMigrationGuides() error {
 	return nil
 }
 
-// generateMigrationGuideContent generates migration guide content
-func (dg *DocumentationGenerator) generateMigrationGuideContent(version string) string {
-	return fmt.Sprintf(`# Migration Guide to Kaniko %s
+// generateMigrationGuideContent builds the migration guide using strings.Builder
+// to avoid raw string literals with embedded backticks that broke parsing.
+func (dg *DocumentationGenerator) generateMigrationGuideContent(ver string) string {
+	var sb strings.Builder
+	sb.WriteString("# Migration Guide to Kaniko ")
+	sb.WriteString(ver)
+	sb.WriteString("\n\nThis guide helps you migrate to Kaniko version ")
+	sb.WriteString(ver)
+	sb.WriteString(".\n\n")
 
-This guide helps you migrate to Kaniko version %s.
+	sb.WriteString("## What's New\n\n")
+	sb.WriteString("### Enhanced Debug Mode\n")
+	sb.WriteString("- New comprehensive debug flags for troubleshooting\n")
+	sb.WriteString("- Environment-based debug configuration\n")
+	sb.WriteString("- Structured debug output with performance tracking\n\n")
 
-## What's New
+	sb.WriteString("### Advanced Cache Management\n")
+	sb.WriteString("- Per-architecture cache repositories\n")
+	sb.WriteString("- TTL-based garbage collection\n")
+	sb.WriteString("- Intelligent cache preheating\n\n")
 
-### Enhanced Debug Mode
-- New comprehensive debug flags for troubleshooting
-- Environment-based debug configuration
-- Structured debug output with performance tracking
+	sb.WriteString("### Intelligent Platform Detection\n")
+	sb.WriteString("- Automatic platform detection for multi-arch builds\n")
+	sb.WriteString("- Platform validation and compatibility checking\n")
+	sb.WriteString("- Optimal platform suggestions\n\n")
 
-### Advanced Cache Management
-- Per-architecture cache repositories
-- TTL-based garbage collection
-- Intelligent cache preheating
+	sb.WriteString("### Enhanced Registry Intelligence\n")
+	sb.WriteString("- Auto-detection of registry capabilities\n")
+	sb.WriteString("- Optimized push strategies per registry\n")
+	sb.WriteString("- Rate limiting detection and handling\n\n")
 
-### Intelligent Platform Detection
-- Automatic platform detection for multi-arch builds
-- Platform validation and compatibility checking
-- Optimal platform suggestions
+	sb.WriteString("### Build Optimization Engine\n")
+	sb.WriteString("- Dockerfile pattern detection\n")
+	sb.WriteString("- Performance analysis and recommendations\n")
+	sb.WriteString("- Automated optimization suggestions\n\n")
 
-### Enhanced Registry Intelligence
-- Auto-detection of registry capabilities
-- Optimized push strategies per registry
-- Rate limiting detection and handling
+	sb.WriteString("### Intelligent Retry System\n")
+	sb.WriteString("- Context-aware retry strategies\n")
+	sb.WriteString("- Error classification and handling\n")
+	sb.WriteString("- Adaptive retry behavior\n\n")
 
-### Build Optimization Engine
-- Dockerfile pattern detection
-- Performance analysis and recommendations
-- Automated optimization suggestions
+	sb.WriteString("## Breaking Changes\n\n")
+	sb.WriteString("### Debug Configuration Changes\n")
+	sb.WriteString("- Debug flags have been reorganized\n")
+	sb.WriteString("- Some debug environment variables have changed names\n")
+	sb.WriteString("- Debug output format has been enhanced\n\n")
 
-### Intelligent Retry System
-- Context-aware retry strategies
-- Error classification and handling
-- Adaptive retry behavior
+	sb.WriteString("### Cache Management Changes\n")
+	sb.WriteString("- Cache key generation has been optimized\n")
+	sb.WriteString("- Some cache-related flags have been deprecated\n")
+	sb.WriteString("- New cache management commands added\n\n")
 
-## Breaking Changes
+	sb.WriteString("### Multi-Platform Changes\n")
+	sb.WriteString("- Multi-platform build syntax has been simplified\n")
+	sb.WriteString("- Some legacy multi-platform flags have been removed\n")
+	sb.WriteString("- New platform validation added\n\n")
 
-### Debug Configuration Changes
-- Debug flags have been reorganized
-- Some debug environment variables have changed names
-- Debug output format has been enhanced
+	sb.WriteString("## Migration Steps\n\n")
 
-### Cache Management Changes
-- Cache key generation has been optimized
-- Some cache-related flags have been deprecated
-- New cache management commands added
+	// 1. Debug
+	sb.WriteString("### 1. Update Debug Configuration\n\n```bash\n")
+	sb.WriteString("# Old way\nkaniko --debug --verbose\n\n")
+	sb.WriteString("# New way\nkaniko --debug-full --debug-level=trace\n")
+	sb.WriteString("```\n\n")
 
-### Multi-Platform Changes
-- Multi-platform build syntax has been simplified
-- Some legacy multi-platform flags have been removed
-- New platform validation added
+	// 2. Cache
+	sb.WriteString("### 2. Update Cache Configuration\n\n```bash\n")
+	sb.WriteString("# Old way\nkaniko --cache-dir=/cache\n\n")
+	sb.WriteString("# New way\nkaniko --cache-dir=/cache --cache-ttl=24h\n")
+	sb.WriteString("```\n\n")
 
-## Migration Steps
+	// 3. Multi-Platform
+	sb.WriteString("### 3. Update Multi-Platform Configuration\n\n```bash\n")
+	sb.WriteString("# Old way\nkaniko --platform=linux/amd64,linux/arm64\n\n")
+	sb.WriteString("# New way\nkaniko --multi-platform=linux/amd64,linux/arm64 --driver=k8s\n")
+	sb.WriteString("```\n\n")
 
-### 1. Update Debug Configuration
+	// 4. Registry
+	sb.WriteString("### 4. Update Registry Configuration\n\n```bash\n")
+	sb.WriteString("# Old way\nkaniko --destination=registry/image:tag\n\n")
+	sb.WriteString("# New way\nkaniko --destination=registry/image:tag --registry-intelligence=true\n")
+	sb.WriteString("```\n\n")
 
-\`\`\`bash
-# Old way
-kaniko --debug --verbose
+	sb.WriteString("## Deprecation Notices\n\n")
+	sb.WriteString("- `--old-debug-flag` (use `--debug-full` instead)\n")
+	sb.WriteString("- `--cache-only` (use `--cache-dir` with proper configuration)\n")
+	sb.WriteString("- `--platform-list` (use `--multi-platform` instead)\n\n")
 
-# New way
-kaniko --debug-full --debug-level=trace
-\`\`\`
+	sb.WriteString("## Performance Improvements\n\n")
+	sb.WriteString("Version ")
+	sb.WriteString(ver)
+	sb.WriteString(" includes several performance improvements:\n\n")
+	sb.WriteString("- **Build speed**: 20-30% faster builds with optimized layer handling\n")
+	sb.WriteString("- **Cache efficiency**: 40-60% better cache hit rates\n")
+	sb.WriteString("- **Memory usage**: 30-50% reduction in peak memory usage\n")
+	sb.WriteString("- **Multi-arch builds**: 25-40% faster multi-platform builds\n\n")
 
-### 2. Update Cache Configuration
+	sb.WriteString("## Troubleshooting\n\n")
+	sb.WriteString("If you encounter issues during migration:\n\n")
+	sb.WriteString("1. Check the debug logs with `--debug-full`\n")
+	sb.WriteString("2. Review the migration guide for your specific version\n")
+	sb.WriteString("3. Check the [troubleshooting guide](docs/troubleshooting.md)\n")
+	sb.WriteString("4. Open an issue on GitHub with debug information\n\n")
 
-\`\`\`bash
-# Old way
-kaniko --cache-dir=/cache
+	sb.WriteString("## Support\n\n")
+	sb.WriteString("If you need help with migration:\n\n")
+	sb.WriteString("- Check the [documentation](docs/)\n")
+	sb.WriteString("- Review existing [issues](https://github.com/GoogleContainerTools/kaniko/issues)\n")
+	sb.WriteString("- Create a new issue with detailed information\n\n")
 
-# New way
-kaniko --cache-dir=/cache --cache-ttl=24h
-\`\`\`
+	sb.WriteString("---\n\n")
+	sb.WriteString("*Generated on ")
+	sb.WriteString(time.Now().Format("2006-01-02 15:04:05"))
+	sb.WriteString("*\n")
 
-### 3. Update Multi-Platform Configuration
-
-\`\`\`bash
-# Old way
-kaniko --platform=linux/amd64,linux/arm64
-
-# New way
-kaniko --multi-platform=linux/amd64,linux/arm64 --driver=k8s
-\`\`\`
-
-### 4. Update Registry Configuration
-
-\`\`\`bash
-# Old way
-kaniko --destination=registry/image:tag
-
-# New way
-kaniko --destination=registry/image:tag --registry-intelligence=true
-\`\`\`
-
-## Deprecation Notices
-
-The following flags have been deprecated and will be removed in a future version:
-
-- \\`--old-debug-flag\\` (use \\`--debug-full\\` instead)
-- \\`--cache-only\\` (use \\`--cache-dir\\` with proper configuration)
-- \\`--platform-list\\` (use \\`--multi-platform\\` instead)
-
-## Performance Improvements
-
-Version %s includes several performance improvements:
-
-- **Build speed**: 20-30% faster builds with optimized layer handling
-- **Cache efficiency**: 40-60% better cache hit rates
-- **Memory usage**: 30-50% reduction in peak memory usage
-- **Multi-arch builds**: 25-40% faster multi-platform builds
-
-## Troubleshooting
-
-If you encounter issues during migration:
-
-1. Check the debug logs with \\`--debug-full\\`
-2. Review the migration guide for your specific version
-3. Check the [troubleshooting guide](docs/troubleshooting.md)
-4. Open an issue on GitHub with debug information
-
-## Support
-
-If you need help with migration:
-
-- Check the [documentation](docs/)
-- Review existing [issues](https://github.com/GoogleContainerTools/kaniko/issues)
-- Create a new issue with detailed information
-
----
-
-*Generated on %s*
-`, version, version, version, time.Now().Format("2006-01-02 15:04:05"))
+	return sb.String()
 }
 
-// GenerateCLIDocsJSON generates CLI documentation in JSON format
+// GenerateCLIDocsJSON writes a machine-readable JSON reference.
 func (dg *DocumentationGenerator) GenerateCLIDocsJSON() error {
 	debug.LogComponent("docs", "Generating CLI documentation in JSON format")
 
-	// Create CLI reference data
-	cliData := struct {
-		Commands   []CLICommand
-		Version    string
-		Generated  time.Time
+	data := struct {
+		Commands  []CLICommand
+		Version   string
+		Generated time.Time
 	}{
 		Commands:  dg.commands,
 		Version:   dg.version,
 		Generated: time.Now(),
 	}
 
-	// Marshal to JSON
-	jsonData, err := json.MarshalIndent(cliData, "", "  ")
+	jsonData, err := json.MarshalIndent(data, "", "  ")
 	if err != nil {
 		return fmt.Errorf("failed to marshal CLI data to JSON: %w", err)
 	}
 
-	// Write to file
 	outputPath := filepath.Join(dg.config.OutputDir, "cli-reference.json")
-	if err := os.WriteFile(outputPath, jsonData, 0644); err != nil {
+	if err := os.WriteFile(outputPath, jsonData, 0o644); err != nil {
 		return fmt.Errorf("failed to write CLI JSON reference: %w", err)
 	}
 
@@ -712,45 +625,35 @@ func (dg *DocumentationGenerator) GenerateCLIDocsJSON() error {
 	return nil
 }
 
-// UpdateReadmeWithExamples updates README with usage examples from integration tests
+// UpdateReadmeWithExamples can append example usage discovered elsewhere.
 func (dg *DocumentationGenerator) UpdateReadmeWithExamples() error {
 	debug.LogComponent("docs", "Updating README with integration test examples")
 
-	// This would parse integration tests and extract examples
-	// For now, we'll add some placeholder examples
-
+	// Placeholder: in a real implementation, parse integration tests.
 	examples := []CLIExample{
-		{
-			Command: "kaniko --dockerfile=Dockerfile --destination=registry/image:tag",
-			Description: "Basic image build and push",
-		},
-		{
-			Command: "kaniko --dockerfile=Dockerfile --destination=registry/image:tag --cache=true",
-			Description: "Build with cache enabled",
-		},
-		{
-			Command: "kaniko --dockerfile=Dockerfile --destination=registry/image:tag --multi-platform=linux/amd64,linux/arm64",
-			Description: "Multi-platform build",
-		},
+		{Command: "kaniko --dockerfile=Dockerfile --destination=registry/image:tag", Description: "Basic image build and push"},
+		{Command: "kaniko --dockerfile=Dockerfile --destination=registry/image:tag --cache=true", Description: "Build with cache enabled"},
+		{Command: "kaniko --dockerfile=Dockerfile --destination=registry/image:tag --multi-platform=linux/amd64,linux/arm64", Description: "Multi-platform build"},
 	}
-
-	// Update README with examples
-	// This would be implemented to actually modify the README
-	// For now, we'll just log the examples
-	for _, example := range examples {
-		debug.LogComponent("docs", "Example: %s - %s", example.Command, example.Description)
+	for _, ex := range examples {
+		debug.LogComponent("docs", "Example: %s - %s", ex.Command, ex.Description)
 	}
-
 	debug.LogComponent("docs", "README examples updated successfully")
 	return nil
 }
 
-// main function
+// main is the entry point for the docs automation tool.
 func main() {
-	// Initialize debug logging
-	debug.Init()
+	// Initialize structured debug logging.
+	debugOpts := &config.DebugOptions{
+		EnableFullDebug:  true,
+		OutputDebugFiles: true,
+		DebugLogLevel:    "debug",
+		DebugComponents:  []string{"docs"},
+	}
+	debug.Init(debugOpts)
 
-	// Create configuration
+	// Build generator config from current repository layout.
 	config := DocumentationConfig{
 		ProjectName:    "Kaniko",
 		Version:        version.Version,
@@ -761,25 +664,19 @@ func main() {
 		IncludePrivate: false,
 	}
 
-	// Create documentation generator
+	// Create generator.
 	generator := NewDocumentationGenerator(config)
 
-	// Generate CLI documentation
+	// Generate docs.
 	if err := generator.GenerateCLIDocs(); err != nil {
 		log.Fatalf("Failed to generate CLI documentation: %v", err)
 	}
-
-	// Generate JSON documentation
 	if err := generator.GenerateCLIDocsJSON(); err != nil {
 		log.Fatalf("Failed to generate JSON documentation: %v", err)
 	}
-
-	// Update README with examples
 	if err := generator.UpdateReadmeWithExamples(); err != nil {
 		log.Fatalf("Failed to update README with examples: %v", err)
 	}
-
-	// Generate migration guides
 	if err := generator.generateMigrationGuides(); err != nil {
 		log.Fatalf("Failed to generate migration guides: %v", err)
 	}

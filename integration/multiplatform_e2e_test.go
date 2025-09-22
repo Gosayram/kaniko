@@ -62,7 +62,7 @@ CMD ["cat", "/test.txt"]
 	for _, platform := range platforms {
 		t.Run("single_"+platform, func(t *testing.T) {
 			imageName := fmt.Sprintf("%s/test-multi-local-%s", config.imageRepo, strings.ReplaceAll(platform, "/", "-"))
-			
+
 			// Build with kaniko using custom platform
 			dockerRunFlags := []string{"run", "--net=host"}
 			dockerRunFlags = addServiceAccountFlags(dockerRunFlags, config.serviceAccount)
@@ -90,19 +90,19 @@ CMD ["cat", "/test.txt"]
 	// Test multi-platform build using local driver
 	t.Run("multi_platform", func(t *testing.T) {
 		multiImageName := fmt.Sprintf("%s/test-multi-local-index", config.imageRepo)
-		
+
 		// Create digest files for CI driver test
 		digestDir := t.TempDir()
 		for platform, image := range singleImages {
 			digestFilename := strings.ReplaceAll(platform, "/", "-") + ".digest"
 			digestPath := filepath.Join(digestDir, digestFilename)
-			
+
 			// Get digest from image
 			digest, err := getImageDigest(image)
 			if err != nil {
 				t.Fatalf("Failed to get digest for %s: %v", image, err)
 			}
-			
+
 			err = os.WriteFile(digestPath, []byte(digest), 0644)
 			if err != nil {
 				t.Fatalf("Failed to write digest file: %v", err)
@@ -164,7 +164,7 @@ CMD ["cat", "/platform.txt"]
 		t.Run("ci_"+platform, func(t *testing.T) {
 			// Build single platform image
 			tempImage := fmt.Sprintf("%s/test-ci-%s-temp", config.imageRepo, strings.ReplaceAll(platform, "/", "-"))
-			
+
 			dockerRunFlags := []string{"run", "--net=host"}
 			dockerRunFlags = addServiceAccountFlags(dockerRunFlags, config.serviceAccount)
 			dockerRunFlags = append(dockerRunFlags,
@@ -203,7 +203,7 @@ CMD ["cat", "/platform.txt"]
 	// Test CI driver aggregation
 	t.Run("ci_aggregation", func(t *testing.T) {
 		multiImageName := fmt.Sprintf("%s/test-ci-multi", config.imageRepo)
-		
+
 		dockerRunFlags := []string{"run", "--net=host"}
 		dockerRunFlags = addServiceAccountFlags(dockerRunFlags, config.serviceAccount)
 		dockerRunFlags = append(dockerRunFlags,
@@ -239,7 +239,7 @@ func TestMultiPlatformK8sE2E(t *testing.T) {
 
 	// This test requires a real Kubernetes cluster with multi-architecture nodes
 	// For now, we'll test the job creation and platform validation
-	
+
 	// Create test context
 	contextDir := t.TempDir()
 	dockerfilePath := filepath.Join(contextDir, "Dockerfile")
@@ -288,9 +288,9 @@ func TestMultiPlatformImageVerification(t *testing.T) {
 
 	// This test verifies that multi-platform images can be pulled and inspected
 	// using standard container tools
-	
+
 	testImage := fmt.Sprintf("%s/test-verification", config.imageRepo)
-	
+
 	// Create a simple multi-platform index for testing
 	contextDir := t.TempDir()
 	dockerfilePath := filepath.Join(contextDir, "Dockerfile")
@@ -306,10 +306,10 @@ CMD ["cat", "/verify.txt"]
 
 	// Build for multiple platforms
 	platforms := []string{"linux/amd64", "linux/arm64"}
-	
+
 	for _, platform := range platforms {
 		imageName := fmt.Sprintf("%s-test-%s", testImage, strings.ReplaceAll(platform, "/", "-"))
-		
+
 		dockerRunFlags := []string{"run", "--net=host"}
 		dockerRunFlags = addServiceAccountFlags(dockerRunFlags, config.serviceAccount)
 		dockerRunFlags = append(dockerRunFlags,
@@ -332,7 +332,7 @@ CMD ["cat", "/verify.txt"]
 	if _, err := exec.LookPath("crane"); err == nil {
 		for _, platform := range platforms {
 			imageName := fmt.Sprintf("%s-test-%s", testImage, strings.ReplaceAll(platform, "/", "-"))
-			
+
 			cmd := exec.Command("crane", "manifest", imageName)
 			out, err := RunCommandWithoutTest(cmd)
 			if err != nil {
@@ -346,7 +346,7 @@ CMD ["cat", "/verify.txt"]
 	// Test that go-containerregistry can pull the images
 	for _, platform := range platforms {
 		imageName := fmt.Sprintf("%s-test-%s", testImage, strings.ReplaceAll(platform, "/", "-"))
-		
+
 		ref, err := name.ParseReference(imageName, name.WeakValidation)
 		if err != nil {
 			t.Logf("Warning: failed to parse reference for %s: %v", imageName, err)
@@ -470,7 +470,7 @@ func verifyMultiPlatformIndex(t *testing.T, indexName string, expectedPlatforms 
 func createMultiPlatformJobManifest(jobName, contextDir string, platforms []string, imageRepo string) string {
 	// This creates a Kubernetes job manifest for multi-platform builds
 	// In a real implementation, this would create separate jobs for each platform
-	
+
 	var manifest strings.Builder
 	manifest.WriteString(`apiVersion: batch/v1
 kind: Job

@@ -141,12 +141,12 @@ func configureDebugFromEnvironment() {
 		opts.DebugOptions.OutputDebugFiles = true
 		logrus.Info("Debug mode enabled via environment variable")
 	}
-	
+
 	// Set debug level from environment
 	if level := os.Getenv("KANIKO_DEBUG_LEVEL"); level != "" {
 		opts.DebugOptions.DebugLogLevel = level
 	}
-	
+
 	// Set debug components from environment
 	if components := os.Getenv("KANIKO_DEBUG_COMPONENTS"); components != "" {
 		opts.DebugOptions.DebugComponents = strings.Split(components, ",")
@@ -167,7 +167,7 @@ var RootCmd = &cobra.Command{
 			if _, err := debug.Init(&opts.DebugOptions); err != nil {
 				logrus.Warnf("Failed to initialize debug system: %v", err)
 			}
-			
+
 			// Initialize performance tracker
 			debug.InitPerformanceTracker()
 
@@ -332,7 +332,7 @@ func addBasicFlags() {
 		"Set the target build stage to build")
 	RootCmd.PersistentFlags().Var(&opts.Git, "git",
 		"Branch to clone if build context is a git repository")
-	
+
 	// Add debug flags
 	addDebugFlags()
 }

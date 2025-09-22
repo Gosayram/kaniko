@@ -125,7 +125,7 @@ type DebugOptions struct {
 	DebugRegistry         bool     `json:"debugRegistry" yaml:"debugRegistry"`
 	DebugSigning          bool     `json:"debugSigning" yaml:"debugSigning"`
 	OutputDebugFiles      bool     `json:"outputDebugFiles" yaml:"outputDebugFiles"`
-	DebugLogLevel         string   `json:"debugLogLevel" yaml:"debugLogLevel"` // trace, debug, info
+	DebugLogLevel         string   `json:"debugLogLevel" yaml:"debugLogLevel"`     // trace, debug, info
 	DebugComponents       []string `json:"debugComponents" yaml:"debugComponents"` // specific components to debug
 }
 

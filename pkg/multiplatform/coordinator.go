@@ -67,7 +67,7 @@ func NewCoordinator(opts *config.KanikoOptions) (*Coordinator, error) {
 func (c *Coordinator) Execute(ctx context.Context) (v1.ImageIndex, error) {
 	debug.LogComponent("multiplatform", "Starting multi-platform build with platforms: %v", c.opts.MultiPlatform)
 	debug.LogComponent("multiplatform", "Using driver: %s", c.opts.Driver)
-	
+
 	platforms := c.opts.MultiPlatform
 	if len(platforms) == 0 {
 		return nil, errors.New("no platforms specified for multi-platform build")
@@ -94,7 +94,7 @@ func (c *Coordinator) Execute(ctx context.Context) (v1.ImageIndex, error) {
 		debug.LogComponent("multiplatform", "Build execution failed: %v", err)
 		return nil, errors.Wrap(err, "failed to execute multi-platform builds")
 	}
-	
+
 	debug.LogComponent("multiplatform", "Build results: %v", digests)
 	c.digests = digests
 
