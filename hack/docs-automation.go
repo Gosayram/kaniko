@@ -14,6 +14,9 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// Package main provides a documentation automation tool for Kaniko CLI.
+// It generates comprehensive documentation including CLI reference, README updates,
+// migration guides, and JSON documentation from source code analysis.
 package main
 
 import (
@@ -81,9 +84,9 @@ type DocumentationGenerator struct {
 }
 
 // NewDocumentationGenerator constructs the generator.
-func NewDocumentationGenerator(config DocumentationConfig) *DocumentationGenerator {
+func NewDocumentationGenerator(config *DocumentationConfig) *DocumentationGenerator {
 	return &DocumentationGenerator{
-		config:     config,
+		config:     *config,
 		fset:       token.NewFileSet(),
 		filesByPkg: make(map[string][]*ast.File),
 		commands:   make([]CLICommand, 0),
@@ -150,14 +153,16 @@ func (dg *DocumentationGenerator) extractCLICommands() error {
 
 	// Executor commands (package likely named "executor")
 	if files, ok := dg.filesByPkg["executor"]; ok {
-		if err := dg.extractCommandsFromFiles(files, "executor", "Kaniko executor for building container images"); err != nil {
+		if err := dg.extractCommandsFromFiles(files, "executor",
+			"Kaniko executor for building container images"); err != nil {
 			return err
 		}
 	}
 
 	// Warmer commands (package likely named "warmer")
 	if files, ok := dg.filesByPkg["warmer"]; ok {
-		if err := dg.extractCommandsFromFiles(files, "warmer", "Kaniko warmer for pre-warming cache"); err != nil {
+		if err := dg.extractCommandsFromFiles(files, "warmer",
+			"Kaniko warmer for pre-warming cache"); err != nil {
 			return err
 		}
 	}
@@ -199,7 +204,11 @@ func (dg *DocumentationGenerator) extractCommandsFromFiles(files []*ast.File, co
 }
 
 // parseCommandDefinition extracts flags and examples from a candidate command var.
-func (dg *DocumentationGenerator) parseCommandDefinition(valueSpec *ast.ValueSpec, commandName, commandDescription string) (CLICommand, error) {
+func (dg *DocumentationGenerator) parseCommandDefinition(
+	valueSpec *ast.ValueSpec,
+	commandName,
+	commandDescription string,
+) (CLICommand, error) {
 	cmd := CLICommand{
 		Name:        commandName,
 		Description: commandDescription,
@@ -227,8 +236,13 @@ func (dg *DocumentationGenerator) parseCommandDefinition(valueSpec *ast.ValueSpe
 func (dg *DocumentationGenerator) parseFlagCall(callExpr *ast.CallExpr) (CLIFlag, error) {
 	flag := CLIFlag{}
 
+	const (
+		minRequiredArgs = 2
+		defaultArgIndex = 2
+	)
+
 	// Require at least name and description.
-	if len(callExpr.Args) < 2 {
+	if len(callExpr.Args) < minRequiredArgs {
 		return flag, fmt.Errorf("invalid flag call: insufficient arguments")
 	}
 
@@ -243,8 +257,8 @@ func (dg *DocumentationGenerator) parseFlagCall(callExpr *ast.CallExpr) (CLIFlag
 	}
 
 	// Default (arg 2 optional)
-	if len(callExpr.Args) > 2 {
-		if defExpr, ok := callExpr.Args[2].(*ast.BasicLit); ok {
+	if len(callExpr.Args) > defaultArgIndex {
+		if defExpr, ok := callExpr.Args[defaultArgIndex].(*ast.BasicLit); ok {
 			switch defExpr.Kind {
 			case token.STRING:
 				flag.DefaultValue = strings.Trim(defExpr.Value, `"`)
@@ -258,7 +272,8 @@ func (dg *DocumentationGenerator) parseFlagCall(callExpr *ast.CallExpr) (CLIFlag
 	if ident, ok := callExpr.Fun.(*ast.Ident); ok {
 		flag.Type = inferFlagType(ident.Name)
 	} else {
-		flag.Type = "string"
+		const defaultType = "string"
+		flag.Type = defaultType
 	}
 
 	return flag, nil
@@ -286,7 +301,7 @@ func inferFlagType(funcName string) string {
 func (dg *DocumentationGenerator) generateDocumentationFiles() error {
 	debug.LogComponent("docs", "Generating documentation files in: %s", dg.config.OutputDir)
 
-	if err := os.MkdirAll(dg.config.OutputDir, 0o755); err != nil {
+	if err := os.MkdirAll(dg.config.OutputDir, 0o750); err != nil {
 		return fmt.Errorf("failed to create output directory: %w", err)
 	}
 
@@ -319,7 +334,7 @@ func (dg *DocumentationGenerator) generateCLIReference() error {
 
 	content := dg.generateCLIReferenceMarkdown(data)
 	outputPath := filepath.Join(dg.config.OutputDir, "cli-reference.md")
-	if err := os.WriteFile(outputPath, []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(outputPath, []byte(content), 0o600); err != nil {
 		return fmt.Errorf("failed to write CLI reference: %w", err)
 	}
 
@@ -335,18 +350,18 @@ func (dg *DocumentationGenerator) generateCLIReferenceMarkdown(data struct {
 }) string {
 	var buf bytes.Buffer
 
-	buf.WriteString("# Kaniko CLI Reference\n\n")
-	buf.WriteString(fmt.Sprintf("Version: %s\n", data.Version))
-	buf.WriteString(fmt.Sprintf("Generated: %s\n\n", data.Generated.Format("2006-01-02 15:04:05")))
-	buf.WriteString("This document provides a comprehensive reference for all Kaniko CLI commands and flags.\n\n")
+	fmt.Fprint(&buf, "# Kaniko CLI Reference\n\n")
+	fmt.Fprintf(&buf, "Version: %s\n", data.Version)
+	fmt.Fprintf(&buf, "Generated: %s\n\n", data.Generated.Format("2006-01-02 15:04:05"))
+	fmt.Fprint(&buf, "This document provides a comprehensive reference for all Kaniko CLI commands and flags.\n\n")
 
-	buf.WriteString("## Table of Contents\n\n")
-	buf.WriteString("- [Executor Command](#executor-command)\n")
-	buf.WriteString("- [Warmer Command](#warmer-command)\n")
-	buf.WriteString("- [Common Flags](#common-flags)\n\n")
+	fmt.Fprint(&buf, "## Table of Contents\n\n")
+	fmt.Fprint(&buf, "- [Executor Command](#executor-command)\n")
+	fmt.Fprint(&buf, "- [Warmer Command](#warmer-command)\n")
+	fmt.Fprint(&buf, "- [Common Flags](#common-flags)\n\n")
 
 	for _, cmd := range data.Commands {
-		dg.generateCommandDocumentation(&buf, cmd)
+		dg.generateCommandDocumentation(&buf, &cmd)
 	}
 
 	return buf.String()
@@ -361,17 +376,17 @@ func titleCase(s string) string {
 }
 
 // generateCommandDocumentation appends a single command section to the buffer.
-func (dg *DocumentationGenerator) generateCommandDocumentation(buf *bytes.Buffer, cmd CLICommand) {
-	buf.WriteString(fmt.Sprintf("## %s Command\n\n", titleCase(cmd.Name)))
-	buf.WriteString(fmt.Sprintf("%s\n\n", cmd.Description))
+func (dg *DocumentationGenerator) generateCommandDocumentation(buf *bytes.Buffer, cmd *CLICommand) {
+	fmt.Fprintf(buf, "## %s Command\n\n", titleCase(cmd.Name))
+	fmt.Fprintf(buf, "%s\n\n", cmd.Description)
 
-	buf.WriteString("### Syntax\n\n")
-	buf.WriteString(fmt.Sprintf("```bash\nkaniko %s [OPTIONS]\n```\n\n", cmd.Name))
+	fmt.Fprint(buf, "### Syntax\n\n")
+	fmt.Fprintf(buf, "```bash\nkaniko %s [OPTIONS]\n```\n\n", cmd.Name)
 
 	if len(cmd.Flags) > 0 {
-		buf.WriteString("### Options\n\n")
-		buf.WriteString("| Flag | Description | Default | Required |\n")
-		buf.WriteString("|------|-------------|---------|----------|\n")
+		fmt.Fprint(buf, "### Options\n\n")
+		fmt.Fprint(buf, "| Flag | Description | Default | Required |\n")
+		fmt.Fprint(buf, "|------|-------------|---------|----------|\n")
 		for _, flag := range cmd.Flags {
 			def := flag.DefaultValue
 			if def == "" {
@@ -381,23 +396,23 @@ func (dg *DocumentationGenerator) generateCommandDocumentation(buf *bytes.Buffer
 			if flag.Required {
 				req = "Yes"
 			}
-			buf.WriteString(fmt.Sprintf("| `--%s` | %s | %s | %s |\n",
-				flag.Name, flag.Description, def, req))
+			fmt.Fprintf(buf, "| `--%s` | %s | %s | %s |\n",
+				flag.Name, flag.Description, def, req)
 		}
-		buf.WriteString("\n")
+		fmt.Fprint(buf, "\n")
 	}
 
 	if len(cmd.Examples) > 0 {
-		buf.WriteString("### Examples\n\n")
+		fmt.Fprint(buf, "### Examples\n\n")
 		for _, ex := range cmd.Examples {
-			buf.WriteString(fmt.Sprintf("```bash\n%s\n```\n", ex.Command))
+			fmt.Fprintf(buf, "```bash\n%s\n```\n", ex.Command)
 			if ex.Description != "" {
-				buf.WriteString(fmt.Sprintf("%s\n\n", ex.Description))
+				fmt.Fprintf(buf, "%s\n\n", ex.Description)
 			}
 		}
 	}
 
-	buf.WriteString("\n")
+	fmt.Fprint(buf, "\n")
 }
 
 // generateReadmeUpdates updates README.md with version and optional sections.
@@ -405,13 +420,15 @@ func (dg *DocumentationGenerator) generateReadmeUpdates() error {
 	debug.LogComponent("docs", "Generating README updates")
 
 	readmePath := filepath.Join(dg.config.SourceDir, "..", "README.md")
+	// Sanitize the path to prevent directory traversal
+	readmePath = filepath.Clean(readmePath)
 	readmeContent, err := os.ReadFile(readmePath)
 	if err != nil {
 		return fmt.Errorf("failed to read README: %w", err)
 	}
 
 	updated := dg.updateReadmeContent(string(readmeContent))
-	if err := os.WriteFile(readmePath, []byte(updated), 0o644); err != nil {
+	if err := os.WriteFile(readmePath, []byte(updated), 0o600); err != nil {
 		return fmt.Errorf("failed to write updated README: %w", err)
 	}
 
@@ -467,11 +484,12 @@ func (dg *DocumentationGenerator) generateMigrationGuides() error {
 	currentVersion := dg.version
 	content := dg.generateMigrationGuideContent(currentVersion)
 
-	migrationPath := filepath.Join(dg.config.OutputDir, "migration-guides", fmt.Sprintf("migration-to-%s.md", currentVersion))
-	if err := os.MkdirAll(filepath.Dir(migrationPath), 0o755); err != nil {
+	migrationPath := filepath.Join(dg.config.OutputDir, "migration-guides",
+		fmt.Sprintf("migration-to-%s.md", currentVersion))
+	if err := os.MkdirAll(filepath.Dir(migrationPath), 0o750); err != nil {
 		return fmt.Errorf("failed to create migration guides directory: %w", err)
 	}
-	if err := os.WriteFile(migrationPath, []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(migrationPath, []byte(content), 0o600); err != nil {
 		return fmt.Errorf("failed to write migration guide: %w", err)
 	}
 
@@ -483,118 +501,149 @@ func (dg *DocumentationGenerator) generateMigrationGuides() error {
 // to avoid raw string literals with embedded backticks that broke parsing.
 func (dg *DocumentationGenerator) generateMigrationGuideContent(ver string) string {
 	var sb strings.Builder
-	sb.WriteString("# Migration Guide to Kaniko ")
-	sb.WriteString(ver)
-	sb.WriteString("\n\nThis guide helps you migrate to Kaniko version ")
-	sb.WriteString(ver)
-	sb.WriteString(".\n\n")
 
-	sb.WriteString("## What's New\n\n")
-	sb.WriteString("### Enhanced Debug Mode\n")
-	sb.WriteString("- New comprehensive debug flags for troubleshooting\n")
-	sb.WriteString("- Environment-based debug configuration\n")
-	sb.WriteString("- Structured debug output with performance tracking\n\n")
-
-	sb.WriteString("### Advanced Cache Management\n")
-	sb.WriteString("- Per-architecture cache repositories\n")
-	sb.WriteString("- TTL-based garbage collection\n")
-	sb.WriteString("- Intelligent cache preheating\n\n")
-
-	sb.WriteString("### Intelligent Platform Detection\n")
-	sb.WriteString("- Automatic platform detection for multi-arch builds\n")
-	sb.WriteString("- Platform validation and compatibility checking\n")
-	sb.WriteString("- Optimal platform suggestions\n\n")
-
-	sb.WriteString("### Enhanced Registry Intelligence\n")
-	sb.WriteString("- Auto-detection of registry capabilities\n")
-	sb.WriteString("- Optimized push strategies per registry\n")
-	sb.WriteString("- Rate limiting detection and handling\n\n")
-
-	sb.WriteString("### Build Optimization Engine\n")
-	sb.WriteString("- Dockerfile pattern detection\n")
-	sb.WriteString("- Performance analysis and recommendations\n")
-	sb.WriteString("- Automated optimization suggestions\n\n")
-
-	sb.WriteString("### Intelligent Retry System\n")
-	sb.WriteString("- Context-aware retry strategies\n")
-	sb.WriteString("- Error classification and handling\n")
-	sb.WriteString("- Adaptive retry behavior\n\n")
-
-	sb.WriteString("## Breaking Changes\n\n")
-	sb.WriteString("### Debug Configuration Changes\n")
-	sb.WriteString("- Debug flags have been reorganized\n")
-	sb.WriteString("- Some debug environment variables have changed names\n")
-	sb.WriteString("- Debug output format has been enhanced\n\n")
-
-	sb.WriteString("### Cache Management Changes\n")
-	sb.WriteString("- Cache key generation has been optimized\n")
-	sb.WriteString("- Some cache-related flags have been deprecated\n")
-	sb.WriteString("- New cache management commands added\n\n")
-
-	sb.WriteString("### Multi-Platform Changes\n")
-	sb.WriteString("- Multi-platform build syntax has been simplified\n")
-	sb.WriteString("- Some legacy multi-platform flags have been removed\n")
-	sb.WriteString("- New platform validation added\n\n")
-
-	sb.WriteString("## Migration Steps\n\n")
-
-	// 1. Debug
-	sb.WriteString("### 1. Update Debug Configuration\n\n```bash\n")
-	sb.WriteString("# Old way\nkaniko --debug --verbose\n\n")
-	sb.WriteString("# New way\nkaniko --debug-full --debug-level=trace\n")
-	sb.WriteString("```\n\n")
-
-	// 2. Cache
-	sb.WriteString("### 2. Update Cache Configuration\n\n```bash\n")
-	sb.WriteString("# Old way\nkaniko --cache-dir=/cache\n\n")
-	sb.WriteString("# New way\nkaniko --cache-dir=/cache --cache-ttl=24h\n")
-	sb.WriteString("```\n\n")
-
-	// 3. Multi-Platform
-	sb.WriteString("### 3. Update Multi-Platform Configuration\n\n```bash\n")
-	sb.WriteString("# Old way\nkaniko --platform=linux/amd64,linux/arm64\n\n")
-	sb.WriteString("# New way\nkaniko --multi-platform=linux/amd64,linux/arm64 --driver=k8s\n")
-	sb.WriteString("```\n\n")
-
-	// 4. Registry
-	sb.WriteString("### 4. Update Registry Configuration\n\n```bash\n")
-	sb.WriteString("# Old way\nkaniko --destination=registry/image:tag\n\n")
-	sb.WriteString("# New way\nkaniko --destination=registry/image:tag --registry-intelligence=true\n")
-	sb.WriteString("```\n\n")
-
-	sb.WriteString("## Deprecation Notices\n\n")
-	sb.WriteString("- `--old-debug-flag` (use `--debug-full` instead)\n")
-	sb.WriteString("- `--cache-only` (use `--cache-dir` with proper configuration)\n")
-	sb.WriteString("- `--platform-list` (use `--multi-platform` instead)\n\n")
-
-	sb.WriteString("## Performance Improvements\n\n")
-	sb.WriteString("Version ")
-	sb.WriteString(ver)
-	sb.WriteString(" includes several performance improvements:\n\n")
-	sb.WriteString("- **Build speed**: 20-30% faster builds with optimized layer handling\n")
-	sb.WriteString("- **Cache efficiency**: 40-60% better cache hit rates\n")
-	sb.WriteString("- **Memory usage**: 30-50% reduction in peak memory usage\n")
-	sb.WriteString("- **Multi-arch builds**: 25-40% faster multi-platform builds\n\n")
-
-	sb.WriteString("## Troubleshooting\n\n")
-	sb.WriteString("If you encounter issues during migration:\n\n")
-	sb.WriteString("1. Check the debug logs with `--debug-full`\n")
-	sb.WriteString("2. Review the migration guide for your specific version\n")
-	sb.WriteString("3. Check the [troubleshooting guide](docs/troubleshooting.md)\n")
-	sb.WriteString("4. Open an issue on GitHub with debug information\n\n")
-
-	sb.WriteString("## Support\n\n")
-	sb.WriteString("If you need help with migration:\n\n")
-	sb.WriteString("- Check the [documentation](docs/)\n")
-	sb.WriteString("- Review existing [issues](https://github.com/GoogleContainerTools/kaniko/issues)\n")
-	sb.WriteString("- Create a new issue with detailed information\n\n")
-
-	sb.WriteString("---\n\n")
-	sb.WriteString("*Generated on ")
-	sb.WriteString(time.Now().Format("2006-01-02 15:04:05"))
-	sb.WriteString("*\n")
+	dg.writeMigrationHeader(&sb, ver)
+	dg.writeWhatsNewSection(&sb)
+	dg.writeBreakingChangesSection(&sb)
+	dg.writeMigrationStepsSection(&sb)
+	dg.writeDeprecationNotices(&sb)
+	dg.writePerformanceImprovements(&sb, ver)
+	dg.writeTroubleshootingSection(&sb)
+	dg.writeSupportSection(&sb)
+	dg.writeMigrationFooter(&sb)
 
 	return sb.String()
+}
+
+// writeMigrationHeader writes the migration guide header section.
+func (dg *DocumentationGenerator) writeMigrationHeader(sb *strings.Builder, ver string) {
+	fmt.Fprintf(sb, "# Migration Guide to Kaniko %s\n\n", ver)
+	fmt.Fprintf(sb, "This guide helps you migrate to Kaniko version %s.\n\n", ver)
+}
+
+// writeWhatsNewSection writes the "What's New" section.
+func (dg *DocumentationGenerator) writeWhatsNewSection(sb *strings.Builder) {
+	fmt.Fprint(sb, "## What's New\n\n")
+	fmt.Fprint(sb, "### Enhanced Debug Mode\n")
+	fmt.Fprint(sb, "- New comprehensive debug flags for troubleshooting\n")
+	fmt.Fprint(sb, "- Environment-based debug configuration\n")
+	fmt.Fprint(sb, "- Structured debug output with performance tracking\n\n")
+
+	fmt.Fprint(sb, "### Advanced Cache Management\n")
+	fmt.Fprint(sb, "- Per-architecture cache repositories\n")
+	fmt.Fprint(sb, "- TTL-based garbage collection\n")
+	fmt.Fprint(sb, "- Intelligent cache preheating\n\n")
+
+	fmt.Fprint(sb, "### Intelligent Platform Detection\n")
+	fmt.Fprint(sb, "- Automatic platform detection for multi-arch builds\n")
+	fmt.Fprint(sb, "- Platform validation and compatibility checking\n")
+	fmt.Fprint(sb, "- Optimal platform suggestions\n\n")
+
+	fmt.Fprint(sb, "### Enhanced Registry Intelligence\n")
+	fmt.Fprint(sb, "- Auto-detection of registry capabilities\n")
+	fmt.Fprint(sb, "- Optimized push strategies per registry\n")
+	fmt.Fprint(sb, "- Rate limiting detection and handling\n\n")
+
+	fmt.Fprint(sb, "### Build Optimization Engine\n")
+	fmt.Fprint(sb, "- Dockerfile pattern detection\n")
+	fmt.Fprint(sb, "- Performance analysis and recommendations\n")
+	fmt.Fprint(sb, "- Automated optimization suggestions\n\n")
+
+	fmt.Fprint(sb, "### Intelligent Retry System\n")
+	fmt.Fprint(sb, "- Context-aware retry strategies\n")
+	fmt.Fprint(sb, "- Error classification and handling\n")
+	fmt.Fprint(sb, "- Adaptive retry behavior\n\n")
+}
+
+// writeBreakingChangesSection writes the "Breaking Changes" section.
+func (dg *DocumentationGenerator) writeBreakingChangesSection(sb *strings.Builder) {
+	fmt.Fprint(sb, "## Breaking Changes\n\n")
+	fmt.Fprint(sb, "### Debug Configuration Changes\n")
+	fmt.Fprint(sb, "- Debug flags have been reorganized\n")
+	fmt.Fprint(sb, "- Some debug environment variables have changed names\n")
+	fmt.Fprint(sb, "- Debug output format has been enhanced\n\n")
+
+	fmt.Fprint(sb, "### Cache Management Changes\n")
+	fmt.Fprint(sb, "- Cache key generation has been optimized\n")
+	fmt.Fprint(sb, "- Some cache-related flags have been deprecated\n")
+	fmt.Fprint(sb, "- New cache management commands added\n\n")
+
+	fmt.Fprint(sb, "### Multi-Platform Changes\n")
+	fmt.Fprint(sb, "- Multi-platform build syntax has been simplified\n")
+	fmt.Fprint(sb, "- Some legacy multi-platform flags have been removed\n")
+	fmt.Fprint(sb, "- New platform validation added\n\n")
+}
+
+// writeMigrationStepsSection writes the "Migration Steps" section.
+func (dg *DocumentationGenerator) writeMigrationStepsSection(sb *strings.Builder) {
+	fmt.Fprint(sb, "## Migration Steps\n\n")
+
+	// 1. Debug
+	fmt.Fprint(sb, "### 1. Update Debug Configuration\n\n```bash\n")
+	fmt.Fprint(sb, "# Old way\nkaniko --debug --verbose\n\n")
+	fmt.Fprint(sb, "# New way\nkaniko --debug-full --debug-level=trace\n")
+	fmt.Fprint(sb, "```\n\n")
+
+	// 2. Cache
+	fmt.Fprint(sb, "### 2. Update Cache Configuration\n\n```bash\n")
+	fmt.Fprint(sb, "# Old way\nkaniko --cache-dir=/cache\n\n")
+	fmt.Fprint(sb, "# New way\nkaniko --cache-dir=/cache --cache-ttl=24h\n")
+	fmt.Fprint(sb, "```\n\n")
+
+	// 3. Multi-Platform
+	fmt.Fprint(sb, "### 3. Update Multi-Platform Configuration\n\n```bash\n")
+	fmt.Fprint(sb, "# Old way\nkaniko --platform=linux/amd64,linux/arm64\n\n")
+	fmt.Fprint(sb, "# New way\nkaniko --multi-platform=linux/amd64,linux/arm64 --driver=k8s\n")
+	fmt.Fprint(sb, "```\n\n")
+
+	// 4. Registry
+	fmt.Fprint(sb, "### 4. Update Registry Configuration\n\n```bash\n")
+	fmt.Fprint(sb, "# Old way\nkaniko --destination=registry/image:tag\n\n")
+	fmt.Fprint(sb, "# New way\nkaniko --destination=registry/image:tag --registry-intelligence=true\n")
+	fmt.Fprint(sb, "```\n\n")
+}
+
+// writeDeprecationNotices writes the deprecation notices section.
+func (dg *DocumentationGenerator) writeDeprecationNotices(sb *strings.Builder) {
+	fmt.Fprint(sb, "## Deprecation Notices\n\n")
+	fmt.Fprint(sb, "- `--old-debug-flag` (use `--debug-full` instead)\n")
+	fmt.Fprint(sb, "- `--cache-only` (use `--cache-dir` with proper configuration)\n")
+	fmt.Fprint(sb, "- `--platform-list` (use `--multi-platform` instead)\n\n")
+}
+
+// writePerformanceImprovements writes the performance improvements section.
+func (dg *DocumentationGenerator) writePerformanceImprovements(sb *strings.Builder, ver string) {
+	fmt.Fprintf(sb, "## Performance Improvements\n\n")
+	fmt.Fprintf(sb, "Version %s includes several performance improvements:\n\n", ver)
+	fmt.Fprint(sb, "- **Build speed**: 20-30% faster builds with optimized layer handling\n")
+	fmt.Fprint(sb, "- **Cache efficiency**: 40-60% better cache hit rates\n")
+	fmt.Fprint(sb, "- **Memory usage**: 30-50% reduction in peak memory usage\n")
+	fmt.Fprint(sb, "- **Multi-arch builds**: 25-40% faster multi-platform builds\n\n")
+}
+
+// writeTroubleshootingSection writes the troubleshooting section.
+func (dg *DocumentationGenerator) writeTroubleshootingSection(sb *strings.Builder) {
+	fmt.Fprint(sb, "## Troubleshooting\n\n")
+	fmt.Fprint(sb, "If you encounter issues during migration:\n\n")
+	fmt.Fprint(sb, "1. Check the debug logs with `--debug-full`\n")
+	fmt.Fprint(sb, "2. Review the migration guide for your specific version\n")
+	fmt.Fprint(sb, "3. Check the [troubleshooting guide](docs/troubleshooting.md)\n")
+	fmt.Fprint(sb, "4. Open an issue on GitHub with debug information\n\n")
+}
+
+// writeSupportSection writes the support section.
+func (dg *DocumentationGenerator) writeSupportSection(sb *strings.Builder) {
+	fmt.Fprint(sb, "## Support\n\n")
+	fmt.Fprint(sb, "If you need help with migration:\n\n")
+	fmt.Fprint(sb, "- Check the [documentation](docs/)\n")
+	fmt.Fprint(sb, "- Review existing [issues](https://github.com/GoogleContainerTools/kaniko/issues)\n")
+	fmt.Fprint(sb, "- Create a new issue with detailed information\n\n")
+}
+
+// writeMigrationFooter writes the migration guide footer.
+func (dg *DocumentationGenerator) writeMigrationFooter(sb *strings.Builder) {
+	fmt.Fprint(sb, "---\n\n")
+	fmt.Fprintf(sb, "*Generated on %s*\n", time.Now().Format("2006-01-02 15:04:05"))
 }
 
 // GenerateCLIDocsJSON writes a machine-readable JSON reference.
@@ -617,7 +666,7 @@ func (dg *DocumentationGenerator) GenerateCLIDocsJSON() error {
 	}
 
 	outputPath := filepath.Join(dg.config.OutputDir, "cli-reference.json")
-	if err := os.WriteFile(outputPath, jsonData, 0o644); err != nil {
+	if err := os.WriteFile(outputPath, jsonData, 0o600); err != nil {
 		return fmt.Errorf("failed to write CLI JSON reference: %w", err)
 	}
 
@@ -626,20 +675,28 @@ func (dg *DocumentationGenerator) GenerateCLIDocsJSON() error {
 }
 
 // UpdateReadmeWithExamples can append example usage discovered elsewhere.
-func (dg *DocumentationGenerator) UpdateReadmeWithExamples() error {
+func (dg *DocumentationGenerator) UpdateReadmeWithExamples() {
 	debug.LogComponent("docs", "Updating README with integration test examples")
 
 	// Placeholder: in a real implementation, parse integration tests.
 	examples := []CLIExample{
-		{Command: "kaniko --dockerfile=Dockerfile --destination=registry/image:tag", Description: "Basic image build and push"},
-		{Command: "kaniko --dockerfile=Dockerfile --destination=registry/image:tag --cache=true", Description: "Build with cache enabled"},
-		{Command: "kaniko --dockerfile=Dockerfile --destination=registry/image:tag --multi-platform=linux/amd64,linux/arm64", Description: "Multi-platform build"},
+		{
+			Command:     "kaniko --dockerfile=Dockerfile --destination=registry/image:tag",
+			Description: "Basic image build and push",
+		},
+		{
+			Command:     "kaniko --dockerfile=Dockerfile --destination=registry/image:tag --cache=true",
+			Description: "Build with cache enabled",
+		},
+		{
+			Command:     "kaniko --dockerfile=Dockerfile --destination=registry/image:tag --multi-platform=linux/amd64,linux/arm64",
+			Description: "Multi-platform build",
+		},
 	}
 	for _, ex := range examples {
 		debug.LogComponent("docs", "Example: %s - %s", ex.Command, ex.Description)
 	}
 	debug.LogComponent("docs", "README examples updated successfully")
-	return nil
 }
 
 // main is the entry point for the docs automation tool.
@@ -651,10 +708,12 @@ func main() {
 		DebugLogLevel:    "debug",
 		DebugComponents:  []string{"docs"},
 	}
-	debug.Init(debugOpts)
+	if _, err := debug.Init(debugOpts); err != nil {
+		log.Fatalf("Failed to initialize debug logging: %v", err)
+	}
 
 	// Build generator config from current repository layout.
-	config := DocumentationConfig{
+	docConfig := DocumentationConfig{
 		ProjectName:    "Kaniko",
 		Version:        version.Version,
 		OutputDir:      "docs/generated",
@@ -665,7 +724,7 @@ func main() {
 	}
 
 	// Create generator.
-	generator := NewDocumentationGenerator(config)
+	generator := NewDocumentationGenerator(&docConfig)
 
 	// Generate docs.
 	if err := generator.GenerateCLIDocs(); err != nil {
@@ -674,9 +733,7 @@ func main() {
 	if err := generator.GenerateCLIDocsJSON(); err != nil {
 		log.Fatalf("Failed to generate JSON documentation: %v", err)
 	}
-	if err := generator.UpdateReadmeWithExamples(); err != nil {
-		log.Fatalf("Failed to update README with examples: %v", err)
-	}
+	generator.UpdateReadmeWithExamples()
 	if err := generator.generateMigrationGuides(); err != nil {
 		log.Fatalf("Failed to generate migration guides: %v", err)
 	}

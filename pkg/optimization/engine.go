@@ -14,6 +14,9 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// Package optimization provides build optimization analysis and recommendations
+// for Kaniko container image builds. It includes pattern detection, performance
+// analysis, and automated optimization suggestions.
 package optimization
 
 import (
@@ -26,38 +29,45 @@ import (
 	"github.com/Gosayram/kaniko/pkg/debug"
 )
 
+// Constants for magic numbers and configuration values
+const (
+	maxBuildHistorySize = 1000
+	slowBuildThreshold  = 5 * time.Minute
+	lowCacheHitRate     = 0.5
+)
+
 // BuildRecord contains information about a build execution
 type BuildRecord struct {
-	ID             string        `json:"id"`
-	Duration       time.Duration `json:"duration"`
-	Platform       string        `json:"platform"`
-	LayerCount     int           `json:"layerCount"`
-	CacheStats     CacheStats    `json:"cacheStats"`
+	ID             string             `json:"id"`
+	Duration       time.Duration      `json:"duration"`
+	Platform       string             `json:"platform"`
+	LayerCount     int                `json:"layerCount"`
+	CacheStats     CacheStats         `json:"cacheStats"`
 	Performance    PerformanceMetrics `json:"performance"`
-	Timestamp      time.Time     `json:"timestamp"`
-	DockerfilePath string        `json:"dockerfilePath"`
-	Registry       string        `json:"registry"`
-	Success        bool          `json:"success"`
-	Error          string        `json:"error,omitempty"`
+	Timestamp      time.Time          `json:"timestamp"`
+	DockerfilePath string             `json:"dockerfilePath"`
+	Registry       string             `json:"registry"`
+	Success        bool               `json:"success"`
+	Error          string             `json:"error,omitempty"`
 }
 
 // CacheStats contains cache-related statistics
 type CacheStats struct {
-	HitRate         float64 `json:"hitRate"`
-	CacheHits       int     `json:"cacheHits"`
-	CacheMisses     int     `json:"cacheMisses"`
-	CacheSize       int64   `json:"cacheSize"`
-	CacheLayers     int     `json:"cacheLayers"`
+	HitRate          float64 `json:"hitRate"`
+	CacheHits        int     `json:"cacheHits"`
+	CacheMisses      int     `json:"cacheMisses"`
+	CacheSize        int64   `json:"cacheSize"`
+	CacheLayers      int     `json:"cacheLayers"`
 	AverageLayerSize int64   `json:"averageLayerSize"`
 }
 
 // PerformanceMetrics contains performance-related metrics
 type PerformanceMetrics struct {
-	PeakMemory     uint64 `json:"peakMemory"`
-	AverageCPU     float64 `json:"averageCPU"`
-	TotalIOBytes   int64   `json:"totalIOBytes"`
-	NetworkBytes   int64   `json:"networkBytes"`
-	BuildSteps     int     `json:"buildSteps"`
+	PeakMemory      uint64        `json:"peakMemory"`
+	AverageCPU      float64       `json:"averageCPU"`
+	TotalIOBytes    int64         `json:"totalIOBytes"`
+	NetworkBytes    int64         `json:"networkBytes"`
+	BuildSteps      int           `json:"buildSteps"`
 	AverageStepTime time.Duration `json:"averageStepTime"`
 }
 
@@ -78,7 +88,7 @@ type PatternInfo struct {
 
 // RecommendationEngine generates build recommendations
 type RecommendationEngine struct {
-	mu           sync.RWMutex
+	mu              sync.RWMutex
 	recommendations map[string]*Recommendation
 }
 
@@ -96,19 +106,19 @@ type Recommendation struct {
 	LastUpdated  time.Time `json:"lastUpdated"`
 }
 
-// OptimizationEngine manages build optimization analysis and recommendations
-type OptimizationEngine struct {
-	buildHistory   []BuildRecord
-	patternDetector *PatternDetector
+// Engine manages build optimization analysis and recommendations
+type Engine struct {
+	buildHistory         []*BuildRecord
+	patternDetector      *PatternDetector
 	recommendationEngine *RecommendationEngine
-	mu             sync.RWMutex
+	mu                   sync.RWMutex
 }
 
-// NewOptimizationEngine creates a new optimization engine
-func NewOptimizationEngine() *OptimizationEngine {
-	oe := &OptimizationEngine{
-		buildHistory:   make([]BuildRecord, 0),
-		patternDetector: NewPatternDetector(),
+// NewEngine creates a new optimization engine
+func NewEngine() *Engine {
+	oe := &Engine{
+		buildHistory:         make([]*BuildRecord, 0),
+		patternDetector:      NewPatternDetector(),
 		recommendationEngine: NewRecommendationEngine(),
 	}
 
@@ -133,7 +143,7 @@ func NewRecommendationEngine() *RecommendationEngine {
 }
 
 // initializeDefaultPatterns initializes default Dockerfile patterns
-func (oe *OptimizationEngine) initializeDefaultPatterns() {
+func (oe *Engine) initializeDefaultPatterns() {
 	patterns := map[string]*PatternInfo{
 		"multiple-runs": {
 			Name:         "multiple-runs",
@@ -190,7 +200,7 @@ func (oe *OptimizationEngine) initializeDefaultPatterns() {
 }
 
 // RecordBuild records a build execution for analysis
-func (oe *OptimizationEngine) RecordBuild(record BuildRecord) {
+func (oe *Engine) RecordBuild(record *BuildRecord) {
 	oe.mu.Lock()
 	defer oe.mu.Unlock()
 
@@ -199,12 +209,12 @@ func (oe *OptimizationEngine) RecordBuild(record BuildRecord) {
 
 	oe.buildHistory = append(oe.buildHistory, record)
 
-	// Keep only the last 1000 builds to prevent memory issues
-	if len(oe.buildHistory) > 1000 {
-		oe.buildHistory = oe.buildHistory[len(oe.buildHistory)-1000:]
+	// Keep only the last maxBuildHistorySize builds to prevent memory issues
+	if len(oe.buildHistory) > maxBuildHistorySize {
+		oe.buildHistory = oe.buildHistory[len(oe.buildHistory)-maxBuildHistorySize:]
 	}
 
-	debug.LogComponent("optimization", "Recorded build %s: duration=%v, platform=%s, success=%t", 
+	debug.LogComponent("optimization", "Recorded build %s: duration=%v, platform=%s, success=%t",
 		record.ID, record.Duration, record.Platform, record.Success)
 
 	// Analyze the build for patterns
@@ -215,17 +225,17 @@ func (oe *OptimizationEngine) RecordBuild(record BuildRecord) {
 }
 
 // AnalyzeBuildPatterns analyzes build patterns from recorded builds
-func (oe *OptimizationEngine) AnalyzeBuildPatterns() BuildRecommendations {
+func (oe *Engine) AnalyzeBuildPatterns() BuildRecommendations {
 	oe.mu.RLock()
 	defer oe.mu.RUnlock()
 
 	recommendations := BuildRecommendations{
-		TotalBuilds:    len(oe.buildHistory),
+		TotalBuilds:     len(oe.buildHistory),
 		AverageDuration: calculateAverageDuration(oe.buildHistory),
-		CommonPatterns: make(map[string]*PatternInfo),
-		PlatformStats:  make(map[string]*PlatformStats),
-		CacheStats:     calculateCacheStats(oe.buildHistory),
-		Performance:    calculatePerformanceStats(oe.buildHistory),
+		CommonPatterns:  make(map[string]*PatternInfo),
+		PlatformStats:   make(map[string]*PlatformStats),
+		CacheStats:      calculateCacheStats(oe.buildHistory),
+		Performance:     calculatePerformanceStats(oe.buildHistory),
 	}
 
 	// Analyze patterns
@@ -243,10 +253,10 @@ func (oe *OptimizationEngine) AnalyzeBuildPatterns() BuildRecommendations {
 	for _, build := range oe.buildHistory {
 		if _, exists := platformStats[build.Platform]; !exists {
 			platformStats[build.Platform] = &PlatformStats{
-				Builds:        0,
+				Builds:          0,
 				AverageDuration: 0,
-				SuccessRate:   0,
-				TotalCacheHits: 0,
+				SuccessRate:     0,
+				TotalCacheHits:  0,
 			}
 		}
 		platformStats[build.Platform].Builds++
@@ -254,7 +264,7 @@ func (oe *OptimizationEngine) AnalyzeBuildPatterns() BuildRecommendations {
 
 	// Calculate platform statistics
 	for platform, stats := range platformStats {
-		var platformBuilds []BuildRecord
+		var platformBuilds []*BuildRecord
 		for _, build := range oe.buildHistory {
 			if build.Platform == platform {
 				platformBuilds = append(platformBuilds, build)
@@ -268,14 +278,14 @@ func (oe *OptimizationEngine) AnalyzeBuildPatterns() BuildRecommendations {
 
 	recommendations.PlatformStats = platformStats
 
-	debug.LogComponent("optimization", "Analyzed %d builds, found %d common patterns", 
+	debug.LogComponent("optimization", "Analyzed %d builds, found %d common patterns",
 		recommendations.TotalBuilds, len(recommendations.CommonPatterns))
 
 	return recommendations
 }
 
 // GenerateDockerfileSuggestions generates optimization suggestions for a Dockerfile
-func (oe *OptimizationEngine) GenerateDockerfileSuggestions(dockerfile string) []Suggestion {
+func (oe *Engine) GenerateDockerfileSuggestions(dockerfile string) []Suggestion {
 	oe.patternDetector.mu.RLock()
 	defer oe.patternDetector.mu.RUnlock()
 
@@ -377,7 +387,7 @@ func (oe *OptimizationEngine) GenerateDockerfileSuggestions(dockerfile string) [
 }
 
 // checkMultipleRUNCommands checks for multiple RUN commands that could be combined
-func (oe *OptimizationEngine) checkMultipleRUNCommands(dockerfile string) bool {
+func (oe *Engine) checkMultipleRUNCommands(dockerfile string) bool {
 	lines := strings.Split(dockerfile, "\n")
 	runCount := 0
 
@@ -395,7 +405,7 @@ func (oe *OptimizationEngine) checkMultipleRUNCommands(dockerfile string) bool {
 }
 
 // checkAptGetUpdateWithoutInstall checks for apt-get update without install
-func (oe *OptimizationEngine) checkAptGetUpdateWithoutInstall(dockerfile string) bool {
+func (oe *Engine) checkAptGetUpdateWithoutInstall(dockerfile string) bool {
 	lines := strings.Split(dockerfile, "\n")
 	hasUpdate := false
 
@@ -414,7 +424,7 @@ func (oe *OptimizationEngine) checkAptGetUpdateWithoutInstall(dockerfile string)
 }
 
 // checkAptGetInstallWithoutCleanup checks for apt-get install without cleanup
-func (oe *OptimizationEngine) checkAptGetInstallWithoutCleanup(dockerfile string) bool {
+func (oe *Engine) checkAptGetInstallWithoutCleanup(dockerfile string) bool {
 	lines := strings.Split(dockerfile, "\n")
 
 	for _, line := range lines {
@@ -434,7 +444,7 @@ func (oe *OptimizationEngine) checkAptGetInstallWithoutCleanup(dockerfile string
 }
 
 // checkCopyWholeDirectory checks for COPY . . or COPY * * patterns
-func (oe *OptimizationEngine) checkCopyWholeDirectory(dockerfile string) bool {
+func (oe *Engine) checkCopyWholeDirectory(dockerfile string) bool {
 	lines := strings.Split(dockerfile, "\n")
 
 	for _, line := range lines {
@@ -450,7 +460,7 @@ func (oe *OptimizationEngine) checkCopyWholeDirectory(dockerfile string) bool {
 }
 
 // checkNoMultiStage checks if no multi-stage builds are used
-func (oe *OptimizationEngine) checkNoMultiStage(dockerfile string) bool {
+func (oe *Engine) checkNoMultiStage(dockerfile string) bool {
 	lines := strings.Split(dockerfile, "\n")
 
 	for _, line := range lines {
@@ -467,7 +477,7 @@ func (oe *OptimizationEngine) checkNoMultiStage(dockerfile string) bool {
 }
 
 // checkLargeBaseImage checks for large base images
-func (oe *OptimizationEngine) checkLargeBaseImage(dockerfile string) bool {
+func (oe *Engine) checkLargeBaseImage(dockerfile string) bool {
 	lines := strings.Split(dockerfile, "\n")
 
 	largeBaseImages := []string{
@@ -493,7 +503,7 @@ func (oe *OptimizationEngine) checkLargeBaseImage(dockerfile string) bool {
 }
 
 // analyzeBuildPatterns analyzes patterns in a specific build
-func (oe *OptimizationEngine) analyzeBuildPatterns(record BuildRecord) {
+func (oe *Engine) analyzeBuildPatterns(record *BuildRecord) {
 	dockerfileContent := readDockerfileContent(record.DockerfilePath)
 
 	// Check for multiple RUN commands
@@ -557,15 +567,16 @@ func (oe *OptimizationEngine) analyzeBuildPatterns(record BuildRecord) {
 }
 
 // generateRecommendations generates recommendations based on build analysis
-func (oe *OptimizationEngine) generateRecommendations(record BuildRecord) {
+func (oe *Engine) generateRecommendations(record *BuildRecord) {
 	// Generate recommendations based on build performance
-	if record.Duration > 5*time.Minute {
+	if record.Duration > slowBuildThreshold {
 		oe.recommendationEngine.mu.Lock()
 		oe.recommendationEngine.recommendations["slow-build"] = &Recommendation{
-			ID:           "slow-build-" + record.ID,
-			Type:         "performance",
-			Title:        "Build Time Optimization",
-			Description:  fmt.Sprintf("Build took %v, which is longer than expected. Consider optimizing Dockerfile layers and cache usage.", record.Duration),
+			ID:    "slow-build-" + record.ID,
+			Type:  "performance",
+			Title: "Build Time Optimization",
+			Description: fmt.Sprintf("Build took %v, which is longer than expected. "+
+				"Consider optimizing Dockerfile layers and cache usage.", record.Duration),
 			Severity:     "medium",
 			Priority:     5,
 			Confidence:   0.8,
@@ -577,13 +588,14 @@ func (oe *OptimizationEngine) generateRecommendations(record BuildRecord) {
 	}
 
 	// Generate recommendations based on cache performance
-	if record.CacheStats.HitRate < 0.5 {
+	if record.CacheStats.HitRate < lowCacheHitRate {
 		oe.recommendationEngine.mu.Lock()
 		oe.recommendationEngine.recommendations["low-cache-hit"] = &Recommendation{
-			ID:           "low-cache-hit-" + record.ID,
-			Type:         "cache",
-			Title:        "Cache Optimization",
-			Description:  fmt.Sprintf("Cache hit rate is %.2f, which is low. Consider improving cache key strategy.", record.CacheStats.HitRate),
+			ID:    "low-cache-hit-" + record.ID,
+			Type:  "cache",
+			Title: "Cache Optimization",
+			Description: fmt.Sprintf("Cache hit rate is %.2f, which is low. "+
+				"Consider improving cache key strategy.", record.CacheStats.HitRate),
 			Severity:     "medium",
 			Priority:     4,
 			Confidence:   0.7,
@@ -596,7 +608,7 @@ func (oe *OptimizationEngine) generateRecommendations(record BuildRecord) {
 }
 
 // GetRecommendations returns all current recommendations
-func (oe *OptimizationEngine) GetRecommendations() []Recommendation {
+func (oe *Engine) GetRecommendations() []Recommendation {
 	oe.recommendationEngine.mu.RLock()
 	defer oe.recommendationEngine.mu.RUnlock()
 
@@ -614,7 +626,7 @@ func (oe *OptimizationEngine) GetRecommendations() []Recommendation {
 }
 
 // MarkRecommendationImplemented marks a recommendation as implemented
-func (oe *OptimizationEngine) MarkRecommendationImplemented(id string) {
+func (oe *Engine) MarkRecommendationImplemented(id string) {
 	oe.recommendationEngine.mu.Lock()
 	defer oe.recommendationEngine.mu.Unlock()
 
@@ -626,50 +638,50 @@ func (oe *OptimizationEngine) MarkRecommendationImplemented(id string) {
 
 // BuildRecommendations contains comprehensive build recommendations
 type BuildRecommendations struct {
-	TotalBuilds    int                    `json:"totalBuilds"`
-	AverageDuration time.Duration         `json:"averageDuration"`
-	CommonPatterns  map[string]*PatternInfo `json:"commonPatterns"`
+	TotalBuilds     int                       `json:"totalBuilds"`
+	AverageDuration time.Duration             `json:"averageDuration"`
+	CommonPatterns  map[string]*PatternInfo   `json:"commonPatterns"`
 	PlatformStats   map[string]*PlatformStats `json:"platformStats"`
-	CacheStats      CacheStats             `json:"cacheStats"`
-	Performance     PerformanceMetrics     `json:"performance"`
+	CacheStats      CacheStats                `json:"cacheStats"`
+	Performance     PerformanceMetrics        `json:"performance"`
 }
 
 // PlatformStats contains platform-specific statistics
 type PlatformStats struct {
-	Builds           int           `json:"builds"`
-	AverageDuration  time.Duration `json:"averageDuration"`
-	SuccessRate      float64       `json:"successRate"`
-	TotalCacheHits   int           `json:"totalCacheHits"`
+	Builds          int           `json:"builds"`
+	AverageDuration time.Duration `json:"averageDuration"`
+	SuccessRate     float64       `json:"successRate"`
+	TotalCacheHits  int           `json:"totalCacheHits"`
 }
 
 // Suggestion contains a Dockerfile optimization suggestion
 type Suggestion struct {
-	Type           string    `json:"type"`
-	Title          string    `json:"title"`
-	Description    string    `json:"description"`
-	Severity       string    `json:"severity"`
-	Confidence     float64   `json:"confidence"`
-	SuggestedFix   string    `json:"suggestedFix"`
+	Type         string  `json:"type"`
+	Title        string  `json:"title"`
+	Description  string  `json:"description"`
+	Severity     string  `json:"severity"`
+	Confidence   float64 `json:"confidence"`
+	SuggestedFix string  `json:"suggestedFix"`
 }
 
 // Helper functions
 
 // calculateAverageDuration calculates the average build duration
-func calculateAverageDuration(builds []BuildRecord) time.Duration {
+func calculateAverageDuration(builds []*BuildRecord) time.Duration {
 	if len(builds) == 0 {
 		return 0
 	}
 
 	var total time.Duration
-	for _, build := range builds {
-		total += build.Duration
+	for i := range builds {
+		total += builds[i].Duration
 	}
 
 	return total / time.Duration(len(builds))
 }
 
 // calculateCacheStats calculates aggregate cache statistics
-func calculateCacheStats(builds []BuildRecord) CacheStats {
+func calculateCacheStats(builds []*BuildRecord) CacheStats {
 	if len(builds) == 0 {
 		return CacheStats{}
 	}
@@ -678,12 +690,12 @@ func calculateCacheStats(builds []BuildRecord) CacheStats {
 	var totalLayers int
 	var layerSizes []int64
 
-	for _, build := range builds {
-		totalHits += int64(build.CacheStats.CacheHits)
-		totalMisses += int64(build.CacheStats.CacheMisses)
-		totalSize += build.CacheStats.CacheSize
-		totalLayers += build.CacheStats.CacheLayers
-		layerSizes = append(layerSizes, build.CacheStats.AverageLayerSize)
+	for i := range builds {
+		totalHits += int64(builds[i].CacheStats.CacheHits)
+		totalMisses += int64(builds[i].CacheStats.CacheMisses)
+		totalSize += builds[i].CacheStats.CacheSize
+		totalLayers += builds[i].CacheStats.CacheLayers
+		layerSizes = append(layerSizes, builds[i].CacheStats.AverageLayerSize)
 	}
 
 	totalRequests := totalHits + totalMisses
@@ -702,17 +714,17 @@ func calculateCacheStats(builds []BuildRecord) CacheStats {
 	}
 
 	return CacheStats{
-		HitRate:         hitRate,
-		CacheHits:       int(totalHits),
-		CacheMisses:     int(totalMisses),
-		CacheSize:       totalSize,
-		CacheLayers:     totalLayers,
+		HitRate:          hitRate,
+		CacheHits:        int(totalHits),
+		CacheMisses:      int(totalMisses),
+		CacheSize:        totalSize,
+		CacheLayers:      totalLayers,
 		AverageLayerSize: avgLayerSize,
 	}
 }
 
 // calculatePerformanceStats calculates aggregate performance statistics
-func calculatePerformanceStats(builds []BuildRecord) PerformanceMetrics {
+func calculatePerformanceStats(builds []*BuildRecord) PerformanceMetrics {
 	if len(builds) == 0 {
 		return PerformanceMetrics{}
 	}
@@ -723,15 +735,15 @@ func calculatePerformanceStats(builds []BuildRecord) PerformanceMetrics {
 	var totalSteps int
 	var totalStepTime time.Duration
 
-	for _, build := range builds {
-		if build.Performance.PeakMemory > peakMemory {
-			peakMemory = build.Performance.PeakMemory
+	for i := range builds {
+		if builds[i].Performance.PeakMemory > peakMemory {
+			peakMemory = builds[i].Performance.PeakMemory
 		}
-		totalCPU += build.Performance.AverageCPU
-		totalIOBytes += build.Performance.TotalIOBytes
-		totalNetworkBytes += build.Performance.NetworkBytes
-		totalSteps += build.Performance.BuildSteps
-		totalStepTime += build.Performance.AverageStepTime
+		totalCPU += builds[i].Performance.AverageCPU
+		totalIOBytes += builds[i].Performance.TotalIOBytes
+		totalNetworkBytes += builds[i].Performance.NetworkBytes
+		totalSteps += builds[i].Performance.BuildSteps
+		totalStepTime += builds[i].Performance.AverageStepTime
 	}
 
 	avgCPU := 0.0
@@ -745,24 +757,24 @@ func calculatePerformanceStats(builds []BuildRecord) PerformanceMetrics {
 	}
 
 	return PerformanceMetrics{
-		PeakMemory:       peakMemory,
-		AverageCPU:       avgCPU,
-		TotalIOBytes:     totalIOBytes,
-		NetworkBytes:     totalNetworkBytes,
-		BuildSteps:       totalSteps,
-		AverageStepTime:  avgStepTime,
+		PeakMemory:      peakMemory,
+		AverageCPU:      avgCPU,
+		TotalIOBytes:    totalIOBytes,
+		NetworkBytes:    totalNetworkBytes,
+		BuildSteps:      totalSteps,
+		AverageStepTime: avgStepTime,
 	}
 }
 
 // calculateSuccessRate calculates the success rate of builds
-func calculateSuccessRate(builds []BuildRecord) float64 {
+func calculateSuccessRate(builds []*BuildRecord) float64 {
 	if len(builds) == 0 {
 		return 0
 	}
 
 	successCount := 0
-	for _, build := range builds {
-		if build.Success {
+	for i := range builds {
+		if builds[i].Success {
 			successCount++
 		}
 	}
@@ -771,10 +783,10 @@ func calculateSuccessRate(builds []BuildRecord) float64 {
 }
 
 // calculateTotalCacheHits calculates total cache hits for builds
-func calculateTotalCacheHits(builds []BuildRecord) int {
+func calculateTotalCacheHits(builds []*BuildRecord) int {
 	total := 0
-	for _, build := range builds {
-		total += build.CacheStats.CacheHits
+	for i := range builds {
+		total += builds[i].CacheStats.CacheHits
 	}
 	return total
 }
@@ -785,7 +797,7 @@ func generateBuildID() string {
 }
 
 // readDockerfileContent reads Dockerfile content (placeholder implementation)
-func readDockerfileContent(path string) string {
+func readDockerfileContent(_ string) string {
 	// In a real implementation, this would read the actual Dockerfile
 	return "# Placeholder Dockerfile content"
 }

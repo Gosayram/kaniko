@@ -30,10 +30,10 @@ import (
 
 // CachePolicy defines the caching policy for a specific cache type
 type CachePolicy struct {
-	TTL           time.Duration `json:"ttl" yaml:"ttl"`                       // Time to live for cache entries
-	MaxSize       int64         `json:"maxSize" yaml:"maxSize"`               // Maximum size in bytes
-	EvictionPolicy string       `json:"evictionPolicy" yaml:"evictionPolicy"` // LRU, FIFO, Random
-	Compression    string       `json:"compression" yaml:"compression"`       // gzip, zstd, none
+	TTL            time.Duration `json:"ttl" yaml:"ttl"`                       // Time to live for cache entries
+	MaxSize        int64         `json:"maxSize" yaml:"maxSize"`               // Maximum size in bytes
+	EvictionPolicy string        `json:"evictionPolicy" yaml:"evictionPolicy"` // LRU, FIFO, Random
+	Compression    string        `json:"compression" yaml:"compression"`       // gzip, zstd, none
 }
 
 // CacheEntry represents a single cache entry with metadata
@@ -61,12 +61,12 @@ type CacheManager struct {
 
 // CacheStats provides statistics about cache usage
 type CacheStats struct {
-	TotalEntries    int64     `json:"totalEntries"`
-	TotalSize       int64     `json:"totalSize"`
-	LastGC          time.Time `json:"lastGC"`
-	HitRate         float64   `json:"hitRate"`
-	TotalHits       int64     `json:"totalHits"`
-	TotalMisses     int64     `json:"totalMisses"`
+	TotalEntries    int64            `json:"totalEntries"`
+	TotalSize       int64            `json:"totalSize"`
+	LastGC          time.Time        `json:"lastGC"`
+	HitRate         float64          `json:"hitRate"`
+	TotalHits       int64            `json:"totalHits"`
+	TotalMisses     int64            `json:"totalMisses"`
 	PlatformEntries map[string]int64 `json:"platformEntries"`
 }
 
@@ -92,24 +92,24 @@ func NewCacheManager(opts *config.KanikoOptions) *CacheManager {
 func (cm *CacheManager) setDefaultPolicies() {
 	// Default policy for base image cache
 	cm.cachePolicies["base"] = CachePolicy{
-		TTL:           24 * time.Hour * 7, // 7 days
-		MaxSize:       10 * 1024 * 1024 * 1024, // 10GB
+		TTL:            24 * time.Hour * 7,      // 7 days
+		MaxSize:        10 * 1024 * 1024 * 1024, // 10GB
 		EvictionPolicy: "LRU",
 		Compression:    "gzip",
 	}
 
 	// Default policy for build cache
 	cm.cachePolicies["build"] = CachePolicy{
-		TTL:           24 * time.Hour, // 1 day
-		MaxSize:       5 * 1024 * 1024 * 1024, // 5GB
+		TTL:            24 * time.Hour,         // 1 day
+		MaxSize:        5 * 1024 * 1024 * 1024, // 5GB
 		EvictionPolicy: "LRU",
 		Compression:    "gzip",
 	}
 
 	// Default policy for multi-platform cache
 	cm.cachePolicies["multiplatform"] = CachePolicy{
-		TTL:           24 * time.Hour * 3, // 3 days
-		MaxSize:       20 * 1024 * 1024 * 1024, // 20GB
+		TTL:            24 * time.Hour * 3,      // 3 days
+		MaxSize:        20 * 1024 * 1024 * 1024, // 20GB
 		EvictionPolicy: "LRU",
 		Compression:    "zstd",
 	}
@@ -171,7 +171,7 @@ func (cm *CacheManager) SetCacheEntry(ctx context.Context, entry *CacheEntry) er
 		cm.updatePlatformStats(entry.Platform, 1)
 	}
 
-	debug.LogComponent("cache", "Cache entry stored successfully. Total entries: %d, Total size: %d bytes", 
+	debug.LogComponent("cache", "Cache entry stored successfully. Total entries: %d, Total size: %d bytes",
 		cm.stats.TotalEntries, cm.stats.TotalSize)
 
 	return nil
@@ -181,7 +181,7 @@ func (cm *CacheManager) SetCacheEntry(ctx context.Context, entry *CacheEntry) er
 func (cm *CacheManager) evictIfNeeded(newEntrySize int64) error {
 	policy := cm.getCachePolicy("build")
 	if cm.stats.TotalSize+newEntrySize > policy.MaxSize {
-		debug.LogComponent("cache", "Cache size limit reached. Current: %d, New: %d, Limit: %d", 
+		debug.LogComponent("cache", "Cache size limit reached. Current: %d, New: %d, Limit: %d",
 			cm.stats.TotalSize, newEntrySize, policy.MaxSize)
 
 		neededSpace := cm.stats.TotalSize + newEntrySize - policy.MaxSize
@@ -471,17 +471,17 @@ func (cm *CacheManager) PrefetchLayers(ctx context.Context, platforms []string) 
 
 	for _, platform := range platforms {
 		debug.LogComponent("cache", "Prefetching layers for platform: %s", platform)
-		
+
 		// Create a cache entry for the platform
 		entry := &CacheEntry{
-			Key:         fmt.Sprintf("platform-prefetch-%s", platform),
-			Digest:      fmt.Sprintf("prefetch-%s", platform),
-			Size:        0, // Will be updated when actual layers are prefetched
+			Key:          fmt.Sprintf("platform-prefetch-%s", platform),
+			Digest:       fmt.Sprintf("prefetch-%s", platform),
+			Size:         0, // Will be updated when actual layers are prefetched
 			LastAccessed: time.Now(),
-			Created:     time.Now(),
-			Platform:    platform,
-			AccessCount: 0,
-			TTL:         cm.getCachePolicy("multiplatform").TTL,
+			Created:      time.Now(),
+			Platform:     platform,
+			AccessCount:  0,
+			TTL:          cm.getCachePolicy("multiplatform").TTL,
 		}
 
 		if err := cm.SetCacheEntry(ctx, entry); err != nil {
@@ -502,7 +502,7 @@ func (cm *CacheManager) SetCachePolicy(name string, policy CachePolicy) {
 	defer cm.mu.Unlock()
 
 	cm.cachePolicies[name] = policy
-	debug.LogComponent("cache", "Cache policy set for %s: TTL=%v, MaxSize=%d, EvictionPolicy=%s", 
+	debug.LogComponent("cache", "Cache policy set for %s: TTL=%v, MaxSize=%d, EvictionPolicy=%s",
 		name, policy.TTL, policy.MaxSize, policy.EvictionPolicy)
 }
 
@@ -533,7 +533,7 @@ func (cm *CacheManager) Cleanup() error {
 	// Clear all entries
 	entryCount := len(cm.entries)
 	cm.entries = make(map[string]*CacheEntry)
-	
+
 	// Reset statistics
 	cm.stats.TotalEntries = 0
 	cm.stats.TotalSize = 0

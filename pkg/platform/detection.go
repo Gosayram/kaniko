@@ -14,6 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// Package platform provides utilities for platform detection and management
 package platform
 
 import (
@@ -24,46 +25,47 @@ import (
 	"sync"
 
 	"github.com/containerd/containerd/platforms"
+
 	"github.com/Gosayram/kaniko/pkg/debug"
 )
 
-// PlatformInfo contains information about a build platform
-type PlatformInfo struct {
-	OS           string `json:"os"`
-	Architecture string `json:"architecture"`
-	Variant      string `json:"variant,omitempty"`
+// Info contains information about a build platform
+type Info struct {
+	OS           string   `json:"os"`
+	Architecture string   `json:"architecture"`
+	Variant      string   `json:"variant,omitempty"`
 	Capabilities []string `json:"capabilities,omitempty"`
 }
 
-// PlatformDetector detects available build platforms in the current environment
-type PlatformDetector struct {
-	mu          sync.RWMutex
-	available   []PlatformInfo
-	detected    bool
-	kubeClient  KubeClient
-	ciClient    CIClient
+// Detector detects available build platforms in the current environment
+type Detector struct {
+	mu         sync.RWMutex
+	available  []Info
+	detected   bool
+	kubeClient KubeClient
+	ciClient   CIClient
 }
 
 // KubeClient defines the interface for Kubernetes platform detection
 type KubeClient interface {
-	GetNodeArchitectures(ctx context.Context) ([]PlatformInfo, error)
+	GetNodeArchitectures(ctx context.Context) ([]Info, error)
 }
 
 // CIClient defines the interface for CI platform detection
 type CIClient interface {
-	GetMatrixPlatforms(ctx context.Context) ([]PlatformInfo, error)
+	GetMatrixPlatforms(ctx context.Context) ([]Info, error)
 }
 
-// NewPlatformDetector creates a new platform detector
-func NewPlatformDetector(kubeClient KubeClient, ciClient CIClient) *PlatformDetector {
-	return &PlatformDetector{
+// NewDetector creates a new platform detector
+func NewDetector(kubeClient KubeClient, ciClient CIClient) *Detector {
+	return &Detector{
 		kubeClient: kubeClient,
 		ciClient:   ciClient,
 	}
 }
 
 // AutoDetectAvailablePlatforms detects available build platforms in current environment
-func (pd *PlatformDetector) AutoDetectAvailablePlatforms(ctx context.Context) ([]PlatformInfo, error) {
+func (pd *Detector) AutoDetectAvailablePlatforms(ctx context.Context) ([]Info, error) {
 	pd.mu.Lock()
 	defer pd.mu.Unlock()
 
@@ -73,7 +75,7 @@ func (pd *PlatformDetector) AutoDetectAvailablePlatforms(ctx context.Context) ([
 
 	debug.LogComponent("platform", "Starting platform auto-detection")
 
-	var detectedPlatforms []PlatformInfo
+	var detectedPlatforms []Info
 
 	// Detect host platform
 	hostPlatform := pd.detectHostPlatform()
@@ -108,14 +110,14 @@ func (pd *PlatformDetector) AutoDetectAvailablePlatforms(ctx context.Context) ([
 	pd.available = detectedPlatforms
 	pd.detected = true
 
-	debug.LogComponent("platform", "Platform auto-detection completed. Available platforms: %v", 
+	debug.LogComponent("platform", "Platform auto-detection completed. Available platforms: %v",
 		formatPlatforms(detectedPlatforms))
 
 	return detectedPlatforms, nil
 }
 
 // detectHostPlatform detects the current host platform
-func (pd *PlatformDetector) detectHostPlatform() PlatformInfo {
+func (pd *Detector) detectHostPlatform() Info {
 	goos := runtime.GOOS
 	goarch := runtime.GOARCH
 
@@ -130,7 +132,7 @@ func (pd *PlatformDetector) detectHostPlatform() PlatformInfo {
 		variant = "v1"
 	}
 
-	return PlatformInfo{
+	return Info{
 		OS:           goos,
 		Architecture: goarch,
 		Variant:      variant,
@@ -138,9 +140,9 @@ func (pd *PlatformDetector) detectHostPlatform() PlatformInfo {
 }
 
 // deduplicatePlatforms removes duplicate platform entries
-func (pd *PlatformDetector) deduplicatePlatforms(platforms []PlatformInfo) []PlatformInfo {
+func (pd *Detector) deduplicatePlatforms(platforms []Info) []Info {
 	seen := make(map[string]bool)
-	var unique []PlatformInfo
+	var unique []Info
 
 	for _, platform := range platforms {
 		key := formatPlatform(platform)
@@ -154,7 +156,7 @@ func (pd *PlatformDetector) deduplicatePlatforms(platforms []PlatformInfo) []Pla
 }
 
 // SuggestOptimalPlatforms suggests optimal platform combinations based on various factors
-func (pd *PlatformDetector) SuggestOptimalPlatforms(ctx context.Context, targets []string) ([]PlatformInfo, error) {
+func (pd *Detector) SuggestOptimalPlatforms(ctx context.Context, targets []string) ([]Info, error) {
 	debug.LogComponent("platform", "Suggesting optimal platforms for targets: %v", targets)
 
 	availablePlatforms, err := pd.AutoDetectAvailablePlatforms(ctx)
@@ -164,13 +166,13 @@ func (pd *PlatformDetector) SuggestOptimalPlatforms(ctx context.Context, targets
 
 	// If no targets specified, return all available platforms
 	if len(targets) == 0 {
-		debug.LogComponent("platform", "No targets specified, returning all available platforms: %v", 
+		debug.LogComponent("platform", "No targets specified, returning all available platforms: %v",
 			formatPlatforms(availablePlatforms))
 		return availablePlatforms, nil
 	}
 
 	// Filter available platforms based on targets
-	var optimal []PlatformInfo
+	var optimal []Info
 	for _, target := range targets {
 		for _, platform := range availablePlatforms {
 			if pd.isPlatformMatch(target, platform) {
@@ -191,30 +193,30 @@ func (pd *PlatformDetector) SuggestOptimalPlatforms(ctx context.Context, targets
 }
 
 // isPlatformMatch checks if a platform matches a target specification
-func (pd *PlatformDetector) isPlatformMatch(target string, platform PlatformInfo) bool {
+func (pd *Detector) isPlatformMatch(target string, platform Info) bool {
 	// Parse target specification (e.g., "linux/amd64", "linux/arm64/v8", etc.)
 	targetParts := strings.Split(target, "/")
-	
+
 	// OS match
 	if len(targetParts) > 0 && targetParts[0] != "" && targetParts[0] != platform.OS {
 		return false
 	}
-	
+
 	// Architecture match
 	if len(targetParts) > 1 && targetParts[1] != "" && targetParts[1] != platform.Architecture {
 		return false
 	}
-	
+
 	// Variant match
 	if len(targetParts) > 2 && targetParts[2] != "" && targetParts[2] != platform.Variant {
 		return false
 	}
-	
+
 	return true
 }
 
 // ValidatePlatforms validates that the specified platforms are supported
-func (pd *PlatformDetector) ValidatePlatforms(ctx context.Context, platformSpecs []string) error {
+func (pd *Detector) ValidatePlatforms(ctx context.Context, platformSpecs []string) error {
 	debug.LogComponent("platform", "Validating platform specifications: %v", platformSpecs)
 
 	availablePlatforms, err := pd.AutoDetectAvailablePlatforms(ctx)
@@ -235,7 +237,7 @@ func (pd *PlatformDetector) ValidatePlatforms(ctx context.Context, platformSpecs
 	}
 
 	if len(invalidPlatforms) > 0 {
-		return fmt.Errorf("unsupported platforms: %v. Available platforms: %v", 
+		return fmt.Errorf("unsupported platforms: %v. Available platforms: %v",
 			invalidPlatforms, formatPlatforms(availablePlatforms))
 	}
 
@@ -244,7 +246,7 @@ func (pd *PlatformDetector) ValidatePlatforms(ctx context.Context, platformSpecs
 }
 
 // GetPlatformCapabilities returns the capabilities for a given platform
-func (pd *PlatformDetector) GetPlatformCapabilities(ctx context.Context, platformSpec string) ([]string, error) {
+func (pd *Detector) GetPlatformCapabilities(ctx context.Context, platformSpec string) ([]string, error) {
 	platforms, err := pd.AutoDetectAvailablePlatforms(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to detect available platforms: %w", err)
@@ -260,7 +262,7 @@ func (pd *PlatformDetector) GetPlatformCapabilities(ctx context.Context, platfor
 }
 
 // IsPlatformAvailable checks if a specific platform is available
-func (pd *PlatformDetector) IsPlatformAvailable(ctx context.Context, platformSpec string) (bool, error) {
+func (pd *Detector) IsPlatformAvailable(ctx context.Context, platformSpec string) (bool, error) {
 	platforms, err := pd.AutoDetectAvailablePlatforms(ctx)
 	if err != nil {
 		return false, fmt.Errorf("failed to detect available platforms: %w", err)
@@ -276,7 +278,7 @@ func (pd *PlatformDetector) IsPlatformAvailable(ctx context.Context, platformSpe
 }
 
 // GetRecommendedPlatforms returns recommended platforms based on popularity and registry support
-func (pd *PlatformDetector) GetRecommendedPlatforms(ctx context.Context, registry string) ([]PlatformInfo, error) {
+func (pd *Detector) GetRecommendedPlatforms(ctx context.Context, registry string) ([]Info, error) {
 	debug.LogComponent("platform", "Getting recommended platforms for registry: %s", registry)
 
 	availablePlatforms, err := pd.AutoDetectAvailablePlatforms(ctx)
@@ -285,7 +287,7 @@ func (pd *PlatformDetector) GetRecommendedPlatforms(ctx context.Context, registr
 	}
 
 	// Define popular platforms in order of preference
-	popularPlatforms := []PlatformInfo{
+	popularPlatforms := []Info{
 		{OS: "linux", Architecture: "amd64"},
 		{OS: "linux", Architecture: "arm64"},
 		{OS: "linux", Architecture: "arm", Variant: "v7"},
@@ -293,7 +295,7 @@ func (pd *PlatformDetector) GetRecommendedPlatforms(ctx context.Context, registr
 		{OS: "linux", Architecture: "ppc64le"},
 	}
 
-	var recommended []PlatformInfo
+	var recommended []Info
 
 	// Filter available platforms based on popularity
 	for _, popular := range popularPlatforms {
@@ -319,30 +321,30 @@ func (pd *PlatformDetector) GetRecommendedPlatforms(ctx context.Context, registr
 }
 
 // NormalizePlatform normalizes a platform specification to a standard format
-func NormalizePlatform(platformSpec string) (PlatformInfo, error) {
+func NormalizePlatform(platformSpec string) (Info, error) {
 	// Parse the platform specification
 	p, err := platforms.Parse(platformSpec)
 	if err != nil {
-		return PlatformInfo{}, fmt.Errorf("failed to parse platform specification %s: %w", platformSpec, err)
+		return Info{}, fmt.Errorf("failed to parse platform specification %s: %w", platformSpec, err)
 	}
 
-	return PlatformInfo{
+	return Info{
 		OS:           p.OS,
 		Architecture: p.Architecture,
 		Variant:      p.Variant,
 	}, nil
 }
 
-// formatPlatform formats a PlatformInfo as a string
-func formatPlatform(platform PlatformInfo) string {
+// formatPlatform formats a Info as a string
+func formatPlatform(platform Info) string {
 	if platform.Variant != "" {
 		return fmt.Sprintf("%s/%s/%s", platform.OS, platform.Architecture, platform.Variant)
 	}
 	return fmt.Sprintf("%s/%s", platform.OS, platform.Architecture)
 }
 
-// formatPlatforms formats a slice of PlatformInfo as strings
-func formatPlatforms(platforms []PlatformInfo) []string {
+// formatPlatforms formats a slice of Info as strings
+func formatPlatforms(platforms []Info) []string {
 	result := make([]string, len(platforms))
 	for i, platform := range platforms {
 		result[i] = formatPlatform(platform)
@@ -351,13 +353,13 @@ func formatPlatforms(platforms []PlatformInfo) []string {
 }
 
 // PlatformRegistryCompatibility checks if a platform is compatible with a given registry
-func (pd *PlatformDetector) PlatformRegistryCompatibility(ctx context.Context, platformSpec string, registry string) (bool, error) {
+func (pd *Detector) PlatformRegistryCompatibility(_ context.Context, platformSpec string, registry string) (bool, error) {
 	// Registry-specific compatibility rules
 	registryRules := map[string][]string{
-		"docker.io":      {"linux/amd64", "linux/arm64", "linux/arm/v7", "linux/s390x", "linux/ppc64le"},
-		"gcr.io":         {"linux/amd64", "linux/arm64", "linux/arm/v7", "linux/s390x"},
-		"ghcr.io":        {"linux/amd64", "linux/arm64", "linux/arm/v7", "linux/s390x", "linux/ppc64le"},
-		"public.ecr.aws": {"linux/amd64", "linux/arm64", "linux/arm/v7", "linux/s390x"},
+		"docker.io":                  {"linux/amd64", "linux/arm64", "linux/arm/v7", "linux/s390x", "linux/ppc64le"},
+		"gcr.io":                     {"linux/amd64", "linux/arm64", "linux/arm/v7", "linux/s390x"},
+		"ghcr.io":                    {"linux/amd64", "linux/arm64", "linux/arm/v7", "linux/s390x", "linux/ppc64le"},
+		"public.ecr.aws":             {"linux/amd64", "linux/arm64", "linux/arm/v7", "linux/s390x"},
 		"registry.access.redhat.com": {"linux/amd64", "linux/arm64", "linux/ppc64le"},
 	}
 
@@ -379,16 +381,16 @@ func (pd *PlatformDetector) PlatformRegistryCompatibility(ctx context.Context, p
 }
 
 // GetPlatformBuildOrder returns an optimal build order for multiple platforms
-func (pd *PlatformDetector) GetPlatformBuildOrder(ctx context.Context, platforms []string) ([]string, error) {
+func (pd *Detector) GetPlatformBuildOrder(_ context.Context, platforms []string) ([]string, error) {
 	debug.LogComponent("platform", "Getting optimal build order for platforms: %v", platforms)
 
 	// Define build order based on popularity and build time
 	buildOrder := []string{
-		"linux/amd64",    // Most popular, fastest to build
-		"linux/arm64",    // Second most popular
-		"linux/arm/v7",   // ARM 32-bit
-		"linux/s390x",    // IBM Z
-		"linux/ppc64le",  // PowerPC
+		"linux/amd64",   // Most popular, fastest to build
+		"linux/arm64",   // Second most popular
+		"linux/arm/v7",  // ARM 32-bit
+		"linux/s390x",   // IBM Z
+		"linux/ppc64le", // PowerPC
 	}
 
 	var ordered []string
@@ -423,17 +425,17 @@ func (pd *PlatformDetector) GetPlatformBuildOrder(ctx context.Context, platforms
 }
 
 // GetPlatformStatistics returns statistics about available platforms
-func (pd *PlatformDetector) GetPlatformStatistics(ctx context.Context) (*PlatformStatistics, error) {
+func (pd *Detector) GetPlatformStatistics(ctx context.Context) (*Statistics, error) {
 	platforms, err := pd.AutoDetectAvailablePlatforms(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to detect available platforms: %w", err)
 	}
 
-	stats := &PlatformStatistics{
+	stats := &Statistics{
 		TotalPlatforms: len(platforms),
-		ByOS:          make(map[string]int),
+		ByOS:           make(map[string]int),
 		ByArchitecture: make(map[string]int),
-		ByVariant:     make(map[string]int),
+		ByVariant:      make(map[string]int),
 	}
 
 	for _, platform := range platforms {
@@ -448,8 +450,8 @@ func (pd *PlatformDetector) GetPlatformStatistics(ctx context.Context) (*Platfor
 	return stats, nil
 }
 
-// PlatformStatistics contains statistics about available platforms
-type PlatformStatistics struct {
+// Statistics contains statistics about available platforms
+type Statistics struct {
 	TotalPlatforms int            `json:"totalPlatforms"`
 	ByOS           map[string]int `json:"byOS"`
 	ByArchitecture map[string]int `json:"byArchitecture"`
