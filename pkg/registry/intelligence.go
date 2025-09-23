@@ -29,7 +29,8 @@ import (
 )
 
 const (
-	gcrRegistry = "gcr.io"
+	gcrRegistry  = "gcr.io"
+	ghcrRegistry = "ghcr.io"
 
 	// Registry configuration constants
 	defaultRequestsPerMinute = 100
@@ -44,6 +45,21 @@ const (
 	defaultMaxLayerSizeGB    = 5
 	defaultMaxManifestSizeMB = 4
 	defaultCacheTTLHours     = 24
+
+	// GCR specific constants
+	gcrMaxRetries     = 5
+	gcrTimeoutSeconds = 600
+	gcrParallelPushes = 8
+
+	// GHCR specific constants
+	ghcrMaxRetries     = 4
+	ghcrTimeoutSeconds = 450
+	ghcrParallelPushes = 6
+
+	// ACR specific constants
+	acrMaxRetries     = 4
+	acrTimeoutSeconds = 360
+	acrParallelPushes = 5
 
 	// GCR specific constants
 	gcrRequestsPerMinute = 1000
@@ -234,9 +250,9 @@ func (ri *Intelligence) setupGCR() {
 		RecommendedSettings: RecommendedConfig{
 			CompressionLevel: gcrCompressionLevel,
 			ChunkSize:        gcrChunkSizeMB * bytesInMB,
-			MaxRetries:       5,
-			Timeout:          600,
-			ParallelPushes:   8,
+			MaxRetries:       gcrMaxRetries,
+			Timeout:          gcrTimeoutSeconds,
+			ParallelPushes:   gcrParallelPushes,
 			EnableCache:      true,
 			CacheTTL:         fmt.Sprintf("%dh", gcrCacheTTLHours),
 		},
@@ -263,9 +279,9 @@ func (ri *Intelligence) setupGHCR() {
 		RecommendedSettings: RecommendedConfig{
 			CompressionLevel: ghcrCompressionLevel,
 			ChunkSize:        ghcrChunkSizeMB * bytesInMB,
-			MaxRetries:       4,
-			Timeout:          450,
-			ParallelPushes:   6,
+			MaxRetries:       ghcrMaxRetries,
+			Timeout:          ghcrTimeoutSeconds,
+			ParallelPushes:   ghcrParallelPushes,
 			EnableCache:      true,
 			CacheTTL:         fmt.Sprintf("%dh", ghcrCacheTTLHours),
 		},
@@ -321,9 +337,9 @@ func (ri *Intelligence) setupACR() {
 		RecommendedSettings: RecommendedConfig{
 			CompressionLevel: acrCompressionLevel,
 			ChunkSize:        acrChunkSizeMB * bytesInMB,
-			MaxRetries:       4,
-			Timeout:          360,
-			ParallelPushes:   5,
+			MaxRetries:       acrMaxRetries,
+			Timeout:          acrTimeoutSeconds,
+			ParallelPushes:   acrParallelPushes,
 			EnableCache:      true,
 			CacheTTL:         fmt.Sprintf("%dh", acrCacheTTLHours),
 		},
@@ -352,11 +368,7 @@ func (ri *Intelligence) DetectCapabilities(ctx context.Context, registry string)
 	}
 
 	// Perform dynamic detection
-	capabilities, err := ri.performDynamicDetection(ctx, registry)
-	if err != nil {
-		debug.LogComponent("registry", "Dynamic detection failed for %s: %v", registry, err)
-		return Capabilities{}, fmt.Errorf("failed to detect capabilities for registry %s: %w", registry, err)
-	}
+	capabilities := ri.performDynamicDetection(ctx, registry)
 
 	// Cache the result
 	ri.setToCache(registry, &capabilities)
@@ -376,11 +388,11 @@ func (ri *Intelligence) getKnownRegistryCapabilities(registry string) (Capabilit
 	}
 
 	// Check wildcard patterns
-	for pattern, caps := range ri.knownRegistries {
+	for pattern, capsPtr := range ri.knownRegistries {
 		if strings.HasSuffix(pattern, "*") {
 			prefix := strings.TrimSuffix(pattern, "*")
 			if strings.HasPrefix(registry, prefix) {
-				return caps, true
+				return capsPtr, true
 			}
 		}
 	}
@@ -418,7 +430,7 @@ func (ri *Intelligence) setToCache(registry string, capabilities *Capabilities) 
 }
 
 // performDynamicDetection performs dynamic capability detection
-func (ri *Intelligence) performDynamicDetection(ctx context.Context, registry string) (Capabilities, error) {
+func (ri *Intelligence) performDynamicDetection(ctx context.Context, registry string) Capabilities {
 	capabilities := Capabilities{
 		SupportsMultiArch:    true,  // Assume multi-arch support by default
 		SupportsOCI:          true,  // Assume OCI support by default
@@ -461,11 +473,11 @@ func (ri *Intelligence) performDynamicDetection(ctx context.Context, registry st
 		CacheTTL:         fmt.Sprintf("%dh", defaultCacheTTLHours),
 	}
 
-	return capabilities, nil
+	return capabilities
 }
 
 // testOCISupport tests if a registry supports OCI media types
-func (ri *Intelligence) testOCISupport(ctx context.Context, registry string) (bool, error) {
+func (ri *Intelligence) testOCISupport(_ context.Context, registry string) (bool, error) {
 	// This is a simplified test. In a real implementation, you would:
 	// 1. Make a HEAD request to the manifest endpoint
 	// 2. Check the Accept header response
@@ -483,7 +495,7 @@ func (ri *Intelligence) testZstdSupport(_ context.Context, registry string) (boo
 
 	// For now, assume only major registries support Zstd
 	switch registry {
-	case gcrRegistry, "ghcr.io":
+	case gcrRegistry, ghcrRegistry:
 		return true, nil
 	default:
 		return false, nil
@@ -491,7 +503,7 @@ func (ri *Intelligence) testZstdSupport(_ context.Context, registry string) (boo
 }
 
 // testRateLimiting tests rate limiting behavior of a registry.
-func (ri *Intelligence) testRateLimiting(_ context.Context, registry string) (RateLimitInfo, error) {
+func (ri *Intelligence) testRateLimiting(_ context.Context, _ string) (RateLimitInfo, error) {
 	// This is a simplified test. In a real implementation, you would:
 	// 1. Make multiple requests in quick succession
 	// 2. Check for rate limiting headers (X-RateLimit-*, etc.)
@@ -538,7 +550,7 @@ func (ri *Intelligence) OptimizePushStrategy(registry string, platforms []string
 		strategy.ChunkSize = gcrChunkSizeMB * bytesInMB
 		strategy.ParallelPushes = true
 		strategy.EnableCache = true
-	case "ghcr.io":
+	case ghcrRegistry:
 		strategy.CompressionLevel = ghcrCompressionLevel
 		strategy.ChunkSize = ghcrChunkSizeMB * bytesInMB
 		strategy.ParallelPushes = true
@@ -604,9 +616,11 @@ func (ri *Intelligence) GetRegistryRecommendations(registry string) map[string]s
 	case "ghcr.io":
 		recommendations["best_practices"] = "Use medium compression (zstd level 8), medium chunks (16MB), and enable caching"
 	case "docker.io":
-		recommendations["best_practices"] = "Use standard compression (gzip level 6), standard chunks (10MB), and enable caching"
+		recommendations["best_practices"] = "Use standard compression (gzip level 6), " +
+			"standard chunks (10MB), and enable caching"
 	case "public.ecr.aws":
-		recommendations["best_practices"] = "Use standard compression (gzip level 6), standard chunks (10MB), and enable caching"
+		recommendations["best_practices"] = "Use standard compression (gzip level 6), " +
+			"standard chunks (10MB), and enable caching"
 	}
 
 	return recommendations
@@ -614,7 +628,8 @@ func (ri *Intelligence) GetRegistryRecommendations(registry string) map[string]s
 
 // ValidateRegistry validates that a registry is accessible and has the required capabilities.
 func (ri *Intelligence) ValidateRegistry(ctx context.Context, registry string, requiredCapabilities []string) error {
-	debug.LogComponent("registry", "Validating registry: %s with required capabilities: %v", registry, requiredCapabilities)
+	debug.LogComponent("registry", "Validating registry: %s with required capabilities: %v",
+		registry, requiredCapabilities)
 
 	capabilities, err := ri.DetectCapabilities(ctx, registry)
 	if err != nil {
@@ -665,7 +680,7 @@ func (ri *Intelligence) GetRegistryStatistics() map[string]interface{} {
 			registryTypes["docker"]++
 		case strings.Contains(registry, gcrRegistry):
 			registryTypes["gcr"]++
-		case strings.Contains(registry, "ghcr.io"):
+		case strings.Contains(registry, ghcrRegistry):
 			registryTypes["ghcr"]++
 		case strings.Contains(registry, "ecr"):
 			registryTypes["ecr"]++

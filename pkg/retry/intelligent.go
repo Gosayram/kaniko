@@ -102,6 +102,22 @@ const (
 	FibonacciCap = 1000
 	// CommonErrorsLimit is the limit for common errors to keep
 	CommonErrorsLimit = 10
+
+	// Additional constants for magic numbers
+	// Multiplier constants
+	SuccessDelayMultiplier = 0.5
+	SuccessMaxDelayMultiplier = 0.8
+	TimeoutAttemptsMultiplier = 1.5
+	CriticalDelayMultiplier = 2.0
+	CriticalMaxDelayMultiplier = 1.5
+	HighDelayMultiplier = 1.5
+	LowDelayMultiplier = 0.7
+	// Condition constants
+	ConnectionRefusedAttempts = 2
+	// Random number generator constants
+	RandomDivisor = 1000
+	// Fibonacci cap constant
+	FibonacciCapValue = 1000
 )
 
 // ErrorClassifier classifies different types of errors
@@ -227,63 +243,63 @@ func (ir *IntelligentRetry) initializeDefaultStrategies() {
 	strategies := map[string]*Strategy{
 		"default": {
 			BackoffAlgorithm: "exponential",
-			MaxAttempts:      3,
-			InitialDelay:     1 * time.Second,
-			MaxDelay:         60 * time.Second,
+			MaxAttempts:      DefaultMaxAttempts,
+			InitialDelay:     DefaultInitialDelay,
+			MaxDelay:         DefaultMaxDelay,
 			Jitter:           true,
 			ContextAware:     true,
 			Adaptive:         true,
-			BaseMultiplier:   2.0,
+			BaseMultiplier:   DefaultBaseMultiplier,
 		},
 		"network": {
 			BackoffAlgorithm: "exponential",
-			MaxAttempts:      5,
-			InitialDelay:     500 * time.Millisecond,
-			MaxDelay:         30 * time.Second,
+			MaxAttempts:      NetworkMaxAttempts,
+			InitialDelay:     NetworkInitialDelay,
+			MaxDelay:         NetworkMaxDelay,
 			Jitter:           true,
 			ContextAware:     true,
 			Adaptive:         true,
-			BaseMultiplier:   1.5,
+			BaseMultiplier:   NetworkBaseMultiplier,
 		},
 		"registry": {
 			BackoffAlgorithm: "exponential",
-			MaxAttempts:      4,
-			InitialDelay:     2 * time.Second,
-			MaxDelay:         120 * time.Second,
+			MaxAttempts:      RegistryMaxAttempts,
+			InitialDelay:     RegistryInitialDelay,
+			MaxDelay:         RegistryMaxDelay,
 			Jitter:           true,
 			ContextAware:     true,
 			Adaptive:         true,
-			BaseMultiplier:   2.5,
+			BaseMultiplier:   RegistryBaseMultiplier,
 		},
 		"rate-limit": {
 			BackoffAlgorithm: "fibonacci",
-			MaxAttempts:      6,
-			InitialDelay:     5 * time.Second,
-			MaxDelay:         300 * time.Second,
+			MaxAttempts:      RateLimitMaxAttempts,
+			InitialDelay:     RateLimitInitialDelay,
+			MaxDelay:         RateLimitMaxDelay,
 			Jitter:           true,
 			ContextAware:     true,
 			Adaptive:         true,
-			BaseMultiplier:   1.618, // Golden ratio for fibonacci
+			BaseMultiplier:   RateLimitBaseMultiplier,
 		},
 		"authentication": {
 			BackoffAlgorithm: "linear",
-			MaxAttempts:      2,
-			InitialDelay:     1 * time.Second,
-			MaxDelay:         10 * time.Second,
+			MaxAttempts:      AuthMaxAttempts,
+			InitialDelay:     AuthInitialDelay,
+			MaxDelay:         AuthMaxDelay,
 			Jitter:           false,
 			ContextAware:     false,
 			Adaptive:         false,
-			BaseMultiplier:   1.0,
+			BaseMultiplier:   AuthBaseMultiplier,
 		},
 		"timeout": {
 			BackoffAlgorithm: "exponential",
-			MaxAttempts:      3,
-			InitialDelay:     1 * time.Second,
-			MaxDelay:         30 * time.Second,
+			MaxAttempts:      TimeoutMaxAttempts,
+			InitialDelay:     TimeoutInitialDelay,
+			MaxDelay:         TimeoutMaxDelay,
 			Jitter:           true,
 			ContextAware:     true,
 			Adaptive:         true,
-			BaseMultiplier:   2.0,
+			BaseMultiplier:   TimeoutBaseMultiplier,
 		},
 	}
 
@@ -613,17 +629,17 @@ func (ir *IntelligentRetry) getBaseStrategyName(errorType ErrorType) string {
 }
 
 // adjustStrategyBasedOnContext adjusts the strategy based on operation context
-func (ir *IntelligentRetry) adjustStrategyBasedOnContext(strategy *Strategy, context *OperationContext, classification ErrorClassification) {
+func (ir *IntelligentRetry) adjustStrategyBasedOnContext(strategy *Strategy, context *OperationContext, _ ErrorClassification) {
 	// If the operation has a high failure rate, reduce max attempts
 	if context.FailureCount > context.SuccessCount && context.FailureCount > HighFailureThreshold {
-		strategy.MaxAttempts = max(1, strategy.MaxAttempts-1)
+		strategy.MaxAttempts = intMax(1, strategy.MaxAttempts-1)
 		debug.LogComponent("retry", "Reduced max attempts due to high failure rate: %d", strategy.MaxAttempts)
 	}
 
 	// If the operation has been successful recently, we can be more aggressive
 	if time.Since(context.LastSuccess) < RecentSuccessMinutes*time.Minute && context.SuccessCount > context.FailureCount {
-		strategy.InitialDelay = time.Duration(float64(strategy.InitialDelay) * 0.5)
-		strategy.MaxDelay = time.Duration(float64(strategy.MaxDelay) * 0.8)
+		strategy.InitialDelay = time.Duration(float64(strategy.InitialDelay) * SuccessDelayMultiplier)
+		strategy.MaxDelay = time.Duration(float64(strategy.MaxDelay) * SuccessMaxDelayMultiplier)
 		debug.LogComponent("retry", "Reduced delays due to recent success")
 	}
 
@@ -637,8 +653,8 @@ func (ir *IntelligentRetry) adjustStrategyBasedOnContext(strategy *Strategy, con
 	}
 
 	if hasTimeout {
-		strategy.MaxAttempts = min(strategy.MaxAttempts+1, MaxTimeoutAttempts)
-		strategy.MaxDelay = time.Duration(float64(strategy.MaxDelay) * 1.5)
+		strategy.MaxAttempts = intMin(strategy.MaxAttempts+1, MaxTimeoutAttempts)
+		strategy.MaxDelay = time.Duration(float64(strategy.MaxDelay) * TimeoutAttemptsMultiplier)
 		debug.LogComponent("retry", "Increased attempts and delays due to timeout patterns")
 	}
 }
@@ -648,23 +664,23 @@ func (ir *IntelligentRetry) adjustStrategyBasedOnSeverity(strategy *Strategy, cl
 	switch classification.Severity {
 	case "critical":
 		// For critical errors, be more conservative
-		strategy.MaxAttempts = max(1, strategy.MaxAttempts-1)
-		strategy.InitialDelay = time.Duration(float64(strategy.InitialDelay) * 2.0)
-		strategy.MaxDelay = time.Duration(float64(strategy.MaxDelay) * 1.5)
+		strategy.MaxAttempts = intMax(1, strategy.MaxAttempts-1)
+		strategy.InitialDelay = time.Duration(float64(strategy.InitialDelay) * CriticalDelayMultiplier)
+		strategy.MaxDelay = time.Duration(float64(strategy.MaxDelay) * CriticalMaxDelayMultiplier)
 	case "high":
 		// For high severity errors, be slightly conservative
-		strategy.MaxAttempts = max(1, strategy.MaxAttempts-1)
-		strategy.InitialDelay = time.Duration(float64(strategy.InitialDelay) * 1.5)
+		strategy.MaxAttempts = intMax(1, strategy.MaxAttempts-1)
+		strategy.InitialDelay = time.Duration(float64(strategy.InitialDelay) * HighDelayMultiplier)
 	case "low":
 		// For low severity errors, be more aggressive
-		strategy.MaxAttempts = min(strategy.MaxAttempts+1, LowSeverityMaxAttempts)
-		strategy.InitialDelay = time.Duration(float64(strategy.InitialDelay) * 0.7)
+		strategy.MaxAttempts = intMin(strategy.MaxAttempts+1, LowSeverityMaxAttempts)
+		strategy.InitialDelay = time.Duration(float64(strategy.InitialDelay) * LowDelayMultiplier)
 	}
 }
 
 // ShouldRetry determines if an operation should be retried
 func (ir *IntelligentRetry) ShouldRetry(ctx context.Context, attempt int, err error) bool {
-	// Check if context is cancelled
+	// Check if context is canceled
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		debug.LogComponent("retry", "Context canceled, not retrying: %v", ctxErr)
 		return false
@@ -701,7 +717,7 @@ func (ir *IntelligentRetry) ShouldRetry(ctx context.Context, attempt int, err er
 		// For network errors, check if it's a connection refused error
 		if strings.Contains(strings.ToLower(err.Error()), "connection refused") {
 			// Connection refused might indicate a service that's down
-			if attempt >= 2 {
+			if attempt >= ConnectionRefusedAttempts {
 				debug.LogComponent("retry", "Multiple connection refused errors, giving up")
 				return false
 			}
@@ -763,7 +779,8 @@ func (ir *IntelligentRetry) GetOperationStats(operation string) *OperationContex
 }
 
 // calculateExponentialDelay calculates exponential backoff delay
-func calculateExponentialDelay(initialDelay time.Duration, attempt int, multiplier float64, maxDelay time.Duration) time.Duration {
+func calculateExponentialDelay(initialDelay time.Duration, attempt int,
+	multiplier float64, maxDelay time.Duration) time.Duration {
 	delay := float64(initialDelay) * math.Pow(multiplier, float64(attempt))
 	if delay > float64(maxDelay) {
 		return maxDelay
@@ -787,7 +804,7 @@ func calculateFibonacciDelay(initialDelay time.Duration, attempt int, maxDelay t
 	for i := 2; i <= attempt; i++ {
 		fib[i] = fib[i-1] + fib[i-2]
 		if fib[i] > FibonacciCap { // Cap the fibonacci number to prevent overflow
-			fib[i] = 1000
+			fib[i] = FibonacciCapValue
 		}
 	}
 
@@ -799,7 +816,8 @@ func calculateFibonacciDelay(initialDelay time.Duration, attempt int, maxDelay t
 }
 
 // calculateLinearDelay calculates linear backoff delay
-func calculateLinearDelay(initialDelay time.Duration, attempt int, multiplier float64, maxDelay time.Duration) time.Duration {
+func calculateLinearDelay(initialDelay time.Duration, attempt int,
+	multiplier float64, maxDelay time.Duration) time.Duration {
 	delay := time.Duration(float64(initialDelay) * float64(attempt) * multiplier)
 	if delay > maxDelay {
 		return maxDelay
@@ -814,7 +832,8 @@ func addJitter(delay time.Duration) time.Duration {
 	}
 
 	// Add jitter between 0 and 50% of the delay
-	jitter := time.Duration(float64(delay) * JitterPercentage * (JitterMinMultiplier + (JitterMaxMultiplier-JitterMinMultiplier)*randFloat())) // JitterMinMultiplier to JitterMaxMultiplier multiplier
+	jitter := time.Duration(float64(delay) * JitterPercentage *
+		(JitterMinMultiplier + (JitterMaxMultiplier-JitterMinMultiplier)*randFloat())) // JitterMinMultiplier to JitterMaxMultiplier multiplier
 	return delay + jitter
 }
 
@@ -822,7 +841,7 @@ func addJitter(delay time.Duration) time.Duration {
 func randFloat() float64 {
 	// In a real implementation, this would use a proper random number generator
 	// For now, return a pseudo-random value
-	return float64(time.Now().UnixNano()%1000) / 1000.0 // TODO: Use proper random number generator
+	return float64(time.Now().UnixNano()%RandomDivisor) / float64(RandomDivisor) // TODO: Use proper random number generator
 }
 
 // getOperationFromContext extracts operation name from context
@@ -835,16 +854,16 @@ func getOperationFromContext(ctx context.Context) string {
 	return UnknownOperation
 }
 
-// min returns the minimum of two integers
-func min(a, b int) int {
+// intMin returns the minimum of two integers
+func intMin(a, b int) int {
 	if a < b {
 		return a
 	}
 	return b
 }
 
-// max returns the maximum of two integers
-func max(a, b int) int {
+// intMax returns the maximum of two integers
+func intMax(a, b int) int {
 	if a > b {
 		return a
 	}
