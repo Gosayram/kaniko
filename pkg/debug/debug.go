@@ -14,6 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// Package debug provides debugging and logging utilities for Kaniko.
 package debug
 
 import (
@@ -28,6 +29,7 @@ import (
 	"github.com/Gosayram/kaniko/pkg/config"
 )
 
+// DebugManager manages debugging and logging functionality for Kaniko.
 type DebugManager struct {
 	opts          *config.DebugOptions
 	logFile       *os.File
@@ -38,6 +40,7 @@ var (
 	defaultManager *DebugManager
 )
 
+// Init initializes a new DebugManager with the provided options.
 func Init(opts *config.DebugOptions) (*DebugManager, error) {
 	dm := &DebugManager{
 		opts:          opts,
@@ -56,15 +59,19 @@ func Init(opts *config.DebugOptions) (*DebugManager, error) {
 
 func (dm *DebugManager) initDebugFiles() error {
 	debugDir := filepath.Join(config.KanikoDir, "debug")
-	if err := os.MkdirAll(debugDir, 0755); err != nil {
+	if err := os.MkdirAll(debugDir, 0750); err != nil {
 		return err
 	}
 
 	timestamp := time.Now().Format("20060102-150405")
 
 	// Create main debug log file
-	logFile := filepath.Join(debugDir, "kaniko-debug-"+timestamp+".log")
-	file, err := os.Create(logFile)
+	logFileName := "kaniko-debug-" + timestamp + ".log"
+	// Validate log file name to prevent path traversal
+	if strings.Contains(logFileName, "..") || strings.Contains(logFileName, "/") {
+		return fmt.Errorf("invalid log file name: %s", logFileName)
+	}
+	file, err := os.Create(filepath.Join(debugDir, logFileName))
 	if err != nil {
 		return err
 	}
@@ -82,7 +89,7 @@ func (dm *DebugManager) initDebugFiles() error {
 
 	for _, subDir := range subDirs {
 		fullPath := filepath.Join(debugDir, subDir)
-		if err := os.MkdirAll(fullPath, 0755); err != nil {
+		if err := os.MkdirAll(fullPath, 0750); err != nil {
 			return err
 		}
 	}
@@ -90,6 +97,7 @@ func (dm *DebugManager) initDebugFiles() error {
 	return nil
 }
 
+// LogComponent logs a message for a specific component.
 func (dm *DebugManager) LogComponent(component string, msg string, args ...interface{}) {
 	if !dm.shouldLogComponent(component) {
 		return
@@ -99,7 +107,9 @@ func (dm *DebugManager) LogComponent(component string, msg string, args ...inter
 	logEntry := fmt.Sprintf("[%s] [%s] %s", time.Now().Format(time.RFC3339), component, formattedMsg)
 
 	if dm.logFile != nil {
-		fmt.Fprintln(dm.logFile, logEntry)
+		if _, err := fmt.Fprintln(dm.logFile, logEntry); err != nil {
+			logrus.Errorf("Failed to write to debug log: %v", err)
+		}
 	}
 
 	logrus.Debugf("[%s] %s", component, formattedMsg)
@@ -123,6 +133,7 @@ func (dm *DebugManager) shouldLogComponent(component string) bool {
 	return false
 }
 
+// Close closes the debug manager and releases any resources.
 func (dm *DebugManager) Close() error {
 	if dm.logFile != nil {
 		return dm.logFile.Close()
@@ -131,7 +142,7 @@ func (dm *DebugManager) Close() error {
 }
 
 // LogToComponentFile writes logs to component-specific files
-func (dm *DebugManager) LogToComponentFile(component string, msg string, args ...interface{}) error {
+func (dm *DebugManager) LogToComponentFile(component, msg string, args ...interface{}) error {
 	if !dm.opts.OutputDebugFiles {
 		return nil
 	}
@@ -167,7 +178,7 @@ func (dm *DebugManager) LogToComponentFile(component string, msg string, args ..
 	filename := fmt.Sprintf("%s.log", component)
 
 	filePath := filepath.Join(debugDir, filename)
-	file, err := os.OpenFile(filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	file, err := os.OpenFile(filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
 	if err != nil {
 		return err
 	}
@@ -186,19 +197,20 @@ func (dm *DebugManager) GetDebugDir() string {
 }
 
 // Global functions for convenience
-func LogComponent(component string, msg string, args ...interface{}) {
+func LogComponent(component, msg string, args ...interface{}) {
 	if defaultManager != nil {
 		defaultManager.LogComponent(component, msg, args...)
 	}
 }
 
-func LogToComponentFile(component string, msg string, args ...interface{}) error {
+func LogToComponentFile(component, msg string, args ...interface{}) error {
 	if defaultManager != nil {
 		return defaultManager.LogToComponentFile(component, msg, args...)
 	}
 	return nil
 }
 
+// ShouldLogComponent determines if a component should be logged based on current settings.
 func ShouldLogComponent(component string) bool {
 	if defaultManager != nil {
 		return defaultManager.shouldLogComponent(component)
@@ -206,6 +218,7 @@ func ShouldLogComponent(component string) bool {
 	return false
 }
 
+// Close closes the default debug manager and releases any resources.
 func Close() error {
 	if defaultManager != nil {
 		return defaultManager.Close()
