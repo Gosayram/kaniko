@@ -105,13 +105,13 @@ const (
 
 	// Additional constants for magic numbers
 	// Multiplier constants
-	SuccessDelayMultiplier = 0.5
-	SuccessMaxDelayMultiplier = 0.8
-	TimeoutAttemptsMultiplier = 1.5
-	CriticalDelayMultiplier = 2.0
+	SuccessDelayMultiplier     = 0.5
+	SuccessMaxDelayMultiplier  = 0.8
+	TimeoutAttemptsMultiplier  = 1.5
+	CriticalDelayMultiplier    = 2.0
 	CriticalMaxDelayMultiplier = 1.5
-	HighDelayMultiplier = 1.5
-	LowDelayMultiplier = 0.7
+	HighDelayMultiplier        = 1.5
+	LowDelayMultiplier         = 0.7
 	// Condition constants
 	ConnectionRefusedAttempts = 2
 	// Random number generator constants

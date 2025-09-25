@@ -141,70 +141,21 @@ func validateFlags() {
 func configureDebugFromEnvironment() {
 	// Enable debug mode if environment variable is set
 	if os.Getenv("KANIKO_DEBUG") == "true" {
-		setEnableFullDebug(true)
-		setDebugLogLevel("trace")
-		setOutputDebugFiles(true)
+		opts.EnableFullDebug = true
+		opts.DebugLogLevel = "trace"
+		opts.OutputDebugFiles = true
 		logrus.Info("Debug mode enabled via environment variable")
 	}
 
 	// Set debug level from environment
 	if level := os.Getenv("KANIKO_DEBUG_LEVEL"); level != "" {
-		setDebugLogLevel(level)
+		opts.DebugLogLevel = level
 	}
 
 	// Set debug components from environment
 	if components := os.Getenv("KANIKO_DEBUG_COMPONENTS"); components != "" {
-		setDebugComponents(strings.Split(components, ","))
+		opts.DebugComponents = strings.Split(components, ",")
 	}
-}
-
-// Helper methods for DebugOptions to avoid embedded field access
-func setEnableFullDebug(enable bool) {
-	opts.DebugOptions.EnableFullDebug = enable
-}
-
-func setDebugBuildSteps(enable bool) {
-	opts.DebugOptions.DebugBuildSteps = enable
-}
-
-func setDebugMultiPlatform(enable bool) {
-	opts.DebugOptions.DebugMultiPlatform = enable
-}
-
-func setDebugOCIOperations(enable bool) {
-	opts.DebugOptions.DebugOCIOperations = enable
-}
-
-func setDebugDriverOperations(enable bool) {
-	opts.DebugOptions.DebugDriverOperations = enable
-}
-
-func setDebugFilesystem(enable bool) {
-	opts.DebugOptions.DebugFilesystem = enable
-}
-
-func setDebugCacheOperations(enable bool) {
-	opts.DebugOptions.DebugCacheOperations = enable
-}
-
-func setDebugRegistry(enable bool) {
-	opts.DebugOptions.DebugRegistry = enable
-}
-
-func setDebugSigning(enable bool) {
-	opts.DebugOptions.DebugSigning = enable
-}
-
-func setOutputDebugFiles(enable bool) {
-	opts.DebugOptions.OutputDebugFiles = enable
-}
-
-func setDebugLogLevel(level string) {
-	opts.DebugOptions.DebugLogLevel = level
-}
-
-func setDebugComponents(components []string) {
-	opts.DebugOptions.DebugComponents = components
 }
 
 // RootCmd is the kaniko command that is run
@@ -396,29 +347,29 @@ func addBasicFlags() {
 
 // addDebugFlags adds debug configuration flags
 func addDebugFlags() {
-	RootCmd.PersistentFlags().BoolVar(&opts.DebugOptions.EnableFullDebug, "debug-full", false,
+	RootCmd.PersistentFlags().BoolVar(&opts.EnableFullDebug, "debug-full", false,
 		"Enable comprehensive debug logging for all components")
-	RootCmd.PersistentFlags().BoolVar(&opts.DebugOptions.DebugBuildSteps, "debug-build-steps", false,
+	RootCmd.PersistentFlags().BoolVar(&opts.DebugBuildSteps, "debug-build-steps", false,
 		"Debug individual build steps and commands")
-	RootCmd.PersistentFlags().BoolVar(&opts.DebugOptions.DebugMultiPlatform, "debug-multi-platform", false,
+	RootCmd.PersistentFlags().BoolVar(&opts.DebugMultiPlatform, "debug-multi-platform", false,
 		"Debug multi-platform build coordination")
-	RootCmd.PersistentFlags().BoolVar(&opts.DebugOptions.DebugOCIOperations, "debug-oci", false,
+	RootCmd.PersistentFlags().BoolVar(&opts.DebugOCIOperations, "debug-oci", false,
 		"Debug OCI index and manifest operations")
-	RootCmd.PersistentFlags().BoolVar(&opts.DebugOptions.DebugDriverOperations, "debug-drivers", false,
+	RootCmd.PersistentFlags().BoolVar(&opts.DebugDriverOperations, "debug-drivers", false,
 		"Debug driver operations (local, k8s, ci)")
-	RootCmd.PersistentFlags().BoolVar(&opts.DebugOptions.DebugFilesystem, "debug-filesystem", false,
+	RootCmd.PersistentFlags().BoolVar(&opts.DebugFilesystem, "debug-filesystem", false,
 		"Debug filesystem operations and snapshots")
-	RootCmd.PersistentFlags().BoolVar(&opts.DebugOptions.DebugCacheOperations, "debug-cache", false,
+	RootCmd.PersistentFlags().BoolVar(&opts.DebugCacheOperations, "debug-cache", false,
 		"Debug cache operations and layer management")
-	RootCmd.PersistentFlags().BoolVar(&opts.DebugOptions.DebugRegistry, "debug-registry", false,
+	RootCmd.PersistentFlags().BoolVar(&opts.DebugRegistry, "debug-registry", false,
 		"Debug registry push/pull operations")
-	RootCmd.PersistentFlags().BoolVar(&opts.DebugOptions.DebugSigning, "debug-signing", false,
+	RootCmd.PersistentFlags().BoolVar(&opts.DebugSigning, "debug-signing", false,
 		"Debug image signing operations")
-	RootCmd.PersistentFlags().BoolVar(&opts.DebugOptions.OutputDebugFiles, "debug-output-files", false,
+	RootCmd.PersistentFlags().BoolVar(&opts.OutputDebugFiles, "debug-output-files", false,
 		"Output debug information to files")
-	RootCmd.PersistentFlags().StringVar(&opts.DebugOptions.DebugLogLevel, "debug-level", "debug",
+	RootCmd.PersistentFlags().StringVar(&opts.DebugLogLevel, "debug-level", "debug",
 		"Debug log level (trace, debug, info)")
-	RootCmd.PersistentFlags().StringSliceVar(&opts.DebugOptions.DebugComponents, "debug-components", []string{},
+	RootCmd.PersistentFlags().StringSliceVar(&opts.DebugComponents, "debug-components", []string{},
 		"Specific components to debug (comma-separated)")
 }
 
@@ -438,7 +389,8 @@ func addRegistryFlags() {
 		"Initial delay in milliseconds between push retry attempts")
 	RootCmd.PersistentFlags().IntVar(&opts.PushRetryMaxDelay, "push-retry-max-delay", defaultPushRetryMaxDelay,
 		"Maximum delay in milliseconds between push retry attempts")
-	RootCmd.PersistentFlags().Float64Var(&opts.PushRetryBackoffMultiplier, "push-retry-backoff-multiplier", defaultPushRetryBackoffMultiplier,
+	RootCmd.PersistentFlags().Float64Var(&opts.PushRetryBackoffMultiplier,
+		"push-retry-backoff-multiplier", defaultPushRetryBackoffMultiplier,
 		"Exponential backoff multiplier for push retry delays")
 	RootCmd.PersistentFlags().BoolVar(&opts.PushIgnoreImmutableTagErrors,
 		"push-ignore-immutable-tag-errors", false,

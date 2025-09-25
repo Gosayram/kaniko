@@ -388,10 +388,11 @@ func (ri *Intelligence) getKnownRegistryCapabilities(registry string) (Capabilit
 	}
 
 	// Check wildcard patterns
-	for pattern, capsPtr := range ri.knownRegistries {
+	for pattern := range ri.knownRegistries {
 		if strings.HasSuffix(pattern, "*") {
 			prefix := strings.TrimSuffix(pattern, "*")
 			if strings.HasPrefix(registry, prefix) {
+				capsPtr := ri.knownRegistries[pattern]
 				return capsPtr, true
 			}
 		}
@@ -447,20 +448,11 @@ func (ri *Intelligence) performDynamicDetection(ctx context.Context, registry st
 	}
 
 	// Test for Zstd support
-	zstdSupported, err := ri.testZstdSupport(ctx, registry)
-	if err != nil {
-		debug.LogComponent("registry", "Zstd support test failed for %s: %v", registry, err)
-	} else {
-		capabilities.SupportsZstd = zstdSupported
-	}
+	zstdSupported := ri.testZstdSupport(ctx, registry)
+	capabilities.SupportsZstd = zstdSupported
 
 	// Test for rate limiting
-	rateLimits, err := ri.testRateLimiting(ctx, registry)
-	if err != nil {
-		debug.LogComponent("registry", "Rate limiting test failed for %s: %v", registry, err)
-	} else {
-		capabilities.RateLimits = rateLimits
-	}
+	capabilities.RateLimits = ri.testRateLimiting(ctx, registry)
 
 	// Set default recommended settings
 	capabilities.RecommendedSettings = RecommendedConfig{
@@ -477,7 +469,7 @@ func (ri *Intelligence) performDynamicDetection(ctx context.Context, registry st
 }
 
 // testOCISupport tests if a registry supports OCI media types
-func (ri *Intelligence) testOCISupport(_ context.Context, registry string) (bool, error) {
+func (ri *Intelligence) testOCISupport(_ context.Context, _ string) (bool, error) {
 	// This is a simplified test. In a real implementation, you would:
 	// 1. Make a HEAD request to the manifest endpoint
 	// 2. Check the Accept header response
@@ -488,7 +480,7 @@ func (ri *Intelligence) testOCISupport(_ context.Context, registry string) (bool
 }
 
 // testZstdSupport tests if a registry supports Zstd compression.
-func (ri *Intelligence) testZstdSupport(_ context.Context, registry string) (bool, error) {
+func (ri *Intelligence) testZstdSupport(_ context.Context, registry string) bool {
 	// This is a simplified test. In a real implementation, you would:
 	// 1. Try to push a layer with Zstd compression
 	// 2. Check if the registry accepts it
@@ -496,14 +488,14 @@ func (ri *Intelligence) testZstdSupport(_ context.Context, registry string) (boo
 	// For now, assume only major registries support Zstd
 	switch registry {
 	case gcrRegistry, ghcrRegistry:
-		return true, nil
+		return true
 	default:
-		return false, nil
+		return false
 	}
 }
 
 // testRateLimiting tests rate limiting behavior of a registry.
-func (ri *Intelligence) testRateLimiting(_ context.Context, _ string) (RateLimitInfo, error) {
+func (ri *Intelligence) testRateLimiting(_ context.Context, _ string) RateLimitInfo {
 	// This is a simplified test. In a real implementation, you would:
 	// 1. Make multiple requests in quick succession
 	// 2. Check for rate limiting headers (X-RateLimit-*, etc.)
@@ -515,7 +507,7 @@ func (ri *Intelligence) testRateLimiting(_ context.Context, _ string) (RateLimit
 		RequestsPerHour:   defaultRequestsPerHour,
 		RequestsPerDay:    defaultRequestsPerDay,
 		BurstSize:         defaultBurstSize,
-	}, nil
+	}
 }
 
 // OptimizePushStrategy determines the optimal push strategy for a registry and platforms

@@ -28,16 +28,27 @@ import (
 	"github.com/Gosayram/kaniko/pkg/debug"
 )
 
-// CachePolicy defines the caching policy for a specific cache type
-type CachePolicy struct {
+// Cache constants
+const (
+	sevenDays  = 24 * time.Hour * 7
+	tenGB      = 10 * 1024 * 1024 * 1024
+	oneDay     = 24 * time.Hour
+	fiveGB     = 5 * 1024 * 1024 * 1024
+	threeDays  = 24 * time.Hour * 3
+	twentyGB   = 20 * 1024 * 1024 * 1024
+	hitRateDiv = 100
+)
+
+// Policy defines the caching policy for a specific cache type
+type Policy struct {
 	TTL            time.Duration `json:"ttl" yaml:"ttl"`                       // Time to live for cache entries
 	MaxSize        int64         `json:"maxSize" yaml:"maxSize"`               // Maximum size in bytes
 	EvictionPolicy string        `json:"evictionPolicy" yaml:"evictionPolicy"` // LRU, FIFO, Random
 	Compression    string        `json:"compression" yaml:"compression"`       // gzip, zstd, none
 }
 
-// CacheEntry represents a single cache entry with metadata
-type CacheEntry struct {
+// Entry represents a single cache entry with metadata
+type Entry struct {
 	Key          string        `json:"key"`
 	Digest       string        `json:"digest"`
 	Size         int64         `json:"size"`
@@ -49,18 +60,18 @@ type CacheEntry struct {
 	TTL          time.Duration `json:"ttl,omitempty"`
 }
 
-// CacheManager manages advanced caching operations for multi-platform builds
-type CacheManager struct {
+// Manager manages advanced caching operations for multi-platform builds
+type Manager struct {
 	opts          *config.KanikoOptions
-	cachePolicies map[string]CachePolicy
+	cachePolicies map[string]Policy
 	gcEnabled     bool
 	mu            sync.RWMutex
-	entries       map[string]*CacheEntry
-	stats         *CacheStats
+	entries       map[string]*Entry
+	stats         *Stats
 }
 
-// CacheStats provides statistics about cache usage
-type CacheStats struct {
+// Stats provides statistics about cache usage
+type Stats struct {
 	TotalEntries    int64            `json:"totalEntries"`
 	TotalSize       int64            `json:"totalSize"`
 	LastGC          time.Time        `json:"lastGC"`
@@ -70,14 +81,14 @@ type CacheStats struct {
 	PlatformEntries map[string]int64 `json:"platformEntries"`
 }
 
-// NewCacheManager creates a new advanced cache manager
-func NewCacheManager(opts *config.KanikoOptions) *CacheManager {
-	cm := &CacheManager{
+// NewManager creates a new advanced cache manager
+func NewManager(opts *config.KanikoOptions) *Manager {
+	cm := &Manager{
 		opts:          opts,
-		cachePolicies: make(map[string]CachePolicy),
+		cachePolicies: make(map[string]Policy),
 		gcEnabled:     true,
-		entries:       make(map[string]*CacheEntry),
-		stats: &CacheStats{
+		entries:       make(map[string]*Entry),
+		stats: &Stats{
 			PlatformEntries: make(map[string]int64),
 		},
 	}
@@ -89,34 +100,34 @@ func NewCacheManager(opts *config.KanikoOptions) *CacheManager {
 }
 
 // setDefaultPolicies sets up default cache policies
-func (cm *CacheManager) setDefaultPolicies() {
+func (cm *Manager) setDefaultPolicies() {
 	// Default policy for base image cache
-	cm.cachePolicies["base"] = CachePolicy{
-		TTL:            24 * time.Hour * 7,      // 7 days
-		MaxSize:        10 * 1024 * 1024 * 1024, // 10GB
+	cm.cachePolicies["base"] = Policy{
+		TTL:            sevenDays, // 7 days
+		MaxSize:        tenGB,     // 10GB
 		EvictionPolicy: "LRU",
 		Compression:    "gzip",
 	}
 
 	// Default policy for build cache
-	cm.cachePolicies["build"] = CachePolicy{
-		TTL:            24 * time.Hour,         // 1 day
-		MaxSize:        5 * 1024 * 1024 * 1024, // 5GB
+	cm.cachePolicies["build"] = Policy{
+		TTL:            oneDay, // 1 day
+		MaxSize:        fiveGB, // 5GB
 		EvictionPolicy: "LRU",
 		Compression:    "gzip",
 	}
 
 	// Default policy for multi-platform cache
-	cm.cachePolicies["multiplatform"] = CachePolicy{
-		TTL:            24 * time.Hour * 3,      // 3 days
-		MaxSize:        20 * 1024 * 1024 * 1024, // 20GB
+	cm.cachePolicies["multiplatform"] = Policy{
+		TTL:            threeDays, // 3 days
+		MaxSize:        twentyGB,  // 20GB
 		EvictionPolicy: "LRU",
 		Compression:    "zstd",
 	}
 }
 
-// GetCacheEntry retrieves a cache entry by key
-func (cm *CacheManager) GetCacheEntry(ctx context.Context, key string) (*CacheEntry, error) {
+// GetEntry retrieves a cache entry by key
+func (cm *Manager) GetEntry(_ context.Context, key string) (*Entry, error) {
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
 
@@ -149,8 +160,8 @@ func (cm *CacheManager) GetCacheEntry(ctx context.Context, key string) (*CacheEn
 	return entry, nil
 }
 
-// SetCacheEntry stores a cache entry
-func (cm *CacheManager) SetCacheEntry(ctx context.Context, entry *CacheEntry) error {
+// SetEntry stores a cache entry
+func (cm *Manager) SetEntry(_ context.Context, entry *Entry) error {
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
 
@@ -178,8 +189,8 @@ func (cm *CacheManager) SetCacheEntry(ctx context.Context, entry *CacheEntry) er
 }
 
 // evictIfNeeded evicts cache entries if adding a new entry would exceed size limits
-func (cm *CacheManager) evictIfNeeded(newEntrySize int64) error {
-	policy := cm.getCachePolicy("build")
+func (cm *Manager) evictIfNeeded(newEntrySize int64) error {
+	policy := cm.getPolicy("build")
 	if cm.stats.TotalSize+newEntrySize > policy.MaxSize {
 		debug.LogComponent("cache", "Cache size limit reached. Current: %d, New: %d, Limit: %d",
 			cm.stats.TotalSize, newEntrySize, policy.MaxSize)
@@ -197,10 +208,10 @@ func (cm *CacheManager) evictIfNeeded(newEntrySize int64) error {
 }
 
 // evictEntries evicts cache entries based on the configured eviction policy
-func (cm *CacheManager) evictEntries(neededSpace int64) (evictionResult, error) {
+func (cm *Manager) evictEntries(neededSpace int64) (evictionResult, error) {
 	var result evictionResult
 
-	switch cm.getCachePolicy("build").EvictionPolicy {
+	switch cm.getPolicy("build").EvictionPolicy {
 	case "LRU":
 		result = cm.evictLRU(neededSpace)
 	case "FIFO":
@@ -208,7 +219,7 @@ func (cm *CacheManager) evictEntries(neededSpace int64) (evictionResult, error) 
 	case "Random":
 		result = cm.evictRandom(neededSpace)
 	default:
-		return result, fmt.Errorf("unknown eviction policy: %s", cm.getCachePolicy("build").EvictionPolicy)
+		return result, fmt.Errorf("unknown eviction policy: %s", cm.getPolicy("build").EvictionPolicy)
 	}
 
 	return result, nil
@@ -220,18 +231,18 @@ type evictionResult struct {
 	size  int64
 }
 
-// evictLRU evicts least recently used entries
-func (cm *CacheManager) evictLRU(neededSpace int64) evictionResult {
+// evictEntriesByTime evicts entries based on time comparison with a custom sort function
+func (cm *Manager) evictEntriesByTime(neededSpace int64, sortFunc func([]*Entry, int, int) bool) evictionResult {
 	var result evictionResult
 
-	// Sort entries by last access time (oldest first)
-	entries := make([]*CacheEntry, 0, len(cm.entries))
+	// Sort entries using the provided comparison function
+	entries := make([]*Entry, 0, len(cm.entries))
 	for _, entry := range cm.entries {
 		entries = append(entries, entry)
 	}
 
 	sort.Slice(entries, func(i, j int) bool {
-		return entries[i].LastAccessed.Before(entries[j].LastAccessed)
+		return sortFunc(entries, i, j)
 	})
 
 	for _, entry := range entries {
@@ -250,54 +261,32 @@ func (cm *CacheManager) evictLRU(neededSpace int64) evictionResult {
 			cm.updatePlatformStats(entry.Platform, -1)
 		}
 
-		debug.LogComponent("cache", "LRU eviction: removed entry %s (%d bytes)", entry.Key, entry.Size)
+		debug.LogComponent("cache", "Eviction: removed entry %s (%d bytes)", entry.Key, entry.Size)
 	}
 
 	return result
+}
+
+// evictLRU evicts least recently used entries
+func (cm *Manager) evictLRU(neededSpace int64) evictionResult {
+	return cm.evictEntriesByTime(neededSpace, func(entries []*Entry, i, j int) bool {
+		return entries[i].LastAccessed.Before(entries[j].LastAccessed)
+	})
 }
 
 // evictFIFO evicts first-in-first-out entries
-func (cm *CacheManager) evictFIFO(neededSpace int64) evictionResult {
-	var result evictionResult
-
-	// Sort entries by creation time (oldest first)
-	entries := make([]*CacheEntry, 0, len(cm.entries))
-	for _, entry := range cm.entries {
-		entries = append(entries, entry)
-	}
-
-	sort.Slice(entries, func(i, j int) bool {
+func (cm *Manager) evictFIFO(neededSpace int64) evictionResult {
+	return cm.evictEntriesByTime(neededSpace, func(entries []*Entry, i, j int) bool {
 		return entries[i].Created.Before(entries[j].Created)
 	})
-
-	for _, entry := range entries {
-		if result.size >= neededSpace {
-			break
-		}
-
-		delete(cm.entries, entry.Key)
-		result.count++
-		result.size += entry.Size
-		cm.stats.TotalEntries--
-		cm.stats.TotalSize -= entry.Size
-
-		// Update platform statistics
-		if entry.Platform != "" {
-			cm.updatePlatformStats(entry.Platform, -1)
-		}
-
-		debug.LogComponent("cache", "FIFO eviction: removed entry %s (%d bytes)", entry.Key, entry.Size)
-	}
-
-	return result
 }
 
 // evictRandom evicts random entries
-func (cm *CacheManager) evictRandom(neededSpace int64) evictionResult {
+func (cm *Manager) evictRandom(neededSpace int64) evictionResult {
 	var result evictionResult
 
 	// Convert entries to slice for random access
-	entries := make([]*CacheEntry, 0, len(cm.entries))
+	entries := make([]*Entry, 0, len(cm.entries))
 	for _, entry := range cm.entries {
 		entries = append(entries, entry)
 	}
@@ -327,8 +316,8 @@ func (cm *CacheManager) evictRandom(neededSpace int64) evictionResult {
 }
 
 // isEntryExpired checks if a cache entry has expired
-func (cm *CacheManager) isEntryExpired(entry *CacheEntry) bool {
-	policy := cm.getCachePolicyForEntry(entry)
+func (cm *Manager) isEntryExpired(entry *Entry) bool {
+	policy := cm.getPolicyForEntry(entry)
 	if policy.TTL == 0 {
 		return false
 	}
@@ -336,8 +325,8 @@ func (cm *CacheManager) isEntryExpired(entry *CacheEntry) bool {
 	return time.Since(entry.Created) > policy.TTL
 }
 
-// getCachePolicyForEntry determines the appropriate cache policy for an entry
-func (cm *CacheManager) getCachePolicyForEntry(entry *CacheEntry) CachePolicy {
+// getPolicyForEntry determines the appropriate cache policy for an entry
+func (cm *Manager) getPolicyForEntry(entry *Entry) Policy {
 	// Check if entry has platform-specific policy
 	if entry.Platform != "" {
 		if policy, exists := cm.cachePolicies[entry.Platform]; exists {
@@ -362,8 +351,8 @@ func (cm *CacheManager) getCachePolicyForEntry(entry *CacheEntry) CachePolicy {
 	return cm.cachePolicies["build"]
 }
 
-// getCachePolicy retrieves a cache policy by name
-func (cm *CacheManager) getCachePolicy(name string) CachePolicy {
+// getPolicy retrieves a cache policy by name
+func (cm *Manager) getPolicy(name string) Policy {
 	if policy, exists := cm.cachePolicies[name]; exists {
 		return policy
 	}
@@ -371,7 +360,7 @@ func (cm *CacheManager) getCachePolicy(name string) CachePolicy {
 }
 
 // updatePlatformStats updates platform-specific cache statistics
-func (cm *CacheManager) updatePlatformStats(platform string, delta int64) {
+func (cm *Manager) updatePlatformStats(platform string, delta int64) {
 	if platform == "" {
 		return
 	}
@@ -387,7 +376,7 @@ func (cm *CacheManager) updatePlatformStats(platform string, delta int64) {
 }
 
 // GarbageCollect performs intelligent cache garbage collection
-func (cm *CacheManager) GarbageCollect(ctx context.Context) error {
+func (cm *Manager) GarbageCollect(_ context.Context) error {
 	if !cm.gcEnabled {
 		return nil
 	}
@@ -402,24 +391,26 @@ func (cm *CacheManager) GarbageCollect(ctx context.Context) error {
 
 	// Remove expired entries
 	for key, entry := range cm.entries {
-		if cm.isEntryExpired(entry) {
-			delete(cm.entries, key)
-			evictedCount++
-			evictedSize += entry.Size
-			cm.stats.TotalEntries--
-			cm.stats.TotalSize -= entry.Size
-
-			// Update platform statistics
-			if entry.Platform != "" {
-				cm.updatePlatformStats(entry.Platform, -1)
-			}
-
-			debug.LogComponent("cache", "GC: removed expired entry %s (%d bytes)", entry.Key, entry.Size)
+		if !cm.isEntryExpired(entry) {
+			continue
 		}
+
+		delete(cm.entries, key)
+		evictedCount++
+		evictedSize += entry.Size
+		cm.stats.TotalEntries--
+		cm.stats.TotalSize -= entry.Size
+
+		// Update platform statistics
+		if entry.Platform != "" {
+			cm.updatePlatformStats(entry.Platform, -1)
+		}
+
+		debug.LogComponent("cache", "GC: removed expired entry %s (%d bytes)", entry.Key, entry.Size)
 	}
 
 	// Evict entries based on size limits if needed
-	policy := cm.getCachePolicy("build")
+	policy := cm.getPolicy("build")
 	if cm.stats.TotalSize > policy.MaxSize {
 		neededSpace := cm.stats.TotalSize - policy.MaxSize
 		result := cm.evictLRU(neededSpace)
@@ -431,21 +422,22 @@ func (cm *CacheManager) GarbageCollect(ctx context.Context) error {
 	cm.stats.LastGC = time.Now()
 	cm.updateHitRate()
 
-	debug.LogComponent("cache", "Garbage collection completed. Evicted %d entries, freed %d bytes", evictedCount, evictedSize)
+	debug.LogComponent("cache", "Garbage collection completed. Evicted %d entries, "+
+		"freed %d bytes", evictedCount, evictedSize)
 
 	return nil
 }
 
 // updateHitRate updates the cache hit rate statistics
-func (cm *CacheManager) updateHitRate() {
+func (cm *Manager) updateHitRate() {
 	total := cm.stats.TotalHits + cm.stats.TotalMisses
 	if total > 0 {
-		cm.stats.HitRate = float64(cm.stats.TotalHits) / float64(total) * 100
+		cm.stats.HitRate = float64(cm.stats.TotalHits) / float64(total) * hitRateDiv
 	}
 }
 
 // GetStats returns current cache statistics
-func (cm *CacheManager) GetStats() *CacheStats {
+func (cm *Manager) GetStats() *Stats {
 	cm.mu.RLock()
 	defer cm.mu.RUnlock()
 
@@ -460,7 +452,7 @@ func (cm *CacheManager) GetStats() *CacheStats {
 }
 
 // PrefetchLayers prefetches commonly used layers for multi-platform builds
-func (cm *CacheManager) PrefetchLayers(ctx context.Context, platforms []string) error {
+func (cm *Manager) PrefetchLayers(ctx context.Context, platforms []string) error {
 	debug.LogComponent("cache", "Starting layer prefetch for platforms: %v", platforms)
 
 	// This is a simplified implementation. In a real scenario, you would:
@@ -473,7 +465,7 @@ func (cm *CacheManager) PrefetchLayers(ctx context.Context, platforms []string) 
 		debug.LogComponent("cache", "Prefetching layers for platform: %s", platform)
 
 		// Create a cache entry for the platform
-		entry := &CacheEntry{
+		entry := &Entry{
 			Key:          fmt.Sprintf("platform-prefetch-%s", platform),
 			Digest:       fmt.Sprintf("prefetch-%s", platform),
 			Size:         0, // Will be updated when actual layers are prefetched
@@ -481,10 +473,10 @@ func (cm *CacheManager) PrefetchLayers(ctx context.Context, platforms []string) 
 			Created:      time.Now(),
 			Platform:     platform,
 			AccessCount:  0,
-			TTL:          cm.getCachePolicy("multiplatform").TTL,
+			TTL:          cm.getPolicy("multiplatform").TTL,
 		}
 
-		if err := cm.SetCacheEntry(ctx, entry); err != nil {
+		if err := cm.SetEntry(ctx, entry); err != nil {
 			debug.LogComponent("cache", "Failed to prefetch for platform %s: %v", platform, err)
 			continue
 		}
@@ -496,8 +488,8 @@ func (cm *CacheManager) PrefetchLayers(ctx context.Context, platforms []string) 
 	return nil
 }
 
-// SetCachePolicy allows setting custom cache policies
-func (cm *CacheManager) SetCachePolicy(name string, policy CachePolicy) {
+// SetPolicy allows setting custom cache policies
+func (cm *Manager) SetPolicy(name string, policy Policy) {
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
 
@@ -506,16 +498,16 @@ func (cm *CacheManager) SetCachePolicy(name string, policy CachePolicy) {
 		name, policy.TTL, policy.MaxSize, policy.EvictionPolicy)
 }
 
-// GetCachePolicy retrieves a cache policy by name
-func (cm *CacheManager) GetCachePolicy(name string) CachePolicy {
+// GetPolicy retrieves a cache policy by name
+func (cm *Manager) GetPolicy(name string) Policy {
 	cm.mu.RLock()
 	defer cm.mu.RUnlock()
 
-	return cm.getCachePolicy(name)
+	return cm.getPolicy(name)
 }
 
 // EnableGC enables or disables garbage collection
-func (cm *CacheManager) EnableGC(enabled bool) {
+func (cm *Manager) EnableGC(enabled bool) {
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
 
@@ -524,7 +516,7 @@ func (cm *CacheManager) EnableGC(enabled bool) {
 }
 
 // Cleanup performs cleanup operations
-func (cm *CacheManager) Cleanup() error {
+func (cm *Manager) Cleanup() error {
 	debug.LogComponent("cache", "Performing cache cleanup")
 
 	cm.mu.Lock()
@@ -532,7 +524,7 @@ func (cm *CacheManager) Cleanup() error {
 
 	// Clear all entries
 	entryCount := len(cm.entries)
-	cm.entries = make(map[string]*CacheEntry)
+	cm.entries = make(map[string]*Entry)
 
 	// Reset statistics
 	cm.stats.TotalEntries = 0
