@@ -296,7 +296,10 @@ func (d *KubernetesDriver) buildKanikoArgs(platform string) []string {
 func (d *KubernetesDriver) getRegistrySecret() string {
 	registrySecret := os.Getenv("KANIKO_REGISTRY_SECRET")
 	if registrySecret == "" {
-		registrySecret = "dockerconfigjson"
+		// Use a constant for the default registry secret name
+		// nolint:gosec // G101: This is not a hardcoded credential but a default secret name
+		const defaultRegistrySecret = "dockerconfigjson"
+		registrySecret = defaultRegistrySecret
 	}
 	return registrySecret
 }
@@ -439,7 +442,7 @@ func (d *KubernetesDriver) readDigestFromPod(ctx context.Context, jobName, platf
 	}
 
 	var stdout, stderr bytes.Buffer
-	err = exec.StreamWithContext(context.Background(), remotecommand.StreamOptions{
+	err = exec.StreamWithContext(ctx, remotecommand.StreamOptions{
 		Stdout: &stdout,
 		Stderr: &stderr,
 		Tty:    false,

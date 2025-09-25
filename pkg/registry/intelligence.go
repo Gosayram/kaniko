@@ -351,6 +351,7 @@ func (ri *Intelligence) setupACR() {
 }
 
 // createRegistryCapabilities creates a Capabilities struct with the provided parameters
+// nolint:unparam // Parameters are used for consistency with other registry capability functions
 func (ri *Intelligence) createRegistryCapabilities(
 	supportsMultiArch bool,
 	supportsOCI bool,

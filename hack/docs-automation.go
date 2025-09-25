@@ -179,7 +179,7 @@ func (dg *DocumentationGenerator) extractCLICommands() error {
 // extractCommandsFromFiles looks for command root variables and associated flags.
 func (dg *DocumentationGenerator) extractCommandsFromFiles(
 	files []*ast.File,
-	commandName,
+	commandName string,
 	commandDescription string,
 ) error {
 	for _, file := range files {
@@ -694,7 +694,8 @@ func (dg *DocumentationGenerator) UpdateReadmeWithExamples() {
 			Description: "Build with cache enabled",
 		},
 		{
-			Command:     "kaniko --dockerfile=Dockerfile --destination=registry/image:tag --multi-platform=linux/amd64,linux/arm64",
+			Command: "kaniko --dockerfile=Dockerfile --destination=registry/image:tag " +
+				"--multi-platform=linux/amd64,linux/arm64",
 			Description: "Multi-platform build",
 		},
 	}

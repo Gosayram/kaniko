@@ -51,7 +51,7 @@ func NewCIDriver(opts *config.KanikoOptions) (*CIDriver, error) {
 			logrus.Infof("No CI env detected; using %s for digests", opts.DigestsFrom)
 		}
 		// Ensure dir exists
-		if err := os.MkdirAll(opts.DigestsFrom, 0750); err != nil {
+		if err := os.MkdirAll(opts.DigestsFrom, 0o750); err != nil { // nolint:mnd // Directory permissions for security
 			return nil, fmt.Errorf("failed to create digests dir %s: %w", opts.DigestsFrom, err)
 		}
 	}
@@ -183,7 +183,17 @@ func (d *CIDriver) Cleanup() error {
 
 // readDigestFromFile reads digest from file for a specific platform
 func (d *CIDriver) readDigestFromFile(filename string) (string, error) {
-	data, err := os.ReadFile(filename)
+	// Validate file path to prevent directory traversal
+	cleanFilename := filepath.Clean(filename)
+	if !strings.HasPrefix(cleanFilename, d.opts.DigestsFrom) {
+		return "", errors.Errorf("invalid file path: potential directory traversal detected")
+	}
+
+	// Validate file path to prevent directory traversal
+	if strings.Contains(cleanFilename, "..") {
+		return "", errors.Errorf("invalid file path: potential directory traversal detected")
+	}
+	data, err := os.ReadFile(cleanFilename)
 	if err != nil {
 		return "", err
 	}

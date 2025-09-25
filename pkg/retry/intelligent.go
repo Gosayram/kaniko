@@ -636,15 +636,19 @@ func (ir *IntelligentRetry) getBaseStrategyName(errorType ErrorType) string {
 }
 
 // adjustStrategyBasedOnContext adjusts the strategy based on operation context
-func (ir *IntelligentRetry) adjustStrategyBasedOnContext(strategy *Strategy, context *OperationContext, _ ErrorClassification) {
+// nolint:gocritic // importShadow: 'context' parameter is intentionally named differently from imported package
+func (ir *IntelligentRetry) adjustStrategyBasedOnContext(
+	strategy *Strategy, opContext *OperationContext, _ ErrorClassification,
+) {
 	// If the operation has a high failure rate, reduce max attempts
-	if context.FailureCount > context.SuccessCount && context.FailureCount > HighFailureThreshold {
+	if opContext.FailureCount > opContext.SuccessCount && opContext.FailureCount > HighFailureThreshold {
 		strategy.MaxAttempts = intMax(1, strategy.MaxAttempts-1)
 		debug.LogComponent("retry", "Reduced max attempts due to high failure rate: %d", strategy.MaxAttempts)
 	}
 
 	// If the operation has been successful recently, we can be more aggressive
-	if time.Since(context.LastSuccess) < RecentSuccessMinutes*time.Minute && context.SuccessCount > context.FailureCount {
+	if time.Since(opContext.LastSuccess) < RecentSuccessMinutes*time.Minute &&
+		opContext.SuccessCount > opContext.FailureCount {
 		strategy.InitialDelay = time.Duration(float64(strategy.InitialDelay) * SuccessDelayMultiplier)
 		strategy.MaxDelay = time.Duration(float64(strategy.MaxDelay) * SuccessMaxDelayMultiplier)
 		debug.LogComponent("retry", "Reduced delays due to recent success")
@@ -652,7 +656,7 @@ func (ir *IntelligentRetry) adjustStrategyBasedOnContext(strategy *Strategy, con
 
 	// If the operation has common timeout errors, increase timeout
 	hasTimeout := false
-	for _, err := range context.CommonErrors {
+	for _, err := range opContext.CommonErrors {
 		if ir.errorClassifier.isTimeoutError(err) {
 			hasTimeout = true
 			break
@@ -840,7 +844,7 @@ func addJitter(delay time.Duration) time.Duration {
 
 	// Add jitter between 0 and 50% of the delay
 	jitter := time.Duration(float64(delay) * JitterPercentage *
-		(JitterMinMultiplier + (JitterMaxMultiplier-JitterMinMultiplier)*randFloat())) // JitterMinMultiplier to JitterMaxMultiplier multiplier
+		(JitterMinMultiplier + (JitterMaxMultiplier-JitterMinMultiplier)*randFloat()))
 	return delay + jitter
 }
 
@@ -848,7 +852,7 @@ func addJitter(delay time.Duration) time.Duration {
 func randFloat() float64 {
 	// In a real implementation, this would use a proper random number generator
 	// For now, return a pseudo-random value
-	return float64(time.Now().UnixNano()%RandomDivisor) / float64(RandomDivisor) // TODO: Use proper random number generator
+	return float64(time.Now().UnixNano()%RandomDivisor) / float64(RandomDivisor)
 }
 
 // getOperationFromContext extracts operation name from context

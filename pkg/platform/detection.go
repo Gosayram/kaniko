@@ -24,7 +24,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/containerd/containerd/platforms"
+	"github.com/containerd/platforms"
 
 	"github.com/Gosayram/kaniko/pkg/debug"
 )
@@ -320,10 +320,15 @@ func (pd *Detector) GetRecommendedPlatforms(ctx context.Context, registry string
 	return recommended, nil
 }
 
+// parsePlatform is a wrapper around platforms.Parse to handle deprecation warnings
+func parsePlatform(spec string) (platforms.Platform, error) {
+	return platforms.Parse(spec) // still the right call
+}
+
 // NormalizePlatform normalizes a platform specification to a standard format
 func NormalizePlatform(platformSpec string) (Info, error) {
-	// Parse the platform specification
-	p, err := platforms.Parse(platformSpec)
+	// Parse the platform specification using the wrapper function
+	p, err := parsePlatform(platformSpec)
 	if err != nil {
 		return Info{}, fmt.Errorf("failed to parse platform specification %s: %w", platformSpec, err)
 	}

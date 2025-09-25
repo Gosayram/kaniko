@@ -321,8 +321,9 @@ func PushIndex(index v1.ImageIndex, opts *config.KanikoOptions) error {
 			initialDelay = 1000 // fallback to 1 second
 		}
 
+		const defaultBackoffMultiplier = 2.0
 		err = util.RetryWithConfig(pushOperation, opts.PushRetry, initialDelay,
-			opts.PushRetryMaxDelay, opts.PushRetryBackoffMultiplier, 2.0)
+			opts.PushRetryMaxDelay, opts.PushRetryBackoffMultiplier, defaultBackoffMultiplier)
 		if err != nil {
 			return errors.Wrapf(err, "failed to push index to %s after %d attempts", destination, opts.PushRetry+1)
 		}

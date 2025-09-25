@@ -75,6 +75,9 @@ const (
 // pushRetryDelay is the initial delay between push retry attempts in milliseconds
 const pushRetryDelay = 1000
 
+// defaultBackoffMultiplier is default multiplier for exponential backoff
+const defaultBackoffMultiplier = 2.0
+
 var (
 	// known tag immutability errors
 	errTagImmutable = []string{
@@ -374,7 +377,7 @@ func pushToDestinations(image v1.Image, opts *config.KanikoOptions, destRefs []n
 		}
 
 		if err := util.RetryWithConfig(retryFunc, opts.PushRetry, initialDelay,
-			opts.PushRetryMaxDelay, opts.PushRetryBackoffMultiplier, 2.0); err != nil {
+			opts.PushRetryMaxDelay, opts.PushRetryBackoffMultiplier, defaultBackoffMultiplier); err != nil {
 			return errors.Wrap(err, fmt.Sprintf("failed to push to destination %s", destRef))
 		}
 	}

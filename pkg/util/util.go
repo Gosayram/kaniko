@@ -217,7 +217,11 @@ func Retry(operation retryFunc, retryCount, initialDelayMilliseconds int) error 
 }
 
 // RetryWithConfig retries an operation with configurable exponential backoff
-func RetryWithConfig(operation retryFunc, retryCount, initialDelayMilliseconds, maxDelayMilliseconds int, backoffMultiplier float64, baseMultiplier float64) error {
+// nolint:gocritic // paramTypeCombine: parameters are intentionally separated for clarity
+func RetryWithConfig(
+	operation retryFunc, retryCount, initialDelayMilliseconds, maxDelayMilliseconds int,
+	backoffMultiplier, baseMultiplier float64,
+) error {
 	if backoffMultiplier <= 0 {
 		backoffMultiplier = baseMultiplier
 	}
@@ -253,7 +257,7 @@ func RetryWithResult[T any](
 func RetryWithResultConfig[T any](
 	operation func() (T, error),
 	retryCount, initialDelayMilliseconds, maxDelayMilliseconds int,
-	backoffMultiplier float64, baseMultiplier float64,
+	backoffMultiplier, baseMultiplier float64,
 ) (result T, err error) {
 	if backoffMultiplier <= 0 {
 		backoffMultiplier = baseMultiplier

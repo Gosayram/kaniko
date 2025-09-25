@@ -72,7 +72,13 @@ func (dm *Manager) initDebugFiles() error {
 	if strings.Contains(logFileName, "..") || strings.Contains(logFileName, "/") {
 		return fmt.Errorf("invalid log file name: %s", logFileName)
 	}
-	file, err := os.Create(filepath.Join(debugDir, logFileName))
+	// Validate file path to prevent directory traversal
+	cleanPath := filepath.Join(debugDir, logFileName)
+	if strings.Contains(cleanPath, "..") {
+		return fmt.Errorf("invalid file path: potential directory traversal detected")
+	}
+	// nolint:gosec // G304: File path is validated to prevent directory traversal
+	file, err := os.Create(cleanPath)
 	if err != nil {
 		return err
 	}
@@ -180,6 +186,11 @@ func (dm *Manager) LogToComponentFile(component, msg string, args ...interface{}
 
 	filePath := filepath.Join(debugDir, filename)
 	const filePermissions = 0o600
+	// Validate file path to prevent directory traversal
+	if strings.Contains(filePath, "..") {
+		return fmt.Errorf("invalid file path: potential directory traversal detected")
+	}
+	// nolint:gosec // G304: File path is validated to prevent directory traversal
 	file, err := os.OpenFile(filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, filePermissions)
 	if err != nil {
 		return err
