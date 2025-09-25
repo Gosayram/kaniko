@@ -207,18 +207,18 @@ func (ri *Intelligence) initializeKnownRegistries() {
 
 // setupDockerHub sets up Docker Hub registry capabilities
 func (ri *Intelligence) setupDockerHub() {
-	ri.knownRegistries["docker.io"] = Capabilities{
-		SupportsMultiArch:    true,
-		SupportsOCI:          true,
-		SupportsZstd:         false,
-		SupportsManifestList: true,
-		RateLimits: RateLimitInfo{
+	ri.knownRegistries["docker.io"] = ri.createRegistryCapabilities(
+		true,  // SupportsMultiArch
+		true,  // SupportsOCI
+		false, // SupportsZstd
+		true,  // SupportsManifestList
+		RateLimitInfo{
 			RequestsPerMinute: defaultRequestsPerMinute,
 			RequestsPerHour:   defaultRequestsPerHour,
 			RequestsPerDay:    defaultRequestsPerDay,
 			BurstSize:         defaultBurstSize,
 		},
-		RecommendedSettings: RecommendedConfig{
+		RecommendedConfig{
 			CompressionLevel: defaultCompressionLevel,
 			ChunkSize:        defaultChunkSizeMB * bytesInMB,
 			MaxRetries:       defaultMaxRetries,
@@ -227,11 +227,11 @@ func (ri *Intelligence) setupDockerHub() {
 			EnableCache:      true,
 			CacheTTL:         fmt.Sprintf("%dh", defaultCacheTTLHours),
 		},
-		MaxLayerSize:         defaultMaxLayerSizeGB * bytesInGB,
-		MaxManifestSize:      defaultMaxManifestSizeMB * bytesInMB,
-		SupportedPlatforms:   []string{"linux/amd64", "linux/arm64", "linux/arm/v7", "linux/s390x", "linux/ppc64le"},
-		AuthenticationScheme: "token",
-	}
+		defaultMaxLayerSizeGB*bytesInGB,
+		defaultMaxManifestSizeMB*bytesInMB,
+		[]string{"linux/amd64", "linux/arm64", "linux/arm/v7", "linux/s390x", "linux/ppc64le"},
+		"token",
+	)
 }
 
 // setupGCR sets up Google Container Registry capabilities
@@ -265,18 +265,18 @@ func (ri *Intelligence) setupGCR() {
 
 // setupGHCR sets up GitHub Container Registry capabilities
 func (ri *Intelligence) setupGHCR() {
-	ri.knownRegistries["ghcr.io"] = Capabilities{
-		SupportsMultiArch:    true,
-		SupportsOCI:          true,
-		SupportsZstd:         true,
-		SupportsManifestList: true,
-		RateLimits: RateLimitInfo{
+	ri.knownRegistries["ghcr.io"] = ri.createRegistryCapabilities(
+		true, // SupportsMultiArch
+		true, // SupportsOCI
+		true, // SupportsZstd
+		true, // SupportsManifestList
+		RateLimitInfo{
 			RequestsPerMinute: ghcrRequestsPerMinute,
 			RequestsPerHour:   ghcrRequestsPerHour,
 			RequestsPerDay:    ghcrRequestsPerDay,
 			BurstSize:         ghcrBurstSize,
 		},
-		RecommendedSettings: RecommendedConfig{
+		RecommendedConfig{
 			CompressionLevel: ghcrCompressionLevel,
 			ChunkSize:        ghcrChunkSizeMB * bytesInMB,
 			MaxRetries:       ghcrMaxRetries,
@@ -285,27 +285,27 @@ func (ri *Intelligence) setupGHCR() {
 			EnableCache:      true,
 			CacheTTL:         fmt.Sprintf("%dh", ghcrCacheTTLHours),
 		},
-		MaxLayerSize:         ghcrMaxLayerSizeGB * bytesInGB,
-		MaxManifestSize:      ghcrMaxManifestSizeMB * bytesInMB,
-		SupportedPlatforms:   []string{"linux/amd64", "linux/arm64", "linux/arm/v7", "linux/s390x", "linux/ppc64le"},
-		AuthenticationScheme: "token",
-	}
+		ghcrMaxLayerSizeGB*bytesInGB,
+		ghcrMaxManifestSizeMB*bytesInMB,
+		[]string{"linux/amd64", "linux/arm64", "linux/arm/v7", "linux/s390x", "linux/ppc64le"},
+		"token",
+	)
 }
 
 // setupECRPublic sets up Amazon ECR Public capabilities
 func (ri *Intelligence) setupECRPublic() {
-	ri.knownRegistries["public.ecr.aws"] = Capabilities{
-		SupportsMultiArch:    true,
-		SupportsOCI:          true,
-		SupportsZstd:         false,
-		SupportsManifestList: true,
-		RateLimits: RateLimitInfo{
+	ri.knownRegistries["public.ecr.aws"] = ri.createRegistryCapabilities(
+		true,  // SupportsMultiArch
+		true,  // SupportsOCI
+		false, // SupportsZstd
+		true,  // SupportsManifestList
+		RateLimitInfo{
 			RequestsPerMinute: ecrPublicRequestsPerMinute,
 			RequestsPerHour:   ecrPublicRequestsPerHour,
 			RequestsPerDay:    ecrPublicRequestsPerDay,
 			BurstSize:         ecrPublicBurstSize,
 		},
-		RecommendedSettings: RecommendedConfig{
+		RecommendedConfig{
 			CompressionLevel: ecrPublicCompressionLevel,
 			ChunkSize:        ecrPublicChunkSizeMB * bytesInMB,
 			MaxRetries:       defaultMaxRetries,
@@ -314,27 +314,27 @@ func (ri *Intelligence) setupECRPublic() {
 			EnableCache:      true,
 			CacheTTL:         fmt.Sprintf("%dh", ecrPublicCacheTTLHours),
 		},
-		MaxLayerSize:         ecrPublicMaxLayerSizeGB * bytesInGB,
-		MaxManifestSize:      ecrPublicMaxManifestSizeMB * bytesInMB,
-		SupportedPlatforms:   []string{"linux/amd64", "linux/arm64", "linux/arm/v7", "linux/s390x"},
-		AuthenticationScheme: "aws",
-	}
+		ecrPublicMaxLayerSizeGB*bytesInGB,
+		ecrPublicMaxManifestSizeMB*bytesInMB,
+		[]string{"linux/amd64", "linux/arm64", "linux/arm/v7", "linux/s390x"},
+		"aws",
+	)
 }
 
 // setupACR sets up Azure Container Registry capabilities
 func (ri *Intelligence) setupACR() {
-	ri.knownRegistries["*.azurecr.io"] = Capabilities{
-		SupportsMultiArch:    true,
-		SupportsOCI:          true,
-		SupportsZstd:         false,
-		SupportsManifestList: true,
-		RateLimits: RateLimitInfo{
+	ri.knownRegistries["*.azurecr.io"] = ri.createRegistryCapabilities(
+		true,  // SupportsMultiArch
+		true,  // SupportsOCI
+		false, // SupportsZstd
+		true,  // SupportsManifestList
+		RateLimitInfo{
 			RequestsPerMinute: acrRequestsPerMinute,
 			RequestsPerHour:   acrRequestsPerHour,
 			RequestsPerDay:    acrRequestsPerDay,
 			BurstSize:         acrBurstSize,
 		},
-		RecommendedSettings: RecommendedConfig{
+		RecommendedConfig{
 			CompressionLevel: acrCompressionLevel,
 			ChunkSize:        acrChunkSizeMB * bytesInMB,
 			MaxRetries:       acrMaxRetries,
@@ -343,10 +343,37 @@ func (ri *Intelligence) setupACR() {
 			EnableCache:      true,
 			CacheTTL:         fmt.Sprintf("%dh", acrCacheTTLHours),
 		},
-		MaxLayerSize:         acrMaxLayerSizeGB * bytesInGB,
-		MaxManifestSize:      acrMaxManifestSizeMB * bytesInMB,
-		SupportedPlatforms:   []string{"linux/amd64", "linux/arm64", "linux/arm/v7", "linux/s390x"},
-		AuthenticationScheme: "azure",
+		acrMaxLayerSizeGB*bytesInGB,
+		acrMaxManifestSizeMB*bytesInMB,
+		[]string{"linux/amd64", "linux/arm64", "linux/arm/v7", "linux/s390x"},
+		"azure",
+	)
+}
+
+// createRegistryCapabilities creates a Capabilities struct with the provided parameters
+func (ri *Intelligence) createRegistryCapabilities(
+	supportsMultiArch bool,
+	supportsOCI bool,
+	supportsZstd bool,
+	supportsManifestList bool,
+	rateLimits RateLimitInfo,
+	recommendedSettings RecommendedConfig,
+	maxLayerSize int64,
+	maxManifestSize int64,
+	supportedPlatforms []string,
+	authenticationScheme string,
+) Capabilities {
+	return Capabilities{
+		SupportsMultiArch:    supportsMultiArch,
+		SupportsOCI:          supportsOCI,
+		SupportsZstd:         supportsZstd,
+		SupportsManifestList: supportsManifestList,
+		RateLimits:           rateLimits,
+		RecommendedSettings:  recommendedSettings,
+		MaxLayerSize:         maxLayerSize,
+		MaxManifestSize:      maxManifestSize,
+		SupportedPlatforms:   supportedPlatforms,
+		AuthenticationScheme: authenticationScheme,
 	}
 }
 

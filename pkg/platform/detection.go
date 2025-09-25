@@ -140,15 +140,15 @@ func (pd *Detector) detectHostPlatform() Info {
 }
 
 // deduplicatePlatforms removes duplicate platform entries
-func (pd *Detector) deduplicatePlatforms(platforms []Info) []Info {
+func (pd *Detector) deduplicatePlatforms(platformInfos []Info) []Info {
 	seen := make(map[string]bool)
 	var unique []Info
 
-	for _, platform := range platforms {
-		key := formatPlatform(platform)
+	for _, platformInfo := range platformInfos {
+		key := formatPlatform(platformInfo)
 		if !seen[key] {
 			seen[key] = true
-			unique = append(unique, platform)
+			unique = append(unique, platformInfo)
 		}
 	}
 
@@ -247,14 +247,14 @@ func (pd *Detector) ValidatePlatforms(ctx context.Context, platformSpecs []strin
 
 // GetPlatformCapabilities returns the capabilities for a given platform
 func (pd *Detector) GetPlatformCapabilities(ctx context.Context, platformSpec string) ([]string, error) {
-	platforms, err := pd.AutoDetectAvailablePlatforms(ctx)
+	platformInfos, err := pd.AutoDetectAvailablePlatforms(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to detect available platforms: %w", err)
 	}
 
-	for _, platform := range platforms {
-		if formatPlatform(platform) == platformSpec {
-			return platform.Capabilities, nil
+	for _, platformInfo := range platformInfos {
+		if formatPlatform(platformInfo) == platformSpec {
+			return platformInfo.Capabilities, nil
 		}
 	}
 
@@ -263,13 +263,13 @@ func (pd *Detector) GetPlatformCapabilities(ctx context.Context, platformSpec st
 
 // IsPlatformAvailable checks if a specific platform is available
 func (pd *Detector) IsPlatformAvailable(ctx context.Context, platformSpec string) (bool, error) {
-	platforms, err := pd.AutoDetectAvailablePlatforms(ctx)
+	platformInfos, err := pd.AutoDetectAvailablePlatforms(ctx)
 	if err != nil {
 		return false, fmt.Errorf("failed to detect available platforms: %w", err)
 	}
 
-	for _, platform := range platforms {
-		if formatPlatform(platform) == platformSpec {
+	for _, platformInfo := range platformInfos {
+		if formatPlatform(platformInfo) == platformSpec {
 			return true, nil
 		}
 	}
@@ -281,13 +281,13 @@ func (pd *Detector) IsPlatformAvailable(ctx context.Context, platformSpec string
 func (pd *Detector) GetRecommendedPlatforms(ctx context.Context, registry string) ([]Info, error) {
 	debug.LogComponent("platform", "Getting recommended platforms for registry: %s", registry)
 
-	availablePlatforms, err := pd.AutoDetectAvailablePlatforms(ctx)
+	availablePlatformInfos, err := pd.AutoDetectAvailablePlatforms(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to detect available platforms: %w", err)
 	}
 
 	// Define popular platforms in order of preference
-	popularPlatforms := []Info{
+	popularPlatformInfos := []Info{
 		{OS: "linux", Architecture: "amd64"},
 		{OS: "linux", Architecture: "arm64"},
 		{OS: "linux", Architecture: "arm", Variant: "v7"},
@@ -298,8 +298,8 @@ func (pd *Detector) GetRecommendedPlatforms(ctx context.Context, registry string
 	var recommended []Info
 
 	// Filter available platforms based on popularity
-	for _, popular := range popularPlatforms {
-		for _, available := range availablePlatforms {
+	for _, popular := range popularPlatformInfos {
+		for _, available := range availablePlatformInfos {
 			if popular.OS == available.OS && popular.Architecture == available.Architecture {
 				// Check if variant matches or if available has no variant
 				if popular.Variant == available.Variant || available.Variant == "" {
@@ -313,7 +313,7 @@ func (pd *Detector) GetRecommendedPlatforms(ctx context.Context, registry string
 	// If no popular platforms are available, return all available platforms
 	if len(recommended) == 0 {
 		debug.LogComponent("platform", "No popular platforms available, returning all available platforms")
-		return availablePlatforms, nil
+		return availablePlatformInfos, nil
 	}
 
 	debug.LogComponent("platform", "Recommended platforms: %v", formatPlatforms(recommended))
@@ -336,24 +336,24 @@ func NormalizePlatform(platformSpec string) (Info, error) {
 }
 
 // formatPlatform formats a Info as a string
-func formatPlatform(platform Info) string {
-	if platform.Variant != "" {
-		return fmt.Sprintf("%s/%s/%s", platform.OS, platform.Architecture, platform.Variant)
+func formatPlatform(platformInfo Info) string {
+	if platformInfo.Variant != "" {
+		return fmt.Sprintf("%s/%s/%s", platformInfo.OS, platformInfo.Architecture, platformInfo.Variant)
 	}
-	return fmt.Sprintf("%s/%s", platform.OS, platform.Architecture)
+	return fmt.Sprintf("%s/%s", platformInfo.OS, platformInfo.Architecture)
 }
 
 // formatPlatforms formats a slice of Info as strings
-func formatPlatforms(platforms []Info) []string {
-	result := make([]string, len(platforms))
-	for i, platform := range platforms {
-		result[i] = formatPlatform(platform)
+func formatPlatforms(platformInfos []Info) []string {
+	result := make([]string, len(platformInfos))
+	for i, platformInfo := range platformInfos {
+		result[i] = formatPlatform(platformInfo)
 	}
 	return result
 }
 
 // PlatformRegistryCompatibility checks if a platform is compatible with a given registry
-func (pd *Detector) PlatformRegistryCompatibility(_ context.Context, platformSpec string, registry string) (bool, error) {
+func (pd *Detector) PlatformRegistryCompatibility(_ context.Context, platformSpec, registry string) (bool, error) {
 	// Registry-specific compatibility rules
 	registryRules := map[string][]string{
 		"docker.io":                  {"linux/amd64", "linux/arm64", "linux/arm/v7", "linux/s390x", "linux/ppc64le"},
@@ -381,8 +381,8 @@ func (pd *Detector) PlatformRegistryCompatibility(_ context.Context, platformSpe
 }
 
 // GetPlatformBuildOrder returns an optimal build order for multiple platforms
-func (pd *Detector) GetPlatformBuildOrder(_ context.Context, platforms []string) ([]string, error) {
-	debug.LogComponent("platform", "Getting optimal build order for platforms: %v", platforms)
+func (pd *Detector) GetPlatformBuildOrder(_ context.Context, platformSpecs []string) ([]string, error) {
+	debug.LogComponent("platform", "Getting optimal build order for platforms: %v", platformSpecs)
 
 	// Define build order based on popularity and build time
 	buildOrder := []string{
@@ -397,7 +397,7 @@ func (pd *Detector) GetPlatformBuildOrder(_ context.Context, platforms []string)
 
 	// Filter build order based on requested platforms
 	for _, platform := range buildOrder {
-		for _, requested := range platforms {
+		for _, requested := range platformSpecs {
 			if platform == requested {
 				ordered = append(ordered, platform)
 				debug.LogComponent("platform", "Added platform %s to build order", platform)
@@ -406,7 +406,7 @@ func (pd *Detector) GetPlatformBuildOrder(_ context.Context, platforms []string)
 	}
 
 	// Add any remaining platforms that weren't in the predefined order
-	for _, platform := range platforms {
+	for _, platform := range platformSpecs {
 		found := false
 		for _, orderedPlatform := range ordered {
 			if platform == orderedPlatform {
@@ -426,23 +426,23 @@ func (pd *Detector) GetPlatformBuildOrder(_ context.Context, platforms []string)
 
 // GetPlatformStatistics returns statistics about available platforms
 func (pd *Detector) GetPlatformStatistics(ctx context.Context) (*Statistics, error) {
-	platforms, err := pd.AutoDetectAvailablePlatforms(ctx)
+	platformInfos, err := pd.AutoDetectAvailablePlatforms(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to detect available platforms: %w", err)
 	}
 
 	stats := &Statistics{
-		TotalPlatforms: len(platforms),
+		TotalPlatforms: len(platformInfos),
 		ByOS:           make(map[string]int),
 		ByArchitecture: make(map[string]int),
 		ByVariant:      make(map[string]int),
 	}
 
-	for _, platform := range platforms {
-		stats.ByOS[platform.OS]++
-		stats.ByArchitecture[platform.Architecture]++
-		if platform.Variant != "" {
-			stats.ByVariant[platform.Variant]++
+	for _, platformInfo := range platformInfos {
+		stats.ByOS[platformInfo.OS]++
+		stats.ByArchitecture[platformInfo.Architecture]++
+		if platformInfo.Variant != "" {
+			stats.ByVariant[platformInfo.Variant]++
 		}
 	}
 

@@ -103,21 +103,28 @@ const (
 	// CommonErrorsLimit is the limit for common errors to keep
 	CommonErrorsLimit = 10
 
-	// Additional constants for magic numbers
-	// Multiplier constants
-	SuccessDelayMultiplier     = 0.5
-	SuccessMaxDelayMultiplier  = 0.8
-	TimeoutAttemptsMultiplier  = 1.5
-	CriticalDelayMultiplier    = 2.0
+	// SuccessDelayMultiplier is the multiplier for success delay
+	SuccessDelayMultiplier = 0.5
+	// SuccessMaxDelayMultiplier is the multiplier for success max delay
+	SuccessMaxDelayMultiplier = 0.8
+	// TimeoutAttemptsMultiplier is the multiplier for timeout attempts
+	TimeoutAttemptsMultiplier = 1.5
+	// CriticalDelayMultiplier is the multiplier for critical delay
+	CriticalDelayMultiplier = 2.0
+	// CriticalMaxDelayMultiplier is the multiplier for critical max delay
 	CriticalMaxDelayMultiplier = 1.5
-	HighDelayMultiplier        = 1.5
-	LowDelayMultiplier         = 0.7
-	// Condition constants
+	// HighDelayMultiplier is the multiplier for high delay
+	HighDelayMultiplier = 1.5
+	// LowDelayMultiplier is the multiplier for low delay
+	LowDelayMultiplier = 0.7
+	// ConnectionRefusedAttempts is the number of attempts for connection refused errors
 	ConnectionRefusedAttempts = 2
-	// Random number generator constants
+	// RandomDivisor is the divisor for random number generation
 	RandomDivisor = 1000
-	// Fibonacci cap constant
+	// FibonacciCapValue is the cap value for fibonacci sequence
 	FibonacciCapValue = 1000
+	// AverageLatencyDivisor is divisor for average latency calculation
+	AverageLatencyDivisor = 2
 )
 
 // ErrorClassifier classifies different types of errors
@@ -914,7 +921,7 @@ func (ca *ContextAnalyzer) RecordOperation(operation string, err error, duration
 	if ctx.AverageLatency == 0 {
 		ctx.AverageLatency = duration
 	} else {
-		ctx.AverageLatency = (ctx.AverageLatency + duration) / 2
+		ctx.AverageLatency = (ctx.AverageLatency + duration) / AverageLatencyDivisor
 	}
 }
 

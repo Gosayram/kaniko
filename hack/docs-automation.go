@@ -38,6 +38,11 @@ import (
 	"github.com/Gosayram/kaniko/pkg/debug"
 )
 
+const (
+	dirPermissions  = 0o750
+	filePermissions = 0o600
+)
+
 // CLICommand models a CLI command with flags and examples.
 type CLICommand struct {
 	Name        string       `json:"name"`
@@ -84,9 +89,9 @@ type DocumentationGenerator struct {
 }
 
 // NewDocumentationGenerator constructs the generator.
-func NewDocumentationGenerator(config *DocumentationConfig) *DocumentationGenerator {
+func NewDocumentationGenerator(cfg *DocumentationConfig) *DocumentationGenerator {
 	return &DocumentationGenerator{
-		config:     *config,
+		config:     *cfg,
 		fset:       token.NewFileSet(),
 		filesByPkg: make(map[string][]*ast.File),
 		commands:   make([]CLICommand, 0),
@@ -172,7 +177,11 @@ func (dg *DocumentationGenerator) extractCLICommands() error {
 }
 
 // extractCommandsFromFiles looks for command root variables and associated flags.
-func (dg *DocumentationGenerator) extractCommandsFromFiles(files []*ast.File, commandName, commandDescription string) error {
+func (dg *DocumentationGenerator) extractCommandsFromFiles(
+	files []*ast.File,
+	commandName,
+	commandDescription string,
+) error {
 	for _, file := range files {
 		ast.Inspect(file, func(n ast.Node) bool {
 			// Heuristic: find value specs with names containing "RootCmd"
@@ -188,12 +197,8 @@ func (dg *DocumentationGenerator) extractCommandsFromFiles(files []*ast.File, co
 				for _, ident := range vs.Names {
 					if strings.Contains(ident.Name, "RootCmd") {
 						// Parse command definition with any flags we can discover nearby.
-						cmd, err := dg.parseCommandDefinition(vs, commandName, commandDescription)
-						if err == nil {
-							dg.commands = append(dg.commands, cmd)
-						} else {
-							debug.LogComponent("docs", "Warning: failed to parse command: %v", err)
-						}
+						cmd := dg.parseCommandDefinition(vs, commandName, commandDescription)
+						dg.commands = append(dg.commands, cmd)
 					}
 				}
 			}
@@ -208,7 +213,7 @@ func (dg *DocumentationGenerator) parseCommandDefinition(
 	valueSpec *ast.ValueSpec,
 	commandName,
 	commandDescription string,
-) (CLICommand, error) {
+) CLICommand {
 	cmd := CLICommand{
 		Name:        commandName,
 		Description: commandDescription,
@@ -229,7 +234,7 @@ func (dg *DocumentationGenerator) parseCommandDefinition(
 		}
 	}
 
-	return cmd, nil
+	return cmd
 }
 
 // parseFlagCall attempts to interpret an expression like pflag.String("name", "desc", "default").
@@ -301,7 +306,7 @@ func inferFlagType(funcName string) string {
 func (dg *DocumentationGenerator) generateDocumentationFiles() error {
 	debug.LogComponent("docs", "Generating documentation files in: %s", dg.config.OutputDir)
 
-	if err := os.MkdirAll(dg.config.OutputDir, 0o750); err != nil {
+	if err := os.MkdirAll(dg.config.OutputDir, dirPermissions); err != nil {
 		return fmt.Errorf("failed to create output directory: %w", err)
 	}
 
@@ -334,7 +339,7 @@ func (dg *DocumentationGenerator) generateCLIReference() error {
 
 	content := dg.generateCLIReferenceMarkdown(data)
 	outputPath := filepath.Join(dg.config.OutputDir, "cli-reference.md")
-	if err := os.WriteFile(outputPath, []byte(content), 0o600); err != nil {
+	if err := os.WriteFile(outputPath, []byte(content), filePermissions); err != nil {
 		return fmt.Errorf("failed to write CLI reference: %w", err)
 	}
 
@@ -428,7 +433,7 @@ func (dg *DocumentationGenerator) generateReadmeUpdates() error {
 	}
 
 	updated := dg.updateReadmeContent(string(readmeContent))
-	if err := os.WriteFile(readmePath, []byte(updated), 0o600); err != nil {
+	if err := os.WriteFile(readmePath, []byte(updated), filePermissions); err != nil {
 		return fmt.Errorf("failed to write updated README: %w", err)
 	}
 
@@ -486,10 +491,10 @@ func (dg *DocumentationGenerator) generateMigrationGuides() error {
 
 	migrationPath := filepath.Join(dg.config.OutputDir, "migration-guides",
 		fmt.Sprintf("migration-to-%s.md", currentVersion))
-	if err := os.MkdirAll(filepath.Dir(migrationPath), 0o750); err != nil {
+	if err := os.MkdirAll(filepath.Dir(migrationPath), dirPermissions); err != nil {
 		return fmt.Errorf("failed to create migration guides directory: %w", err)
 	}
-	if err := os.WriteFile(migrationPath, []byte(content), 0o600); err != nil {
+	if err := os.WriteFile(migrationPath, []byte(content), filePermissions); err != nil {
 		return fmt.Errorf("failed to write migration guide: %w", err)
 	}
 
@@ -666,7 +671,7 @@ func (dg *DocumentationGenerator) GenerateCLIDocsJSON() error {
 	}
 
 	outputPath := filepath.Join(dg.config.OutputDir, "cli-reference.json")
-	if err := os.WriteFile(outputPath, jsonData, 0o600); err != nil {
+	if err := os.WriteFile(outputPath, jsonData, filePermissions); err != nil {
 		return fmt.Errorf("failed to write CLI JSON reference: %w", err)
 	}
 

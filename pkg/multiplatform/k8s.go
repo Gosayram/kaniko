@@ -238,7 +238,38 @@ func (d *KubernetesDriver) createBuildJob(platform string) (*batchv1.Job, error)
 	osName, arch := parts[0], parts[1]
 	jobName := fmt.Sprintf("kaniko-build-%s-%s", strings.ReplaceAll(osName, ".", "-"), strings.ReplaceAll(arch, ".", "-"))
 
-	// Build kaniko args
+	args := d.buildKanikoArgs(platform)
+	registrySecret := d.getRegistrySecret()
+
+	job := &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      jobName,
+			Namespace: d.namespace,
+			Labels: map[string]string{
+				"app": "kaniko-multiarch-builder",
+			},
+		},
+		Spec: batchv1.JobSpec{
+			BackoffLimit: ptr.To[int32](0),
+			Template: corev1.PodTemplateSpec{
+				Spec: corev1.PodSpec{
+					ServiceAccountName: "kaniko-builder",
+					RestartPolicy:      corev1.RestartPolicyNever,
+					NodeSelector:       d.buildNodeSelector(osName, arch),
+					Containers: []corev1.Container{
+						d.buildKanikoContainer(args),
+					},
+					Volumes: d.buildJobVolumes(registrySecret),
+				},
+			},
+		},
+	}
+
+	return job, nil
+}
+
+// buildKanikoArgs builds the arguments for the kaniko executor
+func (d *KubernetesDriver) buildKanikoArgs(platform string) []string {
 	args := []string{
 		"--context=" + d.opts.SrcContext,
 		"--dockerfile=" + d.opts.DockerfilePath,
@@ -258,86 +289,80 @@ func (d *KubernetesDriver) createBuildJob(platform string) (*batchv1.Job, error)
 		args = append(args, fmt.Sprintf("--cache-ttl=%s", d.opts.CacheTTL))
 	}
 
-	// Assume registry secret name from env or default "dockerconfigjson"
+	return args
+}
+
+// getRegistrySecret returns the registry secret name from env or default
+func (d *KubernetesDriver) getRegistrySecret() string {
 	registrySecret := os.Getenv("KANIKO_REGISTRY_SECRET")
 	if registrySecret == "" {
 		registrySecret = "dockerconfigjson"
 	}
+	return registrySecret
+}
 
-	job := &batchv1.Job{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      jobName,
-			Namespace: d.namespace,
-			Labels: map[string]string{
-				"app": "kaniko-multiarch-builder",
+// buildNodeSelector builds the node selector for the job
+func (d *KubernetesDriver) buildNodeSelector(osName, arch string) map[string]string {
+	return map[string]string{
+		"kubernetes.io/arch": arch,
+		"kubernetes.io/os":   osName,
+	}
+}
+
+// buildKanikoContainer builds the kaniko container spec
+func (d *KubernetesDriver) buildKanikoContainer(args []string) corev1.Container {
+	return corev1.Container{
+		Name:  "kaniko",
+		Image: "gcr.io/kaniko-project/executor:latest",
+		Args:  args,
+		Resources: corev1.ResourceRequirements{
+			Requests: corev1.ResourceList{
+				corev1.ResourceMemory: resource.MustParse("2Gi"),
+				corev1.ResourceCPU:    resource.MustParse("1"),
+			},
+			Limits: corev1.ResourceList{
+				corev1.ResourceMemory: resource.MustParse("4Gi"),
+				corev1.ResourceCPU:    resource.MustParse("2"),
 			},
 		},
-		Spec: batchv1.JobSpec{
-			BackoffLimit: ptr.To[int32](0),
-			Template: corev1.PodTemplateSpec{
-				Spec: corev1.PodSpec{
-					ServiceAccountName: "kaniko-builder", // From plan example
-					RestartPolicy:      corev1.RestartPolicyNever,
-					NodeSelector: map[string]string{
-						"kubernetes.io/arch": arch,
-						"kubernetes.io/os":   osName,
-					},
-					Containers: []corev1.Container{
-						{
-							Name:  "kaniko",
-							Image: "gcr.io/kaniko-project/executor:latest",
-							Args:  args,
-							Resources: corev1.ResourceRequirements{
-								Requests: corev1.ResourceList{
-									corev1.ResourceMemory: resource.MustParse("2Gi"),
-									corev1.ResourceCPU:    resource.MustParse("1"),
-								},
-								Limits: corev1.ResourceList{
-									corev1.ResourceMemory: resource.MustParse("4Gi"),
-									corev1.ResourceCPU:    resource.MustParse("2"),
-								},
-							},
-							VolumeMounts: []corev1.VolumeMount{
-								{
-									Name:      "docker-config",
-									MountPath: "/kaniko/.docker/",
-									ReadOnly:  true,
-								},
-								{
-									Name:      "output",
-									MountPath: "/output",
-								},
-							},
-							Env: []corev1.EnvVar{
-								{
-									Name:  "DOCKER_CONFIG",
-									Value: "/kaniko/.docker/",
-								},
-							},
-						},
-					},
-					Volumes: []corev1.Volume{
-						{
-							Name: "docker-config",
-							VolumeSource: corev1.VolumeSource{
-								Secret: &corev1.SecretVolumeSource{
-									SecretName: registrySecret,
-								},
-							},
-						},
-						{
-							Name: "output",
-							VolumeSource: corev1.VolumeSource{
-								EmptyDir: &corev1.EmptyDirVolumeSource{},
-							},
-						},
-					},
-				},
+		VolumeMounts: []corev1.VolumeMount{
+			{
+				Name:      "docker-config",
+				MountPath: "/kaniko/.docker/",
+				ReadOnly:  true,
+			},
+			{
+				Name:      "output",
+				MountPath: "/output",
+			},
+		},
+		Env: []corev1.EnvVar{
+			{
+				Name:  "DOCKER_CONFIG",
+				Value: "/kaniko/.docker/",
 			},
 		},
 	}
+}
 
-	return job, nil
+// buildJobVolumes builds the volumes for the job
+func (d *KubernetesDriver) buildJobVolumes(registrySecret string) []corev1.Volume {
+	return []corev1.Volume{
+		{
+			Name: "docker-config",
+			VolumeSource: corev1.VolumeSource{
+				Secret: &corev1.SecretVolumeSource{
+					SecretName: registrySecret,
+				},
+			},
+		},
+		{
+			Name: "output",
+			VolumeSource: corev1.VolumeSource{
+				EmptyDir: &corev1.EmptyDirVolumeSource{},
+			},
+		},
+	}
 }
 
 // waitForJobCompletion waits for a Kubernetes Job to complete and returns the digest
@@ -414,7 +439,7 @@ func (d *KubernetesDriver) readDigestFromPod(ctx context.Context, jobName, platf
 	}
 
 	var stdout, stderr bytes.Buffer
-	err = exec.Stream(remotecommand.StreamOptions{
+	err = exec.StreamWithContext(context.Background(), remotecommand.StreamOptions{
 		Stdout: &stdout,
 		Stderr: &stderr,
 		Tty:    false,
@@ -434,11 +459,6 @@ func (d *KubernetesDriver) readDigestFromPod(ctx context.Context, jobName, platf
 
 	logrus.Infof("Retrieved digest for %s: %s", platform, digest)
 	return digest, nil
-}
-
-// getDigestFilename returns the expected filename for a platform's digest
-func (d *KubernetesDriver) getDigestFilename(platform string) string {
-	return strings.ReplaceAll(platform, "/", "-") + ".digest"
 }
 
 // getDestinationForPlatform returns the destination registry with platform suffix

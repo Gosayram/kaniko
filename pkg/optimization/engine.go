@@ -34,6 +34,18 @@ const (
 	maxBuildHistorySize = 1000
 	slowBuildThreshold  = 5 * time.Minute
 	lowCacheHitRate     = 0.5
+
+	// Confidence levels for suggestions
+	highConfidence       = 0.9
+	mediumHighConfidence = 0.85
+	mediumConfidence     = 0.8
+	mediumLowConfidence  = 0.75
+	lowConfidence        = 0.7
+	veryLowConfidence    = 0.65
+
+	// Priority levels for recommendations
+	highPriority   = 5
+	mediumPriority = 4
 )
 
 // BuildRecord contains information about a build execution
@@ -298,7 +310,7 @@ func (oe *Engine) GenerateDockerfileSuggestions(dockerfile string) []Suggestion 
 			Title:       "Combine RUN Commands",
 			Description: "Multiple RUN commands detected. Consider combining them using && to reduce the number of layers.",
 			Severity:    "medium",
-			Confidence:  0.8,
+			Confidence:  mediumConfidence,
 			SuggestedFix: "Combine consecutive RUN commands:\n" +
 				"FROM ubuntu:20.04\n" +
 				"RUN apt-get update && apt-get install -y package1 package2 && rm -rf /var/lib/apt/lists/*",
@@ -312,7 +324,7 @@ func (oe *Engine) GenerateDockerfileSuggestions(dockerfile string) []Suggestion 
 			Title:       "Combine apt-get update and install",
 			Description: "apt-get update found without subsequent install. This creates an unnecessary layer.",
 			Severity:    "high",
-			Confidence:  0.9,
+			Confidence:  highConfidence,
 			SuggestedFix: "Combine apt-get update with install:\n" +
 				"RUN apt-get update && apt-get install -y package && apt-get clean && rm -rf /var/lib/apt/lists/*",
 		})
@@ -325,7 +337,7 @@ func (oe *Engine) GenerateDockerfileSuggestions(dockerfile string) []Suggestion 
 			Title:       "Add cleanup after apt-get install",
 			Description: "apt-get install without cleanup. This leaves cache files in the image.",
 			Severity:    "medium",
-			Confidence:  0.85,
+			Confidence:  mediumHighConfidence,
 			SuggestedFix: "Add cleanup after apt-get install:\n" +
 				"RUN apt-get update && apt-get install -y package && apt-get clean && rm -rf /var/lib/apt/lists/*",
 		})
@@ -338,7 +350,7 @@ func (oe *Engine) GenerateDockerfileSuggestions(dockerfile string) []Suggestion 
 			Title:       "Use specific file copying",
 			Description: "COPY . . or COPY * * detected. This copies unnecessary files and increases build context size.",
 			Severity:    "medium",
-			Confidence:  0.75,
+			Confidence:  mediumLowConfidence,
 			SuggestedFix: "Copy only necessary files:\n" +
 				"COPY package.json package-lock.json ./\n" +
 				"COPY src/ ./src/",
@@ -352,7 +364,7 @@ func (oe *Engine) GenerateDockerfileSuggestions(dockerfile string) []Suggestion 
 			Title:       "Use multi-stage builds",
 			Description: "No multi-stage builds detected. This increases final image size.",
 			Severity:    "low",
-			Confidence:  0.7,
+			Confidence:  lowConfidence,
 			SuggestedFix: "Add multi-stage builds:\n" +
 				"FROM golang:1.19 as builder\n" +
 				"WORKDIR /app\n" +
@@ -373,7 +385,7 @@ func (oe *Engine) GenerateDockerfileSuggestions(dockerfile string) []Suggestion 
 			Title:       "Use smaller base images",
 			Description: "Large base image detected. Consider using smaller alternatives like alpine.",
 			Severity:    "low",
-			Confidence:  0.65,
+			Confidence:  veryLowConfidence,
 			SuggestedFix: "Use smaller base images:\n" +
 				"FROM ubuntu:20.04 → FROM alpine:latest\n" +
 				"FROM debian:bullseye → FROM alpine:latest\n" +
@@ -578,8 +590,8 @@ func (oe *Engine) generateRecommendations(record *BuildRecord) {
 			Description: fmt.Sprintf("Build took %v, which is longer than expected. "+
 				"Consider optimizing Dockerfile layers and cache usage.", record.Duration),
 			Severity:     "medium",
-			Priority:     5,
-			Confidence:   0.8,
+			Priority:     highPriority,
+			Confidence:   mediumConfidence,
 			SuggestedFix: "Optimize Dockerfile by combining RUN commands, using multi-stage builds, and improving cache usage.",
 			Implemented:  false,
 			LastUpdated:  time.Now(),
@@ -597,8 +609,8 @@ func (oe *Engine) generateRecommendations(record *BuildRecord) {
 			Description: fmt.Sprintf("Cache hit rate is %.2f, which is low. "+
 				"Consider improving cache key strategy.", record.CacheStats.HitRate),
 			Severity:     "medium",
-			Priority:     4,
-			Confidence:   0.7,
+			Priority:     mediumPriority,
+			Confidence:   lowConfidence,
 			SuggestedFix: "Improve cache usage by organizing Dockerfile layers and using more specific cache keys.",
 			Implemented:  false,
 			LastUpdated:  time.Now(),

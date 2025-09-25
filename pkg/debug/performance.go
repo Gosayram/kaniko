@@ -23,6 +23,7 @@ import (
 	"time"
 )
 
+// PerformanceTracker tracks performance metrics and memory snapshots during execution
 type PerformanceTracker struct {
 	mu           sync.Mutex
 	startTime    time.Time
@@ -30,6 +31,7 @@ type PerformanceTracker struct {
 	memoryPoints []MemorySnapshot
 }
 
+// MemorySnapshot captures memory statistics at a specific point in time
 type MemorySnapshot struct {
 	Timestamp  time.Time
 	Alloc      uint64
@@ -42,6 +44,7 @@ var (
 	globalTracker *PerformanceTracker
 )
 
+// InitPerformanceTracker creates and initializes a new performance tracker
 func InitPerformanceTracker() *PerformanceTracker {
 	pt := &PerformanceTracker{
 		startTime: time.Now(),
@@ -51,6 +54,7 @@ func InitPerformanceTracker() *PerformanceTracker {
 	return pt
 }
 
+// RecordMemorySnapshot captures current memory statistics
 func (pt *PerformanceTracker) RecordMemorySnapshot() {
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
@@ -67,6 +71,7 @@ func (pt *PerformanceTracker) RecordMemorySnapshot() {
 	})
 }
 
+// RecordMetric records a custom metric with the given name and value
 func (pt *PerformanceTracker) RecordMetric(name string, value interface{}) {
 	pt.mu.Lock()
 	defer pt.mu.Unlock()
@@ -74,11 +79,12 @@ func (pt *PerformanceTracker) RecordMetric(name string, value interface{}) {
 	pt.metrics[name] = value
 }
 
+// GenerateReport creates a formatted report of all tracked performance metrics
 func (pt *PerformanceTracker) GenerateReport() string {
 	pt.mu.Lock()
 	defer pt.mu.Unlock()
 
-	report := fmt.Sprintf("=== Performance Report ===\n")
+	report := "=== Performance Report ===\n"
 	report += fmt.Sprintf("Total execution time: %v\n", time.Since(pt.startTime))
 
 	if len(pt.memoryPoints) > 0 {
@@ -95,6 +101,7 @@ func (pt *PerformanceTracker) GenerateReport() string {
 	return report
 }
 
+// GetExecutionTime returns the elapsed time since the tracker was initialized
 func (pt *PerformanceTracker) GetExecutionTime() time.Duration {
 	pt.mu.Lock()
 	defer pt.mu.Unlock()
@@ -102,19 +109,21 @@ func (pt *PerformanceTracker) GetExecutionTime() time.Duration {
 	return time.Since(pt.startTime)
 }
 
-// Global functions for convenience
+// RecordMemorySnapshot records a memory snapshot using the global tracker
 func RecordMemorySnapshot() {
 	if globalTracker != nil {
 		globalTracker.RecordMemorySnapshot()
 	}
 }
 
+// RecordMetric records a metric using the global tracker
 func RecordMetric(name string, value interface{}) {
 	if globalTracker != nil {
 		globalTracker.RecordMetric(name, value)
 	}
 }
 
+// GenerateReport generates a performance report using the global tracker
 func GenerateReport() string {
 	if globalTracker != nil {
 		return globalTracker.GenerateReport()
@@ -122,6 +131,7 @@ func GenerateReport() string {
 	return "No performance tracker initialized"
 }
 
+// GetExecutionTime returns execution time using the global tracker
 func GetExecutionTime() time.Duration {
 	if globalTracker != nil {
 		return globalTracker.GetExecutionTime()

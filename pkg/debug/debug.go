@@ -29,20 +29,20 @@ import (
 	"github.com/Gosayram/kaniko/pkg/config"
 )
 
-// DebugManager manages debugging and logging functionality for Kaniko.
-type DebugManager struct {
+// Manager manages debugging and logging functionality for Kaniko.
+type Manager struct {
 	opts          *config.DebugOptions
 	logFile       *os.File
 	componentLogs map[string]*logrus.Logger
 }
 
 var (
-	defaultManager *DebugManager
+	defaultManager *Manager
 )
 
 // Init initializes a new DebugManager with the provided options.
-func Init(opts *config.DebugOptions) (*DebugManager, error) {
-	dm := &DebugManager{
+func Init(opts *config.DebugOptions) (*Manager, error) {
+	dm := &Manager{
 		opts:          opts,
 		componentLogs: make(map[string]*logrus.Logger),
 	}
@@ -57,9 +57,10 @@ func Init(opts *config.DebugOptions) (*DebugManager, error) {
 	return dm, nil
 }
 
-func (dm *DebugManager) initDebugFiles() error {
+func (dm *Manager) initDebugFiles() error {
 	debugDir := filepath.Join(config.KanikoDir, "debug")
-	if err := os.MkdirAll(debugDir, 0750); err != nil {
+	const dirPermissions = 0o750
+	if err := os.MkdirAll(debugDir, dirPermissions); err != nil {
 		return err
 	}
 
@@ -89,7 +90,7 @@ func (dm *DebugManager) initDebugFiles() error {
 
 	for _, subDir := range subDirs {
 		fullPath := filepath.Join(debugDir, subDir)
-		if err := os.MkdirAll(fullPath, 0750); err != nil {
+		if err := os.MkdirAll(fullPath, dirPermissions); err != nil {
 			return err
 		}
 	}
@@ -98,7 +99,7 @@ func (dm *DebugManager) initDebugFiles() error {
 }
 
 // LogComponent logs a message for a specific component.
-func (dm *DebugManager) LogComponent(component string, msg string, args ...interface{}) {
+func (dm *Manager) LogComponent(component, msg string, args ...interface{}) {
 	if !dm.shouldLogComponent(component) {
 		return
 	}
@@ -115,7 +116,7 @@ func (dm *DebugManager) LogComponent(component string, msg string, args ...inter
 	logrus.Debugf("[%s] %s", component, formattedMsg)
 }
 
-func (dm *DebugManager) shouldLogComponent(component string) bool {
+func (dm *Manager) shouldLogComponent(component string) bool {
 	if dm.opts.EnableFullDebug {
 		return true
 	}
@@ -134,7 +135,7 @@ func (dm *DebugManager) shouldLogComponent(component string) bool {
 }
 
 // Close closes the debug manager and releases any resources.
-func (dm *DebugManager) Close() error {
+func (dm *Manager) Close() error {
 	if dm.logFile != nil {
 		return dm.logFile.Close()
 	}
@@ -142,7 +143,7 @@ func (dm *DebugManager) Close() error {
 }
 
 // LogToComponentFile writes logs to component-specific files
-func (dm *DebugManager) LogToComponentFile(component, msg string, args ...interface{}) error {
+func (dm *Manager) LogToComponentFile(component, msg string, args ...interface{}) error {
 	if !dm.opts.OutputDebugFiles {
 		return nil
 	}
@@ -178,7 +179,8 @@ func (dm *DebugManager) LogToComponentFile(component, msg string, args ...interf
 	filename := fmt.Sprintf("%s.log", component)
 
 	filePath := filepath.Join(debugDir, filename)
-	file, err := os.OpenFile(filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
+	const filePermissions = 0o600
+	file, err := os.OpenFile(filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, filePermissions)
 	if err != nil {
 		return err
 	}
@@ -192,17 +194,18 @@ func (dm *DebugManager) LogToComponentFile(component, msg string, args ...interf
 }
 
 // GetDebugDir returns the path to the debug directory
-func (dm *DebugManager) GetDebugDir() string {
+func (dm *Manager) GetDebugDir() string {
 	return filepath.Join(config.KanikoDir, "debug")
 }
 
-// Global functions for convenience
+// LogComponent logs a message for a specific component.
 func LogComponent(component, msg string, args ...interface{}) {
 	if defaultManager != nil {
 		defaultManager.LogComponent(component, msg, args...)
 	}
 }
 
+// LogToComponentFile writes logs to component-specific files.
 func LogToComponentFile(component, msg string, args ...interface{}) error {
 	if defaultManager != nil {
 		return defaultManager.LogToComponentFile(component, msg, args...)

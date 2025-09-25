@@ -51,7 +51,7 @@ func NewCIDriver(opts *config.KanikoOptions) (*CIDriver, error) {
 			logrus.Infof("No CI env detected; using %s for digests", opts.DigestsFrom)
 		}
 		// Ensure dir exists
-		if err := os.MkdirAll(opts.DigestsFrom, 0755); err != nil {
+		if err := os.MkdirAll(opts.DigestsFrom, 0750); err != nil {
 			return nil, fmt.Errorf("failed to create digests dir %s: %w", opts.DigestsFrom, err)
 		}
 	}
@@ -156,7 +156,7 @@ func (d *CIDriver) readDigestForPlatform(platform string) (string, error) {
 	}
 
 	// Use the same validation as readDigestFromFile
-	data, err := os.ReadFile(cleanDigestFile)
+	data, err := os.ReadFile(filepath.Clean(cleanDigestFile))
 	if err != nil {
 		return "", errors.Wrapf(err, "failed to read digest file %s", cleanDigestFile)
 	}
