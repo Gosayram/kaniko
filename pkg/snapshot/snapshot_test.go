@@ -25,10 +25,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/GoogleContainerTools/kaniko/pkg/config"
-	"github.com/GoogleContainerTools/kaniko/pkg/util"
-	"github.com/GoogleContainerTools/kaniko/testutil"
 	"github.com/pkg/errors"
+
+	"github.com/Gosayram/kaniko/pkg/config"
+	"github.com/Gosayram/kaniko/pkg/util"
+	"github.com/Gosayram/kaniko/testutil"
 )
 
 func TestSnapshotFSFileChange(t *testing.T) {
@@ -137,7 +138,7 @@ func TestSnapshotFSChangePermissions(t *testing.T) {
 	// Change permissions on a file
 	batPath := filepath.Join(testDir, "bar/bat")
 	batPathWithoutLeadingSlash := filepath.Join(testDirWithoutLeadingSlash, "bar/bat")
-	if err := os.Chmod(batPath, 0600); err != nil {
+	if err := os.Chmod(batPath, 0o600); err != nil {
 		t.Fatalf("Error changing permissions on %s: %v", batPath, err)
 	}
 	// Take another snapshot

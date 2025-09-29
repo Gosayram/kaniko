@@ -14,16 +14,19 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// Package util provides utility functions for various operations including
+// Azure Blob Storage validation, filesystem operations, and other common utilities.
 package util
 
 import (
 	"regexp"
 
-	"github.com/GoogleContainerTools/kaniko/pkg/constants"
+	"github.com/Gosayram/kaniko/pkg/constants"
 )
 
-// Validate if the host url provided is with correct suffix for AzureCloud, AzureChinaCloud, AzureGermanCloud and AzureUSGovernment
-// RegEX for supported suffix defined in constants.AzureBlobStorageHostRegEx
+// ValidAzureBlobStorageHost validates if the host URL provided has the correct suffix
+// for AzureCloud, AzureChinaCloud, AzureGermanCloud and AzureUSGovernment.
+// Regular expressions for supported suffixes are defined in constants.AzureBlobStorageHostRegEx.
 func ValidAzureBlobStorageHost(context string) bool {
 	for _, re := range constants.AzureBlobStorageHostRegEx {
 		validBlobURL := regexp.MustCompile(re)

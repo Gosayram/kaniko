@@ -22,12 +22,13 @@ import (
 	"os"
 	"path/filepath"
 
-	kConfig "github.com/GoogleContainerTools/kaniko/pkg/config"
-	"github.com/GoogleContainerTools/kaniko/pkg/constants"
-	"github.com/GoogleContainerTools/kaniko/pkg/util"
-	"github.com/GoogleContainerTools/kaniko/pkg/util/bucket"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/net/context"
+
+	kConfig "github.com/Gosayram/kaniko/pkg/config"
+	"github.com/Gosayram/kaniko/pkg/constants"
+	"github.com/Gosayram/kaniko/pkg/util"
+	"github.com/Gosayram/kaniko/pkg/util/bucket"
 )
 
 // GCS struct for Google Cloud Storage processing
@@ -35,17 +36,19 @@ type GCS struct {
 	context string
 }
 
+// UnpackTarFromBuildContext downloads and unpacks build context from Google Cloud Storage
 func (g *GCS) UnpackTarFromBuildContext() (string, error) {
-	bucketName, filepath, err := bucket.GetNameAndFilepathFromURI(g.context)
+	bucketName, filePath, err := bucket.GetNameAndFilepathFromURI(g.context)
 	if err != nil {
 		return "", fmt.Errorf("getting bucketname and filepath from context: %w", err)
 	}
-	return kConfig.BuildContextDir, unpackTarFromGCSBucket(bucketName, filepath, kConfig.BuildContextDir)
+	return kConfig.BuildContextDir, unpackTarFromGCSBucket(bucketName, filePath, kConfig.BuildContextDir)
 }
 
+// UploadToBucket uploads data from a reader to a Google Cloud Storage bucket
 func UploadToBucket(r io.Reader, dest string) error {
 	ctx := context.Background()
-	bucketName, filepath, err := bucket.GetNameAndFilepathFromURI(dest)
+	bucketName, filePath, err := bucket.GetNameAndFilepathFromURI(dest)
 	if err != nil {
 		return fmt.Errorf("getting bucketname and filepath from dest: %w", err)
 	}
@@ -53,7 +56,7 @@ func UploadToBucket(r io.Reader, dest string) error {
 	if err != nil {
 		return err
 	}
-	return bucket.Upload(ctx, bucketName, filepath, r, client)
+	return bucket.Upload(ctx, bucketName, filePath, r, client)
 }
 
 // unpackTarFromGCSBucket unpacks the context.tar.gz file in the given bucket to the given directory
@@ -87,7 +90,8 @@ func getTarFromBucket(bucketName, filepathInBucket, directory string) (string, e
 	}
 	defer reader.Close()
 	tarPath := filepath.Join(directory, constants.ContextTar)
-	if err := util.CreateFile(tarPath, reader, 0600, 0, 0); err != nil {
+	// 0o600 permissions provide read/write access for owner only (standard for sensitive files)
+	if err := util.CreateFile(tarPath, reader, 0o600, 0, 0); err != nil { //nolint:mnd // standard file permissions
 		return "", err
 	}
 	logrus.Debugf("Copied tarball %s from GCS bucket %s to %s", constants.ContextTar, bucketName, tarPath)

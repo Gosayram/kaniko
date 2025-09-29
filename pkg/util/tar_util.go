@@ -28,11 +28,13 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/GoogleContainerTools/kaniko/pkg/config"
 	"github.com/docker/docker/pkg/archive"
 	"github.com/docker/docker/pkg/system"
+	"github.com/moby/go-archive/compression"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
+
+	"github.com/Gosayram/kaniko/pkg/config"
 )
 
 // Tar knows how to write files to a tar file.
@@ -50,6 +52,7 @@ func NewTar(f io.Writer) Tar {
 	}
 }
 
+// CreateTarballOfDirectory creates a tarball from the contents of the specified directory.
 func CreateTarballOfDirectory(pathToDir string, f io.Writer) error {
 	if !filepath.IsAbs(pathToDir) {
 		return errors.New("pathToDir is not absolute")
@@ -57,7 +60,7 @@ func CreateTarballOfDirectory(pathToDir string, f io.Writer) error {
 	tarWriter := NewTar(f)
 	defer tarWriter.Close()
 
-	walkFn := func(path string, d fs.DirEntry, err error) error {
+	walkFn := func(path string, _ fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -72,36 +75,87 @@ func CreateTarballOfDirectory(pathToDir string, f io.Writer) error {
 
 // Close will close any open streams used by Tar.
 func (t *Tar) Close() {
-	t.w.Close()
+	if err := t.w.Close(); err != nil {
+		logrus.Debugf("Error closing tar writer: %v", err)
+	}
 }
 
 // AddFileToTar adds the file at path p to the tar
 func (t *Tar) AddFileToTar(p string) error {
 	i, err := os.Lstat(p)
 	if err != nil {
-		return fmt.Errorf("Failed to get file info for %s: %w", p, err)
+		return fmt.Errorf("failed to get file info for %s: %w", p, err)
 	}
-	linkDst := ""
-	if i.Mode()&os.ModeSymlink != 0 {
-		var err error
-		linkDst, err = os.Readlink(p)
-		if err != nil {
-			return err
-		}
-	}
+
+	// Handle sockets - ignore them
 	if i.Mode()&os.ModeSocket != 0 {
 		logrus.Infof("Ignoring socket %s, not adding to tar", i.Name())
 		return nil
 	}
-	hdr, err := tar.FileInfoHeader(i, linkDst)
-	if err != nil {
-		return err
-	}
-	err = readSecurityXattrToTarHeader(p, hdr)
+
+	// Get link destination for symlinks
+	linkDst, err := t.getLinkDestination(p, i)
 	if err != nil {
 		return err
 	}
 
+	// Create tar header
+	hdr, err := t.createTarHeader(p, i, linkDst)
+	if err != nil {
+		return err
+	}
+
+	// Write header to tar
+	if err := t.w.WriteHeader(hdr); err != nil {
+		return err
+	}
+
+	// Write file content for regular files that aren't hardlinks
+	if hdr.Typeflag == tar.TypeReg {
+		return t.writeFileContent(p)
+	}
+
+	return nil
+}
+
+func (t *Tar) getLinkDestination(p string, i os.FileInfo) (string, error) {
+	if i.Mode()&os.ModeSymlink != 0 {
+		// Validate the file path to prevent directory traversal
+		cleanPath := filepath.Clean(p)
+		if strings.Contains(cleanPath, "..") || strings.HasPrefix(cleanPath, "/") {
+			return "", fmt.Errorf("invalid file path: potential directory traversal detected")
+		}
+		return os.Readlink(cleanPath)
+	}
+	return "", nil
+}
+
+func (t *Tar) createTarHeader(p string, i os.FileInfo, linkDst string) (*tar.Header, error) {
+	hdr, err := tar.FileInfoHeader(i, linkDst)
+	if err != nil {
+		return nil, err
+	}
+
+	// Read security xattrs
+	if err := readSecurityXattrToTarHeader(p, hdr); err != nil {
+		return nil, err
+	}
+
+	// Set header name
+	t.setHeaderName(p, hdr)
+
+	// Set header format and clear user/group names
+	hdr.Uname = ""
+	hdr.Gname = ""
+	hdr.Format = tar.FormatPAX
+
+	// Handle hardlinks
+	t.handleHardlinks(p, i, hdr)
+
+	return hdr, nil
+}
+
+func (t *Tar) setHeaderName(p string, hdr *tar.Header) {
 	if p == config.RootDir {
 		// allow entry for / to preserve permission changes etc. (currently ignored anyway by Docker runtime)
 		hdr.Name = "/"
@@ -111,28 +165,26 @@ func (t *Tar) AddFileToTar(p string) error {
 		hdr.Name = strings.TrimLeft(hdr.Name, "/")
 	}
 	if hdr.Typeflag == tar.TypeDir && !strings.HasSuffix(hdr.Name, "/") {
-		hdr.Name = hdr.Name + "/"
+		hdr.Name += "/"
 	}
-	// rootfs may not have been extracted when using cache, preventing uname/gname from resolving
-	// this makes this layer unnecessarily differ from a cached layer which does contain this information
-	hdr.Uname = ""
-	hdr.Gname = ""
-	// use PAX format to preserve accurate mtime (match Docker behavior)
-	hdr.Format = tar.FormatPAX
+}
 
+func (t *Tar) handleHardlinks(p string, i os.FileInfo, hdr *tar.Header) {
 	hardlink, linkDst := t.checkHardlink(p, i)
 	if hardlink {
 		hdr.Linkname = linkDst
 		hdr.Typeflag = tar.TypeLink
 		hdr.Size = 0
 	}
-	if err := t.w.WriteHeader(hdr); err != nil {
-		return err
+}
+
+func (t *Tar) writeFileContent(p string) error {
+	// Validate the file path to prevent directory traversal
+	cleanPath := filepath.Clean(p)
+	if strings.Contains(cleanPath, "..") || strings.HasPrefix(cleanPath, "/") {
+		return fmt.Errorf("invalid file path: potential directory traversal detected")
 	}
-	if !(i.Mode().IsRegular()) || hardlink {
-		return nil
-	}
-	r, err := os.Open(p)
+	r, err := os.Open(cleanPath)
 	if err != nil {
 		return err
 	}
@@ -150,10 +202,10 @@ const (
 // writeSecurityXattrToTarFile writes security.capability
 // xattrs from a tar header to filesystem
 func writeSecurityXattrToTarFile(path string, hdr *tar.Header) error {
-	if hdr.Xattrs == nil {
+	if hdr.PAXRecords == nil {
 		return nil
 	}
-	if capability, ok := hdr.Xattrs[securityCapabilityXattr]; ok {
+	if capability, ok := hdr.PAXRecords[securityCapabilityXattr]; ok {
 		err := system.Lsetxattr(path, securityCapabilityXattr, []byte(capability), 0)
 		if err != nil && !errors.Is(err, syscall.EOPNOTSUPP) && !errors.Is(err, system.ErrNotSupportedPlatform) {
 			return errors.Wrapf(err, "failed to write %q attribute to %q", securityCapabilityXattr, path)
@@ -165,19 +217,20 @@ func writeSecurityXattrToTarFile(path string, hdr *tar.Header) error {
 // readSecurityXattrToTarHeader reads security.capability
 // xattrs from filesystem to a tar header
 func readSecurityXattrToTarHeader(path string, hdr *tar.Header) error {
-	if hdr.Xattrs == nil {
-		hdr.Xattrs = make(map[string]string)
+	if hdr.PAXRecords == nil {
+		hdr.PAXRecords = make(map[string]string)
 	}
 	capability, err := system.Lgetxattr(path, securityCapabilityXattr)
 	if err != nil && !errors.Is(err, syscall.EOPNOTSUPP) && !errors.Is(err, system.ErrNotSupportedPlatform) {
 		return errors.Wrapf(err, "failed to read %q attribute from %q", securityCapabilityXattr, path)
 	}
 	if capability != nil {
-		hdr.Xattrs[securityCapabilityXattr] = string(capability)
+		hdr.PAXRecords[securityCapabilityXattr] = string(capability)
 	}
 	return nil
 }
 
+// Whiteout creates a whiteout file in the tar archive for the specified path.
 func (t *Tar) Whiteout(p string) error {
 	dir := filepath.Dir(p)
 	name := archive.WhiteoutPrefix + filepath.Base(p)
@@ -194,8 +247,11 @@ func (t *Tar) Whiteout(p string) error {
 	return nil
 }
 
-// Returns true if path is hardlink, and the link destination
-func (t *Tar) checkHardlink(p string, i os.FileInfo) (bool, string) {
+// checkHardlink checks if the path is a hardlink and returns the result.
+// Returns:
+// - bool: true if path is hardlink
+// - string: the link destination
+func (t *Tar) checkHardlink(p string, i os.FileInfo) (isHardlink bool, linkDestination string) {
 	hardlink := false
 	linkDst := ""
 	stat := getSyscallStatT(i)
@@ -229,25 +285,36 @@ func getSyscallStatT(i os.FileInfo) *syscall.Stat_t {
 func UnpackLocalTarArchive(path, dest string) ([]string, error) {
 	// First, we need to check if the path is a local tar archive
 	if compressed, compressionLevel := fileIsCompressedTar(path); compressed {
-		file, err := os.Open(path)
+		// Validate the file path to prevent directory traversal
+		cleanPath := filepath.Clean(path)
+		if strings.Contains(cleanPath, "..") || strings.HasPrefix(cleanPath, "/") {
+			return nil, fmt.Errorf("invalid file path: potential directory traversal detected")
+		}
+		file, err := os.Open(cleanPath)
 		if err != nil {
 			return nil, err
 		}
 		defer file.Close()
-		if compressionLevel == archive.Gzip {
+		switch compressionLevel {
+		case int(archive.Gzip):
 			gzr, err := gzip.NewReader(file)
 			if err != nil {
 				return nil, err
 			}
 			defer gzr.Close()
 			return UnTar(gzr, dest)
-		} else if compressionLevel == archive.Bzip2 {
+		case int(archive.Bzip2):
 			bzr := bzip2.NewReader(file)
 			return UnTar(bzr, dest)
 		}
 	}
 	if fileIsUncompressedTar(path) {
-		file, err := os.Open(path)
+		// Validate the file path to prevent directory traversal
+		cleanPath := filepath.Clean(path)
+		if strings.Contains(cleanPath, "..") || strings.HasPrefix(cleanPath, "/") {
+			return nil, fmt.Errorf("invalid file path: potential directory traversal detected")
+		}
+		file, err := os.Open(cleanPath)
 		if err != nil {
 			return nil, err
 		}
@@ -264,8 +331,13 @@ func IsFileLocalTarArchive(src string) bool {
 	return compressed || uncompressed
 }
 
-func fileIsCompressedTar(src string) (bool, archive.Compression) {
-	r, err := os.Open(src)
+func fileIsCompressedTar(src string) (isCompressed bool, compressionType int) {
+	// Validate the source path to prevent directory traversal
+	cleanSrc := filepath.Clean(src)
+	if strings.Contains(cleanSrc, "..") || strings.HasPrefix(cleanSrc, "/") {
+		return false, -1
+	}
+	r, err := os.Open(cleanSrc)
 	if err != nil {
 		return false, -1
 	}
@@ -274,17 +346,27 @@ func fileIsCompressedTar(src string) (bool, archive.Compression) {
 	if err != nil {
 		return false, -1
 	}
-	compressionLevel := archive.DetectCompression(buf)
-	return (compressionLevel > 0), compressionLevel
+	compressionLevel := compression.Detect(buf)
+	return (compressionLevel > 0), int(compressionLevel)
 }
 
 func fileIsUncompressedTar(src string) bool {
-	r, err := os.Open(src)
+	// Validate the source path to prevent directory traversal
+	cleanSrc := filepath.Clean(src)
+	if strings.Contains(cleanSrc, "..") || strings.HasPrefix(cleanSrc, "/") {
+		return false
+	}
+	r, err := os.Open(cleanSrc)
 	if err != nil {
 		return false
 	}
 	defer r.Close()
-	fi, err := os.Lstat(src)
+	// Validate the source path to prevent directory traversal
+	validatedSrc := filepath.Clean(src)
+	if strings.Contains(validatedSrc, "..") || strings.HasPrefix(validatedSrc, "/") {
+		return false
+	}
+	fi, err := os.Lstat(validatedSrc)
 	if err != nil {
 		return false
 	}
@@ -301,7 +383,12 @@ func fileIsUncompressedTar(src string) bool {
 
 // UnpackCompressedTar unpacks the compressed tar at path to dir
 func UnpackCompressedTar(path, dir string) error {
-	file, err := os.Open(path)
+	// Validate the file path to prevent directory traversal
+	cleanPath := filepath.Clean(path)
+	if strings.Contains(cleanPath, "..") || strings.HasPrefix(cleanPath, "/") {
+		return fmt.Errorf("invalid file path: potential directory traversal detected")
+	}
+	file, err := os.Open(cleanPath)
 	if err != nil {
 		return err
 	}

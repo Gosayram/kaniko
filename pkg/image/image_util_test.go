@@ -26,8 +26,8 @@ import (
 	"github.com/moby/buildkit/frontend/dockerfile/linter"
 	"github.com/moby/buildkit/frontend/dockerfile/parser"
 
-	"github.com/GoogleContainerTools/kaniko/pkg/config"
-	"github.com/GoogleContainerTools/kaniko/testutil"
+	"github.com/Gosayram/kaniko/pkg/config"
+	"github.com/Gosayram/kaniko/testutil"
 )
 
 var (
@@ -53,11 +53,11 @@ func Test_StandardImage(t *testing.T) {
 	defer func() {
 		RetrieveRemoteImage = original
 	}()
-	mock := func(image string, opts config.RegistryOptions, _ string) (v1.Image, error) {
+	mock := func(image string, opts *config.RegistryOptions, _ string) (v1.Image, error) {
 		return nil, nil
 	}
 	RetrieveRemoteImage = mock
-	actual, err := RetrieveSourceImage(config.KanikoStage{
+	actual, err := RetrieveSourceImage(&config.KanikoStage{
 		Stage: stages[0],
 	}, &config.KanikoOptions{})
 	testutil.CheckErrorAndDeepEqual(t, false, err, nil, actual)
@@ -68,7 +68,7 @@ func Test_ScratchImage(t *testing.T) {
 	if err != nil {
 		t.Error(err)
 	}
-	actual, err := RetrieveSourceImage(config.KanikoStage{
+	actual, err := RetrieveSourceImage(&config.KanikoStage{
 		Stage: stages[1],
 	}, &config.KanikoOptions{})
 	expected := empty.Image
@@ -88,7 +88,7 @@ func Test_TarImage(t *testing.T) {
 		return nil, nil
 	}
 	retrieveTarImage = mock
-	actual, err := RetrieveSourceImage(config.KanikoStage{
+	actual, err := RetrieveSourceImage(&config.KanikoStage{
 		BaseImageStoredLocally: true,
 		BaseImageIndex:         0,
 		Stage:                  stages[2],
@@ -101,7 +101,7 @@ func Test_ScratchImageFromMirror(t *testing.T) {
 	if err != nil {
 		t.Error(err)
 	}
-	actual, err := RetrieveSourceImage(config.KanikoStage{
+	actual, err := RetrieveSourceImage(&config.KanikoStage{
 		Stage: stages[1],
 	}, &config.KanikoOptions{
 		RegistryOptions: config.RegistryOptions{

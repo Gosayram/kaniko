@@ -20,19 +20,24 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/GoogleContainerTools/kaniko/pkg/dockerfile"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 
-	"github.com/GoogleContainerTools/kaniko/pkg/util"
+	"github.com/Gosayram/kaniko/pkg/dockerfile"
+
 	"github.com/moby/buildkit/frontend/dockerfile/instructions"
 	"github.com/sirupsen/logrus"
+
+	"github.com/Gosayram/kaniko/pkg/util"
 )
 
+// ExposeCommand implements the Dockerfile EXPOSE instruction
+// It handles exposing ports in the container configuration
 type ExposeCommand struct {
 	BaseCommand
 	cmd *instructions.ExposeCommand
 }
 
+// ExecuteCommand processes the EXPOSE instruction by adding exposed ports to the container configuration
 func (r *ExposeCommand) ExecuteCommand(config *v1.Config, buildArgs *dockerfile.BuildArgs) error {
 	logrus.Info("Cmd: EXPOSE")
 	// Grab the currently exposed ports
@@ -44,20 +49,20 @@ func (r *ExposeCommand) ExecuteCommand(config *v1.Config, buildArgs *dockerfile.
 	// Add any new ones in
 	for _, p := range r.cmd.Ports {
 		// Resolve any environment variables
-		p, err := util.ResolveEnvironmentReplacement(p, replacementEnvs, false)
+		resolvedPort, err := util.ResolveEnvironmentReplacement(p, replacementEnvs, false)
 		if err != nil {
 			return err
 		}
 		// Add the default protocol if one isn't specified
-		if !strings.Contains(p, "/") {
-			p = p + "/tcp"
+		if !strings.Contains(resolvedPort, "/") {
+			resolvedPort += "/tcp"
 		}
-		protocol := strings.Split(p, "/")[1]
+		protocol := strings.Split(resolvedPort, "/")[1]
 		if !validProtocol(protocol) {
 			return fmt.Errorf("invalid protocol: %s", protocol)
 		}
-		logrus.Infof("Adding exposed port: %s", p)
-		existingPorts[p] = struct{}{}
+		logrus.Infof("Adding exposed port: %s", resolvedPort)
+		existingPorts[resolvedPort] = struct{}{}
 	}
 	config.ExposedPorts = existingPorts
 	return nil

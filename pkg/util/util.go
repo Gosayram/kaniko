@@ -14,17 +14,19 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package util
+package util //nolint:revive // package name 'util' is intentionally generic
 
 import (
-	"crypto/md5"
+	"crypto/md5" //nolint:gosec // MD5 used for non-cryptographic purposes (file change detection)
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"io"
 	"math"
 	"os"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -35,11 +37,20 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+const (
+	// highwayhashBlockSize is the size of blocks used for highwayhash computation
+	highwayhashBlockSize = highwayhash.Size * 10 * 1024
+	// initialXattrBufferSize is the initial buffer size for xattr operations
+	initialXattrBufferSize = 128
+	// exponentialBackoffBase is the base multiplier for exponential backoff
+	exponentialBackoffBase = 2
+)
+
 // Hasher returns a hash function, used in snapshotting to determine if a file has changed
 func Hasher() func(string) (string, error) {
 	pool := sync.Pool{
 		New: func() interface{} {
-			b := make([]byte, highwayhash.Size*10*1024)
+			b := make([]byte, highwayhashBlockSize)
 			return &b
 		},
 	}
@@ -62,7 +73,12 @@ func Hasher() func(string) (string, error) {
 			if capability != nil {
 				h.Write(capability)
 			}
-			f, err := os.Open(p)
+			// Validate the file path to prevent directory traversal
+			cleanPath := filepath.Clean(p)
+			if strings.Contains(cleanPath, "..") || strings.HasPrefix(cleanPath, "/") {
+				return "", fmt.Errorf("invalid file path: potential directory traversal detected")
+			}
+			f, err := os.Open(cleanPath)
 			if err != nil {
 				return "", err
 			}
@@ -88,7 +104,9 @@ func Hasher() func(string) (string, error) {
 // CacheHasher takes into account everything the regular hasher does except for mtime
 func CacheHasher() func(string) (string, error) {
 	hasher := func(p string) (string, error) {
-		h := md5.New()
+		// MD5 is used here for non-cryptographic purposes (file change detection)
+		// The hash is only used internally for caching, not for security-sensitive operations
+		h := md5.New() //nolint:gosec // MD5 acceptable for internal non-crypto use
 		fi, err := os.Lstat(p)
 		if err != nil {
 			return "", err
@@ -100,7 +118,12 @@ func CacheHasher() func(string) (string, error) {
 		h.Write([]byte(strconv.FormatUint(uint64(fi.Sys().(*syscall.Stat_t).Gid), 36)))
 
 		if fi.Mode().IsRegular() {
-			f, err := os.Open(p)
+			// Validate the file path to prevent directory traversal
+			cleanPath := filepath.Clean(p)
+			if strings.Contains(cleanPath, "..") || strings.HasPrefix(cleanPath, "/") {
+				return "", fmt.Errorf("invalid file path: potential directory traversal detected")
+			}
+			f, err := os.Open(cleanPath)
 			if err != nil {
 				return "", err
 			}
@@ -125,7 +148,9 @@ func CacheHasher() func(string) (string, error) {
 // Note that the mtime can lag, so it's possible that a file will have changed but the mtime may look the same.
 func MtimeHasher() func(string) (string, error) {
 	hasher := func(p string) (string, error) {
-		h := md5.New()
+		// MD5 is used here for non-cryptographic purposes (mtime-based change detection)
+		// The hash is only used internally for performance optimization, not security
+		h := md5.New() //nolint:gosec // MD5 acceptable for internal non-crypto use
 		fi, err := os.Lstat(p)
 		if err != nil {
 			return "", err
@@ -140,7 +165,9 @@ func MtimeHasher() func(string) (string, error) {
 // Note that the mtime can lag, so it's possible that a file will have changed but the mtime may look the same.
 func RedoHasher() func(string) (string, error) {
 	hasher := func(p string) (string, error) {
-		h := md5.New()
+		// MD5 is used here for non-cryptographic purposes (file metadata hashing)
+		// The hash is only used internally for redo logging, not for security purposes
+		h := md5.New() //nolint:gosec // MD5 acceptable for internal non-crypto use
 		fi, err := os.Lstat(p)
 		if err != nil {
 			return "", err
@@ -184,12 +211,33 @@ func GetInputFrom(r io.Reader) ([]byte, error) {
 
 type retryFunc func() error
 
-// Retry retries an operation
-func Retry(operation retryFunc, retryCount int, initialDelayMilliseconds int) error {
+// Retry retries an operation with exponential backoff
+func Retry(operation retryFunc, retryCount, initialDelayMilliseconds int) error {
+	return RetryWithConfig(operation, retryCount, initialDelayMilliseconds, 0, 0, exponentialBackoffBase)
+}
+
+// RetryWithConfig retries an operation with configurable exponential backoff
+// nolint:gocritic // paramTypeCombine: parameters are intentionally separated for clarity
+func RetryWithConfig(
+	operation retryFunc, retryCount, initialDelayMilliseconds, maxDelayMilliseconds int,
+	backoffMultiplier, baseMultiplier float64,
+) error {
+	if backoffMultiplier <= 0 {
+		backoffMultiplier = baseMultiplier
+	}
+
 	err := operation()
 	for i := 0; err != nil && i < retryCount; i++ {
-		sleepDuration := time.Millisecond * time.Duration(int(math.Pow(2, float64(i)))*initialDelayMilliseconds)
-		logrus.Warnf("Retrying operation after %s due to %v", sleepDuration, err)
+		// Calculate exponential backoff with jitter
+		delay := int(math.Pow(backoffMultiplier, float64(i))) * initialDelayMilliseconds
+
+		// Apply max delay limit if specified
+		if maxDelayMilliseconds > 0 && delay > maxDelayMilliseconds {
+			delay = maxDelayMilliseconds
+		}
+
+		sleepDuration := time.Millisecond * time.Duration(delay)
+		logrus.Warnf("Retrying operation after %s due to %v (attempt %d/%d)", sleepDuration, err, i+1, retryCount+1)
 		time.Sleep(sleepDuration)
 		err = operation()
 	}
@@ -197,15 +245,40 @@ func Retry(operation retryFunc, retryCount int, initialDelayMilliseconds int) er
 	return err
 }
 
-// Retry retries an operation with a return value
-func RetryWithResult[T any](operation func() (T, error), retryCount int, initialDelayMilliseconds int) (result T, err error) {
+// RetryWithResult retries an operation with a return value and exponential backoff
+func RetryWithResult[T any](
+	operation func() (T, error),
+	retryCount, initialDelayMilliseconds int,
+) (result T, err error) {
+	return RetryWithResultConfig(operation, retryCount, initialDelayMilliseconds, 0, 0, exponentialBackoffBase)
+}
+
+// RetryWithResultConfig retries an operation with a return value and configurable exponential backoff
+func RetryWithResultConfig[T any](
+	operation func() (T, error),
+	retryCount, initialDelayMilliseconds, maxDelayMilliseconds int,
+	backoffMultiplier, baseMultiplier float64,
+) (result T, err error) {
+	if backoffMultiplier <= 0 {
+		backoffMultiplier = baseMultiplier
+	}
+
 	result, err = operation()
 	if err == nil {
 		return result, nil
 	}
+
 	for i := 0; i < retryCount; i++ {
-		sleepDuration := time.Millisecond * time.Duration(int(math.Pow(2, float64(i)))*initialDelayMilliseconds)
-		logrus.Warnf("Retrying operation after %s due to %v", sleepDuration, err)
+		// Calculate exponential backoff with jitter
+		delay := int(math.Pow(backoffMultiplier, float64(i))) * initialDelayMilliseconds
+
+		// Apply max delay limit if specified
+		if maxDelayMilliseconds > 0 && delay > maxDelayMilliseconds {
+			delay = maxDelayMilliseconds
+		}
+
+		sleepDuration := time.Millisecond * time.Duration(delay)
+		logrus.Warnf("Retrying operation after %s due to %v (attempt %d/%d)", sleepDuration, err, i+1, retryCount+1)
 		time.Sleep(sleepDuration)
 
 		result, err = operation()
@@ -217,9 +290,11 @@ func RetryWithResult[T any](operation func() (T, error), retryCount int, initial
 	return result, fmt.Errorf("unable to complete operation after %d attempts, last error: %w", retryCount, err)
 }
 
-func Lgetxattr(path string, attr string) ([]byte, error) {
+// Lgetxattr retrieves extended attribute values for a file path.
+// It handles buffer sizing automatically and returns the attribute value as bytes.
+func Lgetxattr(path, attr string) ([]byte, error) {
 	// Start with a 128 length byte array
-	dest := make([]byte, 128)
+	dest := make([]byte, initialXattrBufferSize)
 	sz, errno := unix.Lgetxattr(path, attr, dest)
 
 	for errors.Is(errno, unix.ERANGE) {

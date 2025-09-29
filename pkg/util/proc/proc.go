@@ -14,13 +14,14 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// Ported from https://github.com/genuinetools/bpfd/blob/a4bfa5e3e9d1bfdbc56268a36a0714911ae9b6bf/proc/proc.go
-
+// Package proc provides functionality for detecting container runtimes and environments.
+// Ported from https://github.com/genuinetools/bpfd/blob/a4bfa5e3e9d1bfdbc56268a36a0714911ae9b6bf/proc/proc.go)
 package proc
 
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 )
@@ -150,7 +151,8 @@ func GetContainerRuntime(tgid, pid int) ContainerRuntime {
 	return RuntimeNotFound
 }
 
-// Related implementation: https://github.com/systemd/systemd/blob/6604fb0207ee10e8dc05d67f6fe45de0b193b5c4/src/basic/virt.c#L523-L549
+// Related implementation:
+// https://github.com/systemd/systemd/blob/6604fb0207ee10e8dc05d67f6fe45de0b193b5c4/src/basic/virt.c#L523-L549
 func detectContainerFiles() ContainerRuntime {
 	files := []struct {
 		runtime  ContainerRuntime
@@ -200,7 +202,17 @@ func readFile(file string) []byte {
 		return nil
 	}
 
-	b, _ := os.ReadFile(file)
+	// Validate that the file path is within the /proc filesystem or other expected locations
+	cleanFile := filepath.Clean(file)
+	if !strings.HasPrefix(cleanFile, "/proc/") &&
+		!strings.HasPrefix(cleanFile, "/run/systemd/container") &&
+		cleanFile != "/.dockerenv" &&
+		cleanFile != "/run/.containerenv" &&
+		!strings.HasPrefix(cleanFile, "/var/run/secrets/kubernetes.io/serviceaccount") {
+		return nil
+	}
+
+	b, _ := os.ReadFile(cleanFile)
 	return b
 }
 

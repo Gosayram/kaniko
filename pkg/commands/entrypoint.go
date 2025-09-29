@@ -19,19 +19,21 @@ package commands
 import (
 	"strings"
 
-	"github.com/GoogleContainerTools/kaniko/pkg/dockerfile"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
+
+	"github.com/Gosayram/kaniko/pkg/dockerfile"
 
 	"github.com/moby/buildkit/frontend/dockerfile/instructions"
 )
 
+// EntrypointCommand implements the Dockerfile ENTRYPOINT instruction
 type EntrypointCommand struct {
 	BaseCommand
 	cmd *instructions.EntrypointCommand
 }
 
 // ExecuteCommand handles command processing similar to CMD and RUN,
-func (e *EntrypointCommand) ExecuteCommand(config *v1.Config, buildArgs *dockerfile.BuildArgs) error {
+func (e *EntrypointCommand) ExecuteCommand(config *v1.Config, _ *dockerfile.BuildArgs) error {
 	var newCommand []string
 	if e.cmd.PrependShell {
 		// This is the default shell on Linux
@@ -42,7 +44,8 @@ func (e *EntrypointCommand) ExecuteCommand(config *v1.Config, buildArgs *dockerf
 			shell = append(shell, "/bin/sh", "-c")
 		}
 
-		newCommand = append(shell, strings.Join(e.cmd.CmdLine, " "))
+		shell = append(shell, strings.Join(e.cmd.CmdLine, " "))
+		newCommand = shell
 	} else {
 		newCommand = e.cmd.CmdLine
 	}

@@ -1,4 +1,4 @@
-package remotecontext // import "github.com/docker/docker/builder/remotecontext"
+package remotecontext
 
 import (
 	"bytes"
@@ -43,22 +43,22 @@ func downloadRemote(remoteURL string) (string, io.ReadCloser, error) {
 
 // GetWithStatusError does an http.Get() and returns an error if the
 // status code is 4xx or 5xx.
-func GetWithStatusError(address string) (resp *http.Response, err error) {
-	resp, err = http.Get(address) // #nosec G107 -- ignore G107: Potential HTTP request made with variable url
+func GetWithStatusError(address string) (*http.Response, error) {
+	resp, err := http.Get(address) // #nosec G107 -- ignore G107: Potential HTTP request made with variable url
 	if err != nil {
-		if uerr, ok := err.(*url.Error); ok {
-			if derr, ok := uerr.Err.(*net.DNSError); ok && !derr.IsTimeout {
+		if uErr, ok := err.(*url.Error); ok {
+			if dErr, ok := uErr.Err.(*net.DNSError); ok && !dErr.IsTimeout {
 				return nil, errdefs.NotFound(err)
 			}
 		}
 		return nil, errdefs.System(err)
 	}
-	if resp.StatusCode < 400 {
+	if resp.StatusCode < http.StatusBadRequest {
 		return resp, nil
 	}
 	msg := fmt.Sprintf("failed to GET %s with status %s", address, resp.Status)
 	body, err := io.ReadAll(resp.Body)
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if err != nil {
 		return nil, errdefs.System(errors.New(msg + ": error reading body"))
 	}
@@ -73,8 +73,9 @@ func GetWithStatusError(address string) (resp *http.Response, err error) {
 		return nil, errdefs.Unauthorized(errors.New(msg))
 	case http.StatusForbidden:
 		return nil, errdefs.Forbidden(errors.New(msg))
+	default:
+		return nil, errdefs.Unknown(errors.New(msg))
 	}
-	return nil, errdefs.Unknown(errors.New(msg))
 }
 
 // inspectResponse looks into the http response data at r to determine whether its
@@ -95,7 +96,7 @@ func inspectResponse(ct string, r io.Reader, clen int64) (string, io.Reader, err
 	if rlen == 0 {
 		return ct, r, errors.New("empty response")
 	}
-	if err != nil && err != io.EOF {
+	if err != nil && !errors.Is(err, io.EOF) {
 		return ct, r, err
 	}
 
@@ -105,7 +106,7 @@ func inspectResponse(ct string, r io.Reader, clen int64) (string, io.Reader, err
 	// content type for files without an extension (e.g. 'Dockerfile')
 	// so if we receive this value we better check for text content
 	contentType := ct
-	if len(ct) == 0 || ct == mimeTypeOctetStream {
+	if ct == "" || ct == mimeTypeOctetStream {
 		contentType, err = detectContentType(preamble)
 		if err != nil {
 			return contentType, bodyReader, err
@@ -114,7 +115,7 @@ func inspectResponse(ct string, r io.Reader, clen int64) (string, io.Reader, err
 
 	contentType = selectAcceptableMIME(contentType)
 	var cterr error
-	if len(contentType) == 0 {
+	if contentType == "" {
 		cterr = fmt.Errorf("unsupported Content-Type %q", ct)
 		contentType = ct
 	}

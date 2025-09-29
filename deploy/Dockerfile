@@ -12,12 +12,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-FROM golang:1.24 AS builder
+FROM golang:1.25 AS builder
 WORKDIR /src
 
 # This arg is passed by docker buildx & contains the target CPU architecture (e.g., amd64, arm64, etc.)
 ARG TARGETARCH
 ARG TARGETOS
+
+# Version injection arguments
+ARG VERSION=dev
+ARG COMMIT=none
+ARG DATE=unknown
 
 ENV GOARCH=$TARGETARCH
 ENV GOOS=$TARGETOS
@@ -52,6 +57,10 @@ RUN go install github.com/chrismellard/docker-credential-acr-env
 RUN \
   --mount=type=cache,target=/root/.cache/go-build \
   --mount=type=cache,target=/go/pkg \
+  GO_LDFLAGS="-X 'github.com/Gosayram/kaniko/internal/version.Version=${VERSION}' \
+              -X 'github.com/Gosayram/kaniko/internal/version.Commit=${COMMIT}' \
+              -X 'github.com/Gosayram/kaniko/internal/version.Date=${DATE}' \
+              -s -w" \
   make out/executor out/warmer
 
 # Generate latest ca-certificates

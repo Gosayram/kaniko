@@ -27,12 +27,6 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/GoogleContainerTools/kaniko/pkg/cache"
-	"github.com/GoogleContainerTools/kaniko/pkg/commands"
-	"github.com/GoogleContainerTools/kaniko/pkg/config"
-	"github.com/GoogleContainerTools/kaniko/pkg/dockerfile"
-	"github.com/GoogleContainerTools/kaniko/pkg/util"
-	"github.com/GoogleContainerTools/kaniko/testutil"
 	"github.com/containerd/containerd/platforms"
 	"github.com/google/go-cmp/cmp"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
@@ -41,6 +35,13 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/partial"
 	"github.com/google/go-containerregistry/pkg/v1/types"
 	"github.com/moby/buildkit/frontend/dockerfile/instructions"
+
+	"github.com/Gosayram/kaniko/pkg/cache"
+	"github.com/Gosayram/kaniko/pkg/commands"
+	"github.com/Gosayram/kaniko/pkg/config"
+	"github.com/Gosayram/kaniko/pkg/dockerfile"
+	"github.com/Gosayram/kaniko/pkg/util"
+	"github.com/Gosayram/kaniko/testutil"
 )
 
 func Test_reviewConfig(t *testing.T) {
@@ -77,7 +78,8 @@ func Test_reviewConfig(t *testing.T) {
 				Cmd:        test.originalCmd,
 				Entrypoint: test.originalEntrypoint,
 			}
-			reviewConfig(stage(t, test.dockerfile), config)
+			stg := stage(t, test.dockerfile)
+			reviewConfig(&stg, config)
 			testutil.CheckErrorAndDeepEqual(t, false, nil, test.expectedCmd, config.Cmd)
 		})
 	}
@@ -630,7 +632,7 @@ func Test_stageBuilder_optimize(t *testing.T) {
 				cacheCommand: MockCachedDockerCommand{},
 			}
 			sb.cmds = []commands.DockerCommand{command}
-			err = sb.optimize(ck, cf.Config)
+			err = sb.optimize(ck, &cf.Config)
 			if err != nil {
 				t.Errorf("Expected error to be nil but was %v", err)
 			}
@@ -1627,7 +1629,7 @@ func hashCompositeKeys(t *testing.T, ck1 CompositeCache, ck2 CompositeCache) (st
 }
 
 func Test_stageBuild_populateCompositeKeyForCopyCommand(t *testing.T) {
-	// See https://github.com/GoogleContainerTools/kaniko/issues/589
+	// See https://github.com/Gosayram/kaniko/issues/589
 
 	for _, tc := range []struct {
 		description      string

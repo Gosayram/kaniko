@@ -14,16 +14,19 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// Package filesystem provides path resolution functionality for filesystem operations.
+// It handles symlink resolution, ignore list checking, and path validation for secure filesystem access.
 package filesystem
 
 import (
 	"os"
 	"path/filepath"
 
-	"github.com/GoogleContainerTools/kaniko/pkg/config"
-	"github.com/GoogleContainerTools/kaniko/pkg/util"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
+
+	"github.com/Gosayram/kaniko/pkg/config"
+	"github.com/Gosayram/kaniko/pkg/util"
 )
 
 // ResolvePaths takes a slice of file paths and a list of skipped file paths. It resolve each
@@ -68,7 +71,7 @@ func ResolvePaths(paths []string, wl []util.IgnoreListEntry) (pathsToAdd []strin
 		if e != nil {
 			if !os.IsNotExist(e) {
 				logrus.Errorf("Couldn't eval %s with link %s", f, link)
-				return
+				return nil, e
 			}
 
 			logrus.Tracef("Symlink path %s, target does not exist", f)
@@ -93,7 +96,7 @@ func ResolvePaths(paths []string, wl []util.IgnoreListEntry) (pathsToAdd []strin
 
 	// Also add parent directories to keep the permission of them correctly.
 	pathsToAdd = filesWithParentDirs(pathsToAdd)
-	return
+	return pathsToAdd, nil
 }
 
 // filesWithParentDirs returns every ancestor path for each provided file path.
@@ -132,7 +135,6 @@ func resolveSymlinkAncestor(path string) (string, error) {
 	last := ""
 	newPath := filepath.Clean(path)
 
-loop:
 	for newPath != config.RootDir {
 		fi, err := os.Lstat(newPath)
 		if err != nil {
@@ -156,7 +158,7 @@ loop:
 				last = filepath.Base(newPath)
 				newPath = filepath.Dir(newPath)
 			} else {
-				break loop
+				break
 			}
 		}
 	}

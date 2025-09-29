@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// used for testing in the commands package
+// Package commands provides fake implementations for testing in the commands package
 package commands
 
 import (

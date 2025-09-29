@@ -14,9 +14,11 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// Package cmd provides the command-line interface for the kaniko executor.
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"io/fs"
 	"os"
@@ -27,21 +29,25 @@ import (
 	"strings"
 	"time"
 
-	"github.com/GoogleContainerTools/kaniko/pkg/buildcontext"
-	"github.com/GoogleContainerTools/kaniko/pkg/config"
-	"github.com/GoogleContainerTools/kaniko/pkg/constants"
-	"github.com/GoogleContainerTools/kaniko/pkg/executor"
-	"github.com/GoogleContainerTools/kaniko/pkg/logging"
-	"github.com/GoogleContainerTools/kaniko/pkg/timing"
-	"github.com/GoogleContainerTools/kaniko/pkg/util"
-	"github.com/GoogleContainerTools/kaniko/pkg/util/proc"
-	"github.com/containerd/containerd/platforms"
+	"github.com/containerd/platforms"
 	"github.com/google/go-containerregistry/pkg/name"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
+
+	"github.com/Gosayram/kaniko/pkg/buildcontext"
+	"github.com/Gosayram/kaniko/pkg/config"
+	"github.com/Gosayram/kaniko/pkg/constants"
+	"github.com/Gosayram/kaniko/pkg/debug"
+	"github.com/Gosayram/kaniko/pkg/executor"
+	"github.com/Gosayram/kaniko/pkg/logging"
+	"github.com/Gosayram/kaniko/pkg/multiplatform"
+	"github.com/Gosayram/kaniko/pkg/oci"
+	"github.com/Gosayram/kaniko/pkg/timing"
+	"github.com/Gosayram/kaniko/pkg/util"
+	"github.com/Gosayram/kaniko/pkg/util/proc"
 )
 
 var (
@@ -53,16 +59,35 @@ var (
 	logTimestamp bool
 )
 
+// Cache timeout and file permission constants
+const (
+	defaultCacheTTL = time.Hour * 336 // 2 weeks
+	filePermission  = 0o600
+
+	// Push retry configuration constants
+	defaultPushRetryInitialDelay      = 1000  // milliseconds
+	defaultPushRetryMaxDelay          = 30000 // milliseconds
+	defaultPushRetryBackoffMultiplier = 2.0
+)
+
 func init() {
-	RootCmd.PersistentFlags().StringVarP(&logLevel, "verbosity", "v", logging.DefaultLevel, "Log level (trace, debug, info, warn, error, fatal, panic)")
-	RootCmd.PersistentFlags().StringVar(&logFormat, "log-format", logging.FormatColor, "Log format (text, color, json)")
-	RootCmd.PersistentFlags().BoolVar(&logTimestamp, "log-timestamp", logging.DefaultLogTimestamp, "Timestamp in log output")
+	RootCmd.PersistentFlags().StringVarP(&logLevel, "verbosity", "v", logging.DefaultLevel,
+		"Log level (trace, debug, info, warn, error, fatal, panic)")
+	RootCmd.PersistentFlags().StringVar(&logFormat, "log-format", logging.FormatColor,
+		"Log format (text, color, json)")
+	RootCmd.PersistentFlags().BoolVar(&logTimestamp, "log-timestamp",
+		logging.DefaultLogTimestamp, "Timestamp in log output")
 	RootCmd.PersistentFlags().BoolVarP(&force, "force", "", false, "Force building outside of a container")
 
 	addKanikoOptionsFlags()
 	addHiddenFlags(RootCmd)
-	RootCmd.PersistentFlags().BoolVarP(&opts.IgnoreVarRun, "whitelist-var-run", "", true, "Ignore /var/run directory when taking image snapshot. Set it to false to preserve /var/run/ in destination image.")
-	RootCmd.PersistentFlags().MarkDeprecated("whitelist-var-run", "Please use ignore-var-run instead.")
+	RootCmd.PersistentFlags().BoolVarP(&opts.IgnoreVarRun, "whitelist-var-run", "", true,
+		"Ignore /var/run directory when taking image snapshot. "+
+			"Set it to false to preserve /var/run/ in destination image.")
+	if err := RootCmd.PersistentFlags().MarkDeprecated("whitelist-var-run",
+		"Please use ignore-var-run instead."); err != nil {
+		logrus.Warnf("Failed to mark flag as deprecated: %v", err)
+	}
 }
 
 func validateFlags() {
@@ -70,25 +95,31 @@ func validateFlags() {
 
 	// Allow setting --registry-mirror using an environment variable.
 	if val, ok := os.LookupEnv("KANIKO_REGISTRY_MIRROR"); ok {
-		opts.RegistryMirrors.Set(val)
+		if err := opts.RegistryMirrors.Set(val); err != nil {
+			logrus.Warnf("Failed to set registry mirror from environment: %v", err)
+		}
 	}
 
 	// Allow setting --no-push using an environment variable.
 	if val, ok := os.LookupEnv("KANIKO_NO_PUSH"); ok {
 		valBoolean, err := strconv.ParseBool(val)
 		if err != nil {
-			errors.New("invalid value (true/false) for KANIKO_NO_PUSH environment variable")
+			logrus.Warnf("invalid value (true/false) for KANIKO_NO_PUSH environment variable: %v", val)
 		}
 		opts.NoPush = valBoolean
 	}
 
 	// Allow setting --registry-maps using an environment variable.
 	if val, ok := os.LookupEnv("KANIKO_REGISTRY_MAP"); ok {
-		opts.RegistryMaps.Set(val)
+		if err := opts.RegistryMaps.Set(val); err != nil {
+			logrus.Warnf("Failed to set registry map: %v", err)
+		}
 	}
 
 	for _, target := range opts.RegistryMirrors {
-		opts.RegistryMaps.Set(fmt.Sprintf("%s=%s", name.DefaultRegistry, target))
+		if err := opts.RegistryMaps.Set(fmt.Sprintf("%s=%s", name.DefaultRegistry, target)); err != nil {
+			logrus.Warnf("Failed to set registry map for mirror: %v", err)
+		}
 	}
 
 	if len(opts.RegistryMaps) > 0 {
@@ -99,22 +130,54 @@ func validateFlags() {
 
 	// Default the custom platform flag to our current platform, and validate it.
 	if opts.CustomPlatform == "" {
-		opts.CustomPlatform = platforms.Format(platforms.Normalize(platforms.DefaultSpec()))
+		opts.CustomPlatform = platforms.DefaultString()
 	}
 	if _, err := v1.ParsePlatform(opts.CustomPlatform); err != nil {
 		logrus.Fatalf("Invalid platform %q: %v", opts.CustomPlatform, err)
 	}
 }
 
+// configureDebugFromEnvironment sets debug options from environment variables
+func configureDebugFromEnvironment() {
+	// Enable debug mode if environment variable is set
+	if os.Getenv("KANIKO_DEBUG") == "true" {
+		opts.EnableFullDebug = true
+		opts.DebugLogLevel = "trace"
+		opts.OutputDebugFiles = true
+		logrus.Info("Debug mode enabled via environment variable")
+	}
+
+	// Set debug level from environment
+	if level := os.Getenv("KANIKO_DEBUG_LEVEL"); level != "" {
+		opts.DebugLogLevel = level
+	}
+
+	// Set debug components from environment
+	if components := os.Getenv("KANIKO_DEBUG_COMPONENTS"); components != "" {
+		opts.DebugComponents = strings.Split(components, ",")
+	}
+}
+
 // RootCmd is the kaniko command that is run
 var RootCmd = &cobra.Command{
 	Use: "executor",
-	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+	PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
 		if cmd.Use == "executor" {
 
 			if err := logging.Configure(logLevel, logFormat, logTimestamp); err != nil {
 				return err
 			}
+
+			// Configure debug from environment variables
+			configureDebugFromEnvironment()
+
+			// Initialize debug system
+			if _, err := debug.Init(&opts.DebugOptions); err != nil {
+				logrus.Warnf("Failed to initialize debug system: %v", err)
+			}
+
+			// Initialize performance tracker
+			debug.InitPerformanceTracker()
 
 			validateFlags()
 
@@ -169,16 +232,18 @@ var RootCmd = &cobra.Command{
 		}
 		return nil
 	},
-	Run: func(cmd *cobra.Command, args []string) {
+	Run: func(_ *cobra.Command, _ []string) {
 		if !checkContained() {
 			if !force {
-				exit(errors.New("kaniko should only be run inside of a container, run with the --force flag if you are sure you want to continue"))
+				exit(errors.New("kaniko should only be run inside of a container, " +
+					"run with the --force flag if you are sure you want to continue"))
 			}
 			logrus.Warn("Kaniko is being run outside of a container. This can have dangerous effects on your system")
 		}
 		if !opts.NoPush || opts.CacheRepo != "" {
 			if err := executor.CheckPushPermissions(opts); err != nil {
-				exit(errors.Wrap(err, "error checking push permissions -- make sure you entered the correct tag name, and that you are authenticated correctly, and try again"))
+				exit(errors.Wrap(err, "error checking push permissions -- "+
+					"make sure you entered the correct tag name, and that you are authenticated correctly, and try again"))
 			}
 		}
 		if err := resolveRelativePaths(); err != nil {
@@ -187,13 +252,28 @@ var RootCmd = &cobra.Command{
 		if err := os.Chdir("/"); err != nil {
 			exit(errors.Wrap(err, "error changing to root dir"))
 		}
-		image, err := executor.DoBuild(opts)
-		if err != nil {
-			exit(errors.Wrap(err, "error building image"))
+		// Handle multi-platform builds
+		if len(opts.MultiPlatform) > 0 {
+			if err := executeMultiPlatformBuild(opts); err != nil {
+				exit(errors.Wrap(err, "error executing multi-platform build"))
+			}
+		} else {
+			// Single platform build (legacy behavior)
+			image, err := executor.DoBuild(opts)
+			if err != nil {
+				exit(errors.Wrap(err, "error building image"))
+			}
+			if err := executor.DoPush(image, opts); err != nil {
+				exit(errors.Wrap(err, "error pushing image"))
+			}
 		}
-		if err := executor.DoPush(image, opts); err != nil {
-			exit(errors.Wrap(err, "error pushing image"))
-		}
+
+		// Cleanup debug system
+		defer func() {
+			if err := debug.Close(); err != nil {
+				logrus.Warnf("Failed to close debug system: %v", err)
+			}
+		}()
 
 		benchmarkFile := os.Getenv("BENCHMARK_FILE")
 		// false is a keyword for integration tests to turn off benchmarking
@@ -210,13 +290,19 @@ var RootCmd = &cobra.Command{
 				}
 				logrus.Infof("Benchmark file written at %s", benchmarkFile)
 			} else {
-				f, err := os.Create(benchmarkFile)
+				// Sanitize path to prevent directory traversal
+				cleanPath := filepath.Clean(benchmarkFile)
+				if filepath.IsAbs(cleanPath) {
+					cleanPath = filepath.Base(cleanPath) // Only allow writing to current directory
+				}
+				f, err := os.Create(cleanPath)
 				if err != nil {
 					logrus.Warnf("Unable to create benchmarking file %s: %s", benchmarkFile, err)
 					return
 				}
-				defer f.Close()
-				f.WriteString(s)
+				if _, err := f.WriteString(s); err != nil {
+					logrus.Warnf("Failed to write benchmark data: %v", err)
+				}
 				logrus.Infof("Benchmark file written at %s", benchmarkFile)
 			}
 		}
@@ -225,91 +311,246 @@ var RootCmd = &cobra.Command{
 
 // addKanikoOptionsFlags configures opts
 func addKanikoOptionsFlags() {
-	RootCmd.PersistentFlags().StringVarP(&opts.DockerfilePath, "dockerfile", "f", "Dockerfile", "Path to the dockerfile to be built.")
-	RootCmd.PersistentFlags().StringVarP(&opts.SrcContext, "context", "c", "/workspace/", "Path to the dockerfile build context.")
-	RootCmd.PersistentFlags().StringVarP(&ctxSubPath, "context-sub-path", "", "", "Sub path within the given context.")
-	RootCmd.PersistentFlags().StringVarP(&opts.Bucket, "bucket", "b", "", "Name of the GCS bucket from which to access build context as tarball.")
-	RootCmd.PersistentFlags().VarP(&opts.Destinations, "destination", "d", "Registry the final image should be pushed to. Set it repeatedly for multiple destinations.")
-	RootCmd.PersistentFlags().StringVarP(&opts.SnapshotMode, "snapshot-mode", "", "full", "Change the file attributes inspected during snapshotting")
-	RootCmd.PersistentFlags().StringVarP(&opts.CustomPlatform, "custom-platform", "", "", "Specify the build platform if different from the current host")
-	RootCmd.PersistentFlags().VarP(&opts.BuildArgs, "build-arg", "", "This flag allows you to pass in ARG values at build time. Set it repeatedly for multiple values.")
-	RootCmd.PersistentFlags().BoolVarP(&opts.Insecure, "insecure", "", false, "Push to insecure registry using plain HTTP")
-	RootCmd.PersistentFlags().BoolVarP(&opts.SkipTLSVerify, "skip-tls-verify", "", false, "Push to insecure registry ignoring TLS verify")
-	RootCmd.PersistentFlags().BoolVarP(&opts.InsecurePull, "insecure-pull", "", false, "Pull from insecure registry using plain HTTP")
-	RootCmd.PersistentFlags().BoolVarP(&opts.SkipTLSVerifyPull, "skip-tls-verify-pull", "", false, "Pull from insecure registry ignoring TLS verify")
-	RootCmd.PersistentFlags().IntVar(&opts.PushRetry, "push-retry", 0, "Number of retries for the push operation")
-	RootCmd.PersistentFlags().BoolVar(&opts.PushIgnoreImmutableTagErrors, "push-ignore-immutable-tag-errors", false, "If true, known tag immutability errors are ignored and the push finishes with success.")
-	RootCmd.PersistentFlags().IntVar(&opts.ImageFSExtractRetry, "image-fs-extract-retry", 0, "Number of retries for image FS extraction")
-	RootCmd.PersistentFlags().IntVar(&opts.ImageDownloadRetry, "image-download-retry", 0, "Number of retries for downloading the remote image")
-	RootCmd.PersistentFlags().StringVarP(&opts.KanikoDir, "kaniko-dir", "", constants.DefaultKanikoPath, "Path to the kaniko directory, this takes precedence over the KANIKO_DIR environment variable.")
-	RootCmd.PersistentFlags().StringVarP(&opts.TarPath, "tar-path", "", "", "Path to save the image in as a tarball instead of pushing")
-	RootCmd.PersistentFlags().BoolVarP(&opts.SingleSnapshot, "single-snapshot", "", false, "Take a single snapshot at the end of the build.")
-	RootCmd.PersistentFlags().BoolVarP(&opts.Reproducible, "reproducible", "", false, "Strip timestamps out of the image to make it reproducible")
-	RootCmd.PersistentFlags().StringVarP(&opts.Target, "target", "", "", "Set the target build stage to build")
-	RootCmd.PersistentFlags().BoolVarP(&opts.NoPush, "no-push", "", false, "Do not push the image to the registry")
-	RootCmd.PersistentFlags().BoolVarP(&opts.NoPushCache, "no-push-cache", "", false, "Do not push the cache layers to the registry")
-	RootCmd.PersistentFlags().StringVarP(&opts.CacheRepo, "cache-repo", "", "", "Specify a repository to use as a cache, otherwise one will be inferred from the destination provided; when prefixed with 'oci:' the repository will be written in OCI image layout format at the path provided")
-	RootCmd.PersistentFlags().StringVarP(&opts.CacheDir, "cache-dir", "", "/cache", "Specify a local directory to use as a cache.")
-	RootCmd.PersistentFlags().StringVarP(&opts.DigestFile, "digest-file", "", "", "Specify a file to save the digest of the built image to.")
-	RootCmd.PersistentFlags().StringVarP(&opts.ImageNameDigestFile, "image-name-with-digest-file", "", "", "Specify a file to save the image name w/ digest of the built image to.")
-	RootCmd.PersistentFlags().StringVarP(&opts.ImageNameTagDigestFile, "image-name-tag-with-digest-file", "", "", "Specify a file to save the image name w/ image tag w/ digest of the built image to.")
-	RootCmd.PersistentFlags().StringVarP(&opts.OCILayoutPath, "oci-layout-path", "", "", "Path to save the OCI image layout of the built image.")
-	RootCmd.PersistentFlags().VarP(&opts.Compression, "compression", "", "Compression algorithm (gzip, zstd)")
-	RootCmd.PersistentFlags().IntVarP(&opts.CompressionLevel, "compression-level", "", -1, "Compression level")
-	RootCmd.PersistentFlags().BoolVarP(&opts.Cache, "cache", "", false, "Use cache when building image")
-	RootCmd.PersistentFlags().BoolVarP(&opts.CompressedCaching, "compressed-caching", "", true, "Compress the cached layers. Decreases build time, but increases memory usage.")
-	RootCmd.PersistentFlags().BoolVarP(&opts.Cleanup, "cleanup", "", false, "Clean the filesystem at the end")
-	RootCmd.PersistentFlags().DurationVarP(&opts.CacheTTL, "cache-ttl", "", time.Hour*336, "Cache timeout, requires value and unit of duration -> ex: 6h. Defaults to two weeks.")
-	RootCmd.PersistentFlags().VarP(&opts.InsecureRegistries, "insecure-registry", "", "Insecure registry using plain HTTP to push and pull. Set it repeatedly for multiple registries.")
-	RootCmd.PersistentFlags().VarP(&opts.SkipTLSVerifyRegistries, "skip-tls-verify-registry", "", "Insecure registry ignoring TLS verify to push and pull. Set it repeatedly for multiple registries.")
-	opts.RegistriesCertificates = make(map[string]string)
-	RootCmd.PersistentFlags().VarP(&opts.RegistriesCertificates, "registry-certificate", "", "Use the provided certificate for TLS communication with the given registry. Expected format is 'my.registry.url=/path/to/the/server/certificate'.")
-	opts.RegistriesClientCertificates = make(map[string]string)
-	RootCmd.PersistentFlags().VarP(&opts.RegistriesClientCertificates, "registry-client-cert", "", "Use the provided client certificate for mutual TLS (mTLS) communication with the given registry. Expected format is 'my.registry.url=/path/to/client/cert,/path/to/client/key'.")
-	opts.RegistryMaps = make(map[string][]string)
-	RootCmd.PersistentFlags().VarP(&opts.RegistryMaps, "registry-map", "", "Registry map of mirror to use as pull-through cache instead. Expected format is 'orignal.registry=new.registry;other-original.registry=other-remap.registry'")
-	RootCmd.PersistentFlags().VarP(&opts.RegistryMirrors, "registry-mirror", "", "Registry mirror to use as pull-through cache instead of docker.io. Set it repeatedly for multiple mirrors.")
-	RootCmd.PersistentFlags().BoolVarP(&opts.SkipDefaultRegistryFallback, "skip-default-registry-fallback", "", false, "If an image is not found on any mirrors (defined with registry-mirror) do not fallback to the default registry. If registry-mirror is not defined, this flag is ignored.")
-	RootCmd.PersistentFlags().BoolVarP(&opts.IgnoreVarRun, "ignore-var-run", "", true, "Ignore /var/run directory when taking image snapshot. Set it to false to preserve /var/run/ in destination image.")
-	RootCmd.PersistentFlags().VarP(&opts.Labels, "label", "", "Set metadata for an image. Set it repeatedly for multiple labels.")
-	RootCmd.PersistentFlags().BoolVarP(&opts.SkipUnusedStages, "skip-unused-stages", "", false, "Build only used stages if defined to true. Otherwise it builds by default all stages, even the unnecessaries ones until it reaches the target stage / end of Dockerfile")
-	RootCmd.PersistentFlags().BoolVarP(&opts.RunV2, "use-new-run", "", false, "Use the experimental run implementation for detecting changes without requiring file system snapshots.")
-	RootCmd.PersistentFlags().Var(&opts.Git, "git", "Branch to clone if build context is a git repository")
-	RootCmd.PersistentFlags().BoolVarP(&opts.CacheCopyLayers, "cache-copy-layers", "", false, "Caches copy layers")
-	RootCmd.PersistentFlags().BoolVarP(&opts.CacheRunLayers, "cache-run-layers", "", true, "Caches run layers")
-	RootCmd.PersistentFlags().VarP(&opts.IgnorePaths, "ignore-path", "", "Ignore these paths when taking a snapshot. Set it repeatedly for multiple paths.")
-	RootCmd.PersistentFlags().BoolVarP(&opts.ForceBuildMetadata, "force-build-metadata", "", false, "Force add metadata layers to build image")
-	RootCmd.PersistentFlags().BoolVarP(&opts.SkipPushPermissionCheck, "skip-push-permission-check", "", false, "Skip check of the push permission")
+	addBasicFlags()
+	addRegistryFlags()
+	addCacheFlags()
+	addBuildFlags()
+	addMultiPlatformFlags()
+	addDeprecatedFlags()
+}
 
-	// Deprecated flags.
-	RootCmd.PersistentFlags().StringVarP(&opts.SnapshotModeDeprecated, "snapshotMode", "", "", "This flag is deprecated. Please use '--snapshot-mode'.")
-	RootCmd.PersistentFlags().StringVarP(&opts.CustomPlatformDeprecated, "customPlatform", "", "", "This flag is deprecated. Please use '--custom-platform'.")
-	RootCmd.PersistentFlags().StringVarP(&opts.TarPath, "tarPath", "", "", "This flag is deprecated. Please use '--tar-path'.")
+// addBasicFlags adds basic build configuration flags
+func addBasicFlags() {
+	RootCmd.PersistentFlags().StringVarP(&opts.DockerfilePath, "dockerfile", "f", "Dockerfile",
+		"Path to the dockerfile to be built.")
+	RootCmd.PersistentFlags().StringVarP(&opts.SrcContext, "context", "c", "/workspace/",
+		"Path to the dockerfile build context.")
+	RootCmd.PersistentFlags().StringVarP(&ctxSubPath, "context-sub-path", "", "", "Sub path within the given context.")
+	RootCmd.PersistentFlags().StringVarP(&opts.Bucket, "bucket", "b", "",
+		"Name of the GCS bucket from which to access build context as tarball.")
+	RootCmd.PersistentFlags().VarP(&opts.Destinations, "destination", "d",
+		"Registry the final image should be pushed to. Set it repeatedly for multiple destinations.")
+	RootCmd.PersistentFlags().StringVarP(&opts.SnapshotMode, "snapshot-mode", "", "full",
+		"Change the file attributes inspected during snapshotting")
+	RootCmd.PersistentFlags().StringVarP(&opts.CustomPlatform, "custom-platform", "", "",
+		"Specify the build platform if different from the current host")
+	RootCmd.PersistentFlags().VarP(&opts.BuildArgs, "build-arg", "",
+		"This flag allows you to pass in ARG values at build time. Set it repeatedly for multiple values.")
+	RootCmd.PersistentFlags().StringVarP(&opts.Target, "target", "", "",
+		"Set the target build stage to build")
+	RootCmd.PersistentFlags().Var(&opts.Git, "git",
+		"Branch to clone if build context is a git repository")
+
+	// Add debug flags
+	addDebugFlags()
+}
+
+// addDebugFlags adds debug configuration flags
+func addDebugFlags() {
+	RootCmd.PersistentFlags().BoolVar(&opts.EnableFullDebug, "debug-full", false,
+		"Enable comprehensive debug logging for all components")
+	RootCmd.PersistentFlags().BoolVar(&opts.DebugBuildSteps, "debug-build-steps", false,
+		"Debug individual build steps and commands")
+	RootCmd.PersistentFlags().BoolVar(&opts.DebugMultiPlatform, "debug-multi-platform", false,
+		"Debug multi-platform build coordination")
+	RootCmd.PersistentFlags().BoolVar(&opts.DebugOCIOperations, "debug-oci", false,
+		"Debug OCI index and manifest operations")
+	RootCmd.PersistentFlags().BoolVar(&opts.DebugDriverOperations, "debug-drivers", false,
+		"Debug driver operations (local, k8s, ci)")
+	RootCmd.PersistentFlags().BoolVar(&opts.DebugFilesystem, "debug-filesystem", false,
+		"Debug filesystem operations and snapshots")
+	RootCmd.PersistentFlags().BoolVar(&opts.DebugCacheOperations, "debug-cache", false,
+		"Debug cache operations and layer management")
+	RootCmd.PersistentFlags().BoolVar(&opts.DebugRegistry, "debug-registry", false,
+		"Debug registry push/pull operations")
+	RootCmd.PersistentFlags().BoolVar(&opts.DebugSigning, "debug-signing", false,
+		"Debug image signing operations")
+	RootCmd.PersistentFlags().BoolVar(&opts.OutputDebugFiles, "debug-output-files", false,
+		"Output debug information to files")
+	RootCmd.PersistentFlags().StringVar(&opts.DebugLogLevel, "debug-level", "debug",
+		"Debug log level (trace, debug, info)")
+	RootCmd.PersistentFlags().StringSliceVar(&opts.DebugComponents, "debug-components", []string{},
+		"Specific components to debug (comma-separated)")
+}
+
+// addRegistryFlags adds registry-related flags
+func addRegistryFlags() {
+	RootCmd.PersistentFlags().BoolVarP(&opts.Insecure, "insecure", "", false,
+		"Push to insecure registry using plain HTTP")
+	RootCmd.PersistentFlags().BoolVarP(&opts.SkipTLSVerify, "skip-tls-verify", "", false,
+		"Push to insecure registry ignoring TLS verify")
+	RootCmd.PersistentFlags().BoolVarP(&opts.InsecurePull, "insecure-pull", "", false,
+		"Pull from insecure registry using plain HTTP")
+	RootCmd.PersistentFlags().BoolVarP(&opts.SkipTLSVerifyPull, "skip-tls-verify-pull", "", false,
+		"Pull from insecure registry ignoring TLS verify")
+	RootCmd.PersistentFlags().IntVar(&opts.PushRetry, "push-retry", 0,
+		"Number of retries for the push operation")
+	RootCmd.PersistentFlags().IntVar(&opts.PushRetryInitialDelay, "push-retry-initial-delay", defaultPushRetryInitialDelay,
+		"Initial delay in milliseconds between push retry attempts")
+	RootCmd.PersistentFlags().IntVar(&opts.PushRetryMaxDelay, "push-retry-max-delay", defaultPushRetryMaxDelay,
+		"Maximum delay in milliseconds between push retry attempts")
+	RootCmd.PersistentFlags().Float64Var(&opts.PushRetryBackoffMultiplier,
+		"push-retry-backoff-multiplier", defaultPushRetryBackoffMultiplier,
+		"Exponential backoff multiplier for push retry delays")
+	RootCmd.PersistentFlags().BoolVar(&opts.PushIgnoreImmutableTagErrors,
+		"push-ignore-immutable-tag-errors", false,
+		"If true, known tag immutability errors are ignored and the push finishes with success.")
+	RootCmd.PersistentFlags().VarP(&opts.InsecureRegistries, "insecure-registry", "",
+		"Insecure registry using plain HTTP to push and pull. Set it repeatedly for multiple registries.")
+	RootCmd.PersistentFlags().VarP(&opts.SkipTLSVerifyRegistries, "skip-tls-verify-registry", "",
+		"Insecure registry ignoring TLS verify to push and pull. Set it repeatedly for multiple registries.")
+	opts.RegistriesCertificates = make(map[string]string)
+	RootCmd.PersistentFlags().VarP(&opts.RegistriesCertificates, "registry-certificate", "",
+		"Use the provided certificate for TLS communication with the given registry. "+
+			"Expected format is 'my.registry.url=/path/to/the/server/certificate'.")
+	opts.RegistriesClientCertificates = make(map[string]string)
+	RootCmd.PersistentFlags().VarP(&opts.RegistriesClientCertificates, "registry-client-cert", "",
+		"Use the provided client certificate for mutual TLS (mTLS) communication with the given registry. "+
+			"Expected format is 'my.registry.url=/path/to/client/cert,/path/to/client/key'.")
+	opts.RegistryMaps = make(map[string][]string)
+	RootCmd.PersistentFlags().VarP(&opts.RegistryMaps, "registry-map", "",
+		"Registry map of mirror to use as pull-through cache instead. "+
+			"Expected format is 'orignal.registry=new.registry;other-original.registry=other-remap.registry'")
+	RootCmd.PersistentFlags().VarP(&opts.RegistryMirrors, "registry-mirror", "",
+		"Registry mirror to use as pull-through cache instead of docker.io. "+
+			"Set it repeatedly for multiple mirrors.")
+	RootCmd.PersistentFlags().BoolVarP(&opts.SkipDefaultRegistryFallback,
+		"skip-default-registry-fallback", "", false,
+		"If an image is not found on any mirrors (defined with registry-mirror) "+
+			"do not fallback to the default registry. "+
+			"If registry-mirror is not defined, this flag is ignored.")
+}
+
+// addCacheFlags adds caching-related flags
+func addCacheFlags() {
+	RootCmd.PersistentFlags().BoolVarP(&opts.NoPushCache, "no-push-cache", "", false,
+		"Do not push the cache layers to the registry")
+	RootCmd.PersistentFlags().StringVarP(&opts.CacheRepo, "cache-repo", "", "",
+		"Specify a repository to use as a cache, otherwise one will be inferred from the destination provided; "+
+			"when prefixed with 'oci:' the repository will be written in OCI image layout format at the path provided")
+	RootCmd.PersistentFlags().StringVarP(&opts.CacheDir, "cache-dir", "", "/cache",
+		"Specify a local directory to use as a cache.")
+	RootCmd.PersistentFlags().BoolVarP(&opts.Cache, "cache", "", false,
+		"Use cache when building image")
+	RootCmd.PersistentFlags().BoolVarP(&opts.CompressedCaching, "compressed-caching", "", true,
+		"Compress the cached layers. Decreases build time, but increases memory usage.")
+	RootCmd.PersistentFlags().DurationVarP(&opts.CacheTTL, "cache-ttl", "", defaultCacheTTL,
+		"Cache timeout, requires value and unit of duration -> ex: 6h. Defaults to two weeks.")
+	RootCmd.PersistentFlags().IntVar(&opts.ImageFSExtractRetry, "image-fs-extract-retry", 0,
+		"Number of retries for image FS extraction")
+	RootCmd.PersistentFlags().IntVar(&opts.ImageDownloadRetry, "image-download-retry", 0,
+		"Number of retries for downloading the remote image")
+	RootCmd.PersistentFlags().BoolVarP(&opts.CacheCopyLayers, "cache-copy-layers", "", false,
+		"Caches copy layers")
+	RootCmd.PersistentFlags().BoolVarP(&opts.CacheRunLayers, "cache-run-layers", "", true,
+		"Caches run layers")
+}
+
+// addBuildFlags adds build-related flags
+func addBuildFlags() {
+	RootCmd.PersistentFlags().StringVarP(&opts.KanikoDir, "kaniko-dir", "", constants.DefaultKanikoPath,
+		"Path to the kaniko directory, this takes precedence over the KANIKO_DIR environment variable.")
+	RootCmd.PersistentFlags().StringVarP(&opts.TarPath, "tar-path", "", "",
+		"Path to save the image in as a tarball instead of pushing")
+	RootCmd.PersistentFlags().BoolVarP(&opts.SingleSnapshot, "single-snapshot", "", false,
+		"Take a single snapshot at the end of the build.")
+	RootCmd.PersistentFlags().BoolVarP(&opts.Reproducible, "reproducible", "", false,
+		"Strip timestamps out of the image to make it reproducible")
+	RootCmd.PersistentFlags().BoolVarP(&opts.NoPush, "no-push", "", false,
+		"Do not push the image to the registry")
+	RootCmd.PersistentFlags().StringVarP(&opts.DigestFile, "digest-file", "", "",
+		"Specify a file to save the digest of the built image to.")
+	RootCmd.PersistentFlags().StringVarP(&opts.ImageNameDigestFile, "image-name-with-digest-file", "", "",
+		"Specify a file to save the image name w/ digest of the built image to.")
+	RootCmd.PersistentFlags().StringVarP(&opts.ImageNameTagDigestFile, "image-name-tag-with-digest-file", "", "",
+		"Specify a file to save the image name w/ image tag w/ digest of the built image to.")
+	RootCmd.PersistentFlags().StringVarP(&opts.OCILayoutPath, "oci-layout-path", "", "",
+		"Path to save the OCI image layout of the built image.")
+	RootCmd.PersistentFlags().VarP(&opts.Compression, "compression", "",
+		"Compression algorithm (gzip, zstd)")
+	RootCmd.PersistentFlags().IntVarP(&opts.CompressionLevel, "compression-level", "", -1,
+		"Compression level")
+	RootCmd.PersistentFlags().BoolVarP(&opts.Cleanup, "cleanup", "", false,
+		"Clean the filesystem at the end")
+	RootCmd.PersistentFlags().BoolVarP(&opts.IgnoreVarRun, "ignore-var-run", "", true,
+		"Ignore /var/run directory when taking image snapshot. "+
+			"Set it to false to preserve /var/run/ in destination image.")
+	RootCmd.PersistentFlags().VarP(&opts.IgnorePaths, "ignore-path", "",
+		"Ignore these paths when taking a snapshot. Set it repeatedly for multiple paths.")
+	RootCmd.PersistentFlags().BoolVarP(&opts.ForceBuildMetadata, "force-build-metadata", "", false,
+		"Force add metadata layers to build image")
+	RootCmd.PersistentFlags().BoolVarP(&opts.SkipPushPermissionCheck, "skip-push-permission-check", "", false,
+		"Skip check of the push permission")
+	RootCmd.PersistentFlags().VarP(&opts.Labels, "label", "",
+		"Set metadata for an image. Set it repeatedly for multiple labels.")
+	RootCmd.PersistentFlags().BoolVarP(&opts.SkipUnusedStages, "skip-unused-stages", "", false,
+		"Build only used stages if defined to true. Otherwise it builds by default all stages, "+
+			"even the unnecessaries ones until it reaches the target stage / end of Dockerfile")
+	RootCmd.PersistentFlags().BoolVarP(&opts.RunV2, "use-new-run", "", false,
+		"Use the experimental run implementation for detecting changes without requiring file system snapshots.")
+}
+
+// addMultiPlatformFlags adds multi-platform build flags
+func addMultiPlatformFlags() {
+	RootCmd.PersistentFlags().VarP(&opts.MultiPlatform, "multi-platform", "",
+		"Platforms to build for (comma-separated), e.g. linux/amd64,linux/arm64")
+	RootCmd.PersistentFlags().BoolVar(&opts.PublishIndex, "publish-index", false,
+		"Publish OCI Image Index or Docker Manifest List after building all platforms")
+	RootCmd.PersistentFlags().BoolVar(&opts.LegacyManifestList, "legacy-manifest-list", false,
+		"Create Docker Manifest List instead of OCI Image Index for backward compatibility")
+	opts.IndexAnnotations = make(map[string]string)
+	RootCmd.PersistentFlags().VarP(&opts.IndexAnnotations, "index-annotations", "",
+		"Annotations for the image index (comma-separated key=value pairs)")
+	RootCmd.PersistentFlags().StringVar(&opts.ArchCacheRepoSuffix, "arch-cache-repo-suffix", "-${ARCH}",
+		"Suffix pattern for architecture-specific cache repositories")
+	RootCmd.PersistentFlags().StringVar(&opts.Driver, "driver", "local",
+		"Multi-platform driver to use: local, k8s, or ci")
+	RootCmd.PersistentFlags().StringVar(&opts.DigestsFrom, "digests-from", "",
+		"Path to read digests from for CI driver mode")
+	RootCmd.PersistentFlags().BoolVar(&opts.RequireNativeNodes, "require-native-nodes", true,
+		"Require native architecture nodes for Kubernetes driver")
+	RootCmd.PersistentFlags().StringVar(&opts.OCIMode, "oci-mode", "auto",
+		"OCI compliance mode: oci, docker, or auto")
+}
+
+// addDeprecatedFlags adds deprecated flags
+func addDeprecatedFlags() {
+	RootCmd.PersistentFlags().StringVarP(&opts.SnapshotModeDeprecated, "snapshotMode", "", "",
+		"This flag is deprecated. Please use '--snapshot-mode'.")
+	RootCmd.PersistentFlags().StringVarP(&opts.CustomPlatformDeprecated, "customPlatform", "", "",
+		"This flag is deprecated. Please use '--custom-platform'.")
+	RootCmd.PersistentFlags().StringVarP(&opts.TarPath, "tarPath", "", "",
+		"This flag is deprecated. Please use '--tar-path'.")
 }
 
 // addHiddenFlags marks certain flags as hidden from the executor help text
 func addHiddenFlags(cmd *cobra.Command) {
 	// This flag is added in a vendored directory, hide so that it doesn't come up via --help
-	pflag.CommandLine.MarkHidden("azure-container-registry-config")
+	if err := pflag.CommandLine.MarkHidden("azure-container-registry-config"); err != nil {
+		logrus.Warnf("Failed to hide flag: %v", err)
+	}
 	// Hide this flag as we want to encourage people to use the --context flag instead
-	cmd.PersistentFlags().MarkHidden("bucket")
+	if err := cmd.PersistentFlags().MarkHidden("bucket"); err != nil {
+		logrus.Warnf("Failed to hide flag: %v", err)
+	}
 }
 
 // checkKanikoDir will check whether the executor is operating in the default '/kaniko' directory,
 // conducting the relevant operations if it is not
 func checkKanikoDir(dir string) error {
-	if dir != constants.DefaultKanikoPath {
-
-		// The destination directory may be across a different partition, so we cannot simply rename/move the directory in this case.
-		if _, err := util.CopyDir(constants.DefaultKanikoPath, dir, util.FileContext{}, util.DoNotChangeUID, util.DoNotChangeGID, fs.FileMode(0o600), true); err != nil {
+	if dir != filepath.Clean(constants.DefaultKanikoPath) {
+		// The destination directory may be across a different partition, so we cannot simply rename/move the directory.
+		if _, err := util.CopyDir(constants.DefaultKanikoPath, dir, util.FileContext{},
+			util.DoNotChangeUID, util.DoNotChangeGID, fs.FileMode(filePermission), true); err != nil {
 			return err
 		}
 
 		if err := os.RemoveAll(constants.DefaultKanikoPath); err != nil {
 			return err
 		}
-		// After remove DefaultKankoPath, the DOKCER_CONFIG env will point to a non-exist dir, so we should update DOCKER_CONFIG env to new dir
-		if err := os.Setenv("DOCKER_CONFIG", filepath.Join(dir, "/.docker")); err != nil {
+		// After remove DefaultKankoPath, the DOCKER_CONFIG env will point to a non-exist dir,
+		// so we should update DOCKER_CONFIG env to new dir
+		if err := os.Setenv("DOCKER_CONFIG", filepath.Join(dir, ".docker")); err != nil {
 			return err
 		}
 	}
@@ -391,12 +632,14 @@ func resolveEnvironmentBuildArgs(arguments []string, resolver func(string) strin
 // copy Dockerfile to /kaniko/Dockerfile so that if it's specified in the .dockerignore
 // it won't be copied into the image
 func copyDockerfile() error {
-	if _, err := util.CopyFile(opts.DockerfilePath, config.DockerfilePath, util.FileContext{}, util.DoNotChangeUID, util.DoNotChangeGID, fs.FileMode(0o600), true); err != nil {
+	if _, err := util.CopyFile(opts.DockerfilePath, config.DockerfilePath, util.FileContext{},
+		util.DoNotChangeUID, util.DoNotChangeGID, fs.FileMode(filePermission), true); err != nil {
 		return errors.Wrap(err, "copying dockerfile")
 	}
 	dockerignorePath := opts.DockerfilePath + ".dockerignore"
 	if util.FilepathExists(dockerignorePath) {
-		if _, err := util.CopyFile(dockerignorePath, config.DockerfilePath+".dockerignore", util.FileContext{}, util.DoNotChangeUID, util.DoNotChangeGID, fs.FileMode(0o600), true); err != nil {
+		if _, err := util.CopyFile(dockerignorePath, config.DockerfilePath+".dockerignore", util.FileContext{},
+			util.DoNotChangeUID, util.DoNotChangeGID, fs.FileMode(filePermission), true); err != nil {
 			return errors.Wrap(err, "copying Dockerfile.dockerignore")
 		}
 	}
@@ -408,7 +651,8 @@ func copyDockerfile() error {
 // it resets srcContext to be the path to the unpacked build context within the image
 func resolveSourceContext() error {
 	if opts.SrcContext == "" && opts.Bucket == "" {
-		return errors.New("please specify a path to the build context with the --context flag or a bucket with the --bucket flag")
+		return errors.New("please specify a path to the build context with the --context flag " +
+			"or a bucket with the --bucket flag")
 	}
 	if opts.SrcContext != "" && !strings.Contains(opts.SrcContext, "://") {
 		return nil
@@ -498,4 +742,36 @@ func isURL(path string) bool {
 
 func shdSkip(path string) bool {
 	return path == "" || isURL(path) || filepath.IsAbs(path)
+}
+
+// executeMultiPlatformBuild handles multi-platform builds using the coordinator
+func executeMultiPlatformBuild(opts *config.KanikoOptions) error {
+	// Import the multiplatform package to avoid circular imports
+	coordinator, err := multiplatform.NewCoordinator(opts)
+	if err != nil {
+		return errors.Wrap(err, "failed to create multi-platform coordinator")
+	}
+
+	// Log the multi-platform configuration
+	coordinator.LogMultiPlatformConfig()
+
+	// Execute the multi-platform build
+	index, err := coordinator.Execute(context.Background())
+	if err != nil {
+		return errors.Wrap(err, "multi-platform build failed")
+	}
+
+	// Push the index if requested
+	if opts.PublishIndex && index != nil {
+		if err := oci.PushIndex(index, opts); err != nil {
+			return errors.Wrap(err, "failed to push image index")
+		}
+	}
+
+	// Cleanup
+	if err := coordinator.Cleanup(); err != nil {
+		logrus.Warnf("Multi-platform cleanup failed: %v", err)
+	}
+
+	return nil
 }

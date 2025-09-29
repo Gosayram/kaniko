@@ -1,0 +1,322 @@
+
+name: CI
+
+on:
+  pull_request:
+    branches: [ main, master ]
+  push:
+    branches: [ main, master ]
+    tags: [ 'v*' ]
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GO_VERSION: '1.24.x'
+  MODULE: github.com/Gosayram/kaniko
+  REGISTRY: ghcr.io
+
+jobs:
+  detect:
+    name: Detect context and version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.detect.outputs.version }}
+      commit: ${{ steps.detect.outputs.commit }}
+      date: ${{ steps.detect.outputs.date }}
+      is_release: ${{ steps.detect.outputs.is_release }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect version information
+        id: detect
+        run: |
+          VERSION=$(cat .release-version 2>/dev/null || echo "dev")
+          COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "none")
+          DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          
+          IS_RELEASE="false"
+          # Check if VERSION is not "dev" and follows semantic versioning (e.g., 1.24.1)
+          if [[ "$VERSION" != "dev" && "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            IS_RELEASE="true"
+          fi
+          
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "commit=$COMMIT" >> $GITHUB_OUTPUT
+          echo "date=$DATE" >> $GITHUB_OUTPUT
+          echo "is_release=$IS_RELEASE" >> $GITHUB_OUTPUT
+
+  test:
+    name: Test (${{ matrix.os }})
+    needs: detect
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+          cache-dependency-path: '**/go.sum'
+
+      - name: Run tests
+        run: make test
+
+      - name: Run integration tests
+        if: matrix.os == 'ubuntu-latest'
+        run: make integration-test
+
+  build:
+    name: Build binaries
+    needs: [test, detect]
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        goos: [linux, darwin, windows]
+        goarch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+          cache-dependency-path: '**/go.sum'
+
+      - name: Build binary
+        run: |
+          VERSION="${{ needs.detect.outputs.version }}"
+          COMMIT="${{ needs.detect.outputs.commit }}"
+          DATE="${{ needs.detect.outputs.date }}"
+          
+          GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} CGO_ENABLED=0 GOFLAGS=-trimpath \
+          go build -ldflags "
+            -X '${{ env.MODULE }}/internal/version.Version=$VERSION'
+            -X '${{ env.MODULE }}/internal/version.Commit=$COMMIT'
+            -X '${{ env.MODULE }}/internal/version.Date=$DATE'
+            -s -w
+          " -o bin/executor ./cmd/executor
+
+      - name: Package binary
+        run: |
+          NAME="executor-${{ matrix.goos }}-${{ matrix.goarch }}"
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            mv "bin/executor" "bin/${NAME}.exe"
+            7z a "bin/${NAME}.zip" "bin/${NAME}.exe"
+          else
+            tar -czf "bin/${NAME}.tar.gz" -C bin executor
+          fi
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: executor-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: |
+            bin/*.tar.gz
+            bin/*.zip
+
+  multi-platform-matrix:
+    name: Build single-platform images (matrix)
+    needs: [test, detect]
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')
+    strategy:
+      matrix:
+        platform: [linux/amd64, linux/arm64]
+    steps:
+      - uses: actions/checkout@v4
+  
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+  
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+  
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+  
+      - name: Build and push single-platform image
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/Dockerfile
+          platforms: ${{ matrix.platform }}
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ github.repository }}:temp-${{ matrix.platform }}
+          build-args: |
+            VERSION=${{ needs.detect.outputs.version }}
+            COMMIT=${{ needs.detect.outputs.commit }}
+            DATE=${{ needs.detect.outputs.date }}
+            TARGETARCH=${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}
+            TARGETOS=linux
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          outputs: type=image,name=image_digest,push=true
+  
+      - name: Get digest and write to file
+        run: |
+          DIGEST="${{ steps.build.outputs.digest }}"
+          PLATFORM="${{ matrix.platform }}"
+          FILENAME="${PLATFORM//\//-}.digest"
+          echo "$DIGEST" > "$FILENAME"
+          echo "digest-file=$FILENAME" >> $GITHUB_OUTPUT
+  
+      - name: Upload digest artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: digest-${{ matrix.platform }}
+          path: "*.digest"
+  
+  aggregate-multi-platform:
+    name: Aggregate multi-platform index with CI driver
+    needs: [multi-platform-matrix, detect]
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')
+    steps:
+      - uses: actions/checkout@v4
+  
+      - name: Download all digest artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ./digests
+          pattern: digest-*
+          merge-multiple: true
+  
+      - name: List downloaded digests
+        run: |
+          ls -la ./digests/
+          cat ./digests/*.digest
+  
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+  
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+  
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+  
+      - name: Build kaniko image for aggregation
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/Dockerfile
+          platforms: linux/amd64
+          load: true
+          tags: kaniko-aggregator:latest
+          build-args: |
+            VERSION=${{ needs.detect.outputs.version }}
+            COMMIT=${{ needs.detect.outputs.commit }}
+            DATE=${{ needs.detect.outputs.date }}
+            TARGETARCH=amd64
+            TARGETOS=linux
+  
+      - name: Run kaniko CI driver to create and push index
+        run: |
+          docker run --rm \
+            -v $(pwd)/digests:/digests:ro \
+            -e DOCKER_CONFIG=/kaniko/.docker \
+            -v $(pwd)/.docker:/kaniko/.docker:ro \
+            kaniko-aggregator:latest \
+            --driver=ci \
+            --digests-from=/digests \
+            --destination=${{ env.REGISTRY }}/${{ github.repository }}:multi \
+            --publish-index=true \
+            --no-push=false \
+            --oci-mode=oci \
+            --skip-tls-verify \
+            --insecure
+  
+      - name: Verify multi-platform index with crane
+        run: |
+          crane manifest ${{ env.REGISTRY }}/${{ github.repository }}:multi > index.json
+          crane manifest ${{ env.REGISTRY }}/${{ github.repository }}:multi | jq .
+          if ! jq -e '.manifests | length > 1' index.json; then
+            echo "Index should have multiple manifests for platforms"
+            exit 1
+          fi
+          echo "Multi-platform index verified successfully"
+  
+  build-image:
+    name: Build and push Docker image
+    needs: [test, detect]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && needs.detect.outputs.is_release == 'true'
+    steps:
+      - uses: actions/checkout@v4
+  
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+  
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+  
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+  
+      - name: Extract metadata for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: |
+            ghcr.io/${{ github.repository }}
+          tags: |
+            type=raw,value=${{ needs.detect.outputs.version }}
+            type=raw,value=latest
+            type=sha
+  
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VERSION=${{ needs.detect.outputs.version }}
+            COMMIT=${{ needs.detect.outputs.commit }}
+            DATE=${{ needs.detect.outputs.date }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+  
+      - name: Generate SBOM
+        uses: anchore/sbom-action@v0.18.0
+        with:
+          image: ${{ steps.build.outputs.digest }}
+          format: spdx-json
+          output-file: sbom.spdx.json
+  
+      - name: Upload SBOM
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-${{ needs.detect.outputs.version }}
+          path: sbom.spdx.json

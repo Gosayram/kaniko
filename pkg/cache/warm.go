@@ -24,15 +24,16 @@ import (
 	"path"
 	"regexp"
 
-	"github.com/GoogleContainerTools/kaniko/pkg/config"
-	"github.com/GoogleContainerTools/kaniko/pkg/dockerfile"
-	"github.com/GoogleContainerTools/kaniko/pkg/image/remote"
-	"github.com/GoogleContainerTools/kaniko/pkg/util"
 	"github.com/google/go-containerregistry/pkg/name"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/tarball"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
+
+	"github.com/Gosayram/kaniko/pkg/config"
+	"github.com/Gosayram/kaniko/pkg/dockerfile"
+	"github.com/Gosayram/kaniko/pkg/image/remote"
+	"github.com/Gosayram/kaniko/pkg/util"
 )
 
 // WarmCache populates the cache
@@ -123,12 +124,12 @@ func warmToFile(cacheDir, img string, opts *config.WarmerOptions) error {
 }
 
 // FetchRemoteImage retrieves a Docker image manifest from a remote source.
-// github.com/GoogleContainerTools/kaniko/image/remote.RetrieveRemoteImage can be used as
+// github.com/Gosayram/kaniko/image/remote.RetrieveRemoteImage can be used as
 // this type.
-type FetchRemoteImage func(image string, opts config.RegistryOptions, customPlatform string) (v1.Image, error)
+type FetchRemoteImage func(image string, opts *config.RegistryOptions, customPlatform string) (v1.Image, error)
 
 // FetchLocalSource retrieves a Docker image manifest from a local source.
-// github.com/GoogleContainerTools/kaniko/cache.LocalSource can be used as
+// github.com/Gosayram/kaniko/cache.LocalSource can be used as
 // this type.
 type FetchLocalSource func(*config.CacheOptions, string) (v1.Image, error)
 
@@ -148,7 +149,7 @@ func (w *Warmer) Warm(image string, opts *config.WarmerOptions) (v1.Hash, error)
 		return v1.Hash{}, errors.Wrapf(err, "Failed to verify image name: %s", image)
 	}
 
-	img, err := w.Remote(image, opts.RegistryOptions, opts.CustomPlatform)
+	img, err := w.Remote(image, &opts.RegistryOptions, opts.CustomPlatform)
 	if err != nil || img == nil {
 		return v1.Hash{}, errors.Wrapf(err, "Failed to retrieve image: %s", image)
 	}
@@ -159,8 +160,8 @@ func (w *Warmer) Warm(image string, opts *config.WarmerOptions) (v1.Hash, error)
 	}
 
 	if !opts.Force {
-		_, err := w.Local(&opts.CacheOptions, digest.String())
-		if err == nil || IsExpired(err) {
+		_, localErr := w.Local(&opts.CacheOptions, digest.String())
+		if localErr == nil || IsExpired(localErr) {
 			return v1.Hash{}, AlreadyCachedErr{}
 		}
 	}
@@ -182,16 +183,27 @@ func (w *Warmer) Warm(image string, opts *config.WarmerOptions) (v1.Hash, error)
 	return digest, nil
 }
 
+// ParseDockerfile parses a Dockerfile from local path or URL and extracts base image names
 func ParseDockerfile(opts *config.WarmerOptions) ([]string, error) {
 	var err error
 	var d []uint8
 	var baseNames []string
 	match, _ := regexp.MatchString("^https?://", opts.DockerfilePath)
 	if match {
-		response, e := http.Get(opts.DockerfilePath) //nolint:noctx
+		client := &http.Client{
+			CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		}
+		response, e := client.Get(opts.DockerfilePath)
 		if e != nil {
 			return nil, e
 		}
+		defer func() {
+			if closeErr := response.Body.Close(); closeErr != nil {
+				logrus.Warnf("Failed to close response body: %v", closeErr)
+			}
+		}()
 		d, err = io.ReadAll(response.Body)
 	} else {
 		d, err = os.ReadFile(opts.DockerfilePath)
@@ -206,16 +218,15 @@ func ParseDockerfile(opts *config.WarmerOptions) ([]string, error) {
 		return nil, errors.Wrap(err, "parsing dockerfile")
 	}
 
-	for i, s := range stages {
-		resolvedBaseName, err := util.ResolveEnvironmentReplacement(s.BaseName, opts.BuildArgs, false)
+	for i := range stages {
+		resolvedBaseName, err := util.ResolveEnvironmentReplacement(stages[i].BaseName, opts.BuildArgs, false)
 		if err != nil {
-			return nil, errors.Wrap(err, fmt.Sprintf("resolving base name %s", s.BaseName))
+			return nil, errors.Wrap(err, fmt.Sprintf("resolving base name %s", stages[i].BaseName))
 		}
-		if s.BaseName != resolvedBaseName {
+		if stages[i].BaseName != resolvedBaseName {
 			stages[i].BaseName = resolvedBaseName
 		}
 		baseNames = append(baseNames, resolvedBaseName)
 	}
 	return baseNames, nil
-
 }

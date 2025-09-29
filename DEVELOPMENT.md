@@ -22,7 +22,7 @@ When you're ready, you can [create a PR](#creating-a-pr)!
 
 ## Checkout your fork
 
-The Go tools require that you clone the repository to the `src/github.com/GoogleContainerTools/kaniko` directory
+The Go tools require that you clone the repository to the `src/github.com/Gosayram/kaniko` directory
 in your [`GOPATH`](https://go.dev/wiki/SettingGOPATH).
 
 To check out this repository:
@@ -36,7 +36,7 @@ To check out this repository:
   cd ${GOPATH}/src/github.com/GoogleContainerTools
   git clone git@github.com:${YOUR_GITHUB_USERNAME}/kaniko.git
   cd kaniko
-  git remote add upstream git@github.com:GoogleContainerTools/kaniko.git
+  git remote add upstream git@github.com:Gosayram/kaniko.git
   git remote set-url --push upstream no_push
   ```
 

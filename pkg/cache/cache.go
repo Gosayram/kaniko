@@ -14,6 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// Package cache provides interfaces and implementations for caching container image layers.
 package cache
 
 import (
@@ -24,9 +25,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/GoogleContainerTools/kaniko/pkg/config"
-	"github.com/GoogleContainerTools/kaniko/pkg/creds"
-	"github.com/GoogleContainerTools/kaniko/pkg/util"
 	"github.com/google/go-containerregistry/pkg/name"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/layout"
@@ -34,6 +32,10 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/tarball"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
+
+	"github.com/Gosayram/kaniko/pkg/config"
+	"github.com/Gosayram/kaniko/pkg/creds"
+	"github.com/Gosayram/kaniko/pkg/util"
 )
 
 // LayerCache is the layer cache
@@ -59,16 +61,15 @@ func (rc *RegistryCache) RetrieveLayer(ck string) (v1.Image, error) {
 		return nil, errors.Wrap(err, fmt.Sprintf("getting reference for %s", cache))
 	}
 
-	registryName := cacheRef.Repository.Registry.Name()
+	registryName := cacheRef.Context().Registry.Name()
 	if rc.Opts.Insecure || rc.Opts.InsecureRegistries.Contains(registryName) {
-		newReg, err := name.NewRegistry(registryName, name.WeakValidation, name.Insecure)
+		cacheRef, err = name.NewTag(cache, name.WeakValidation, name.Insecure)
 		if err != nil {
-			return nil, err
+			return nil, errors.Wrap(err, fmt.Sprintf("getting insecure reference for %s", cache))
 		}
-		cacheRef.Repository.Registry = newReg
 	}
 
-	tr, err := util.MakeTransport(rc.Opts.RegistryOptions, registryName)
+	tr, err := util.MakeTransport(&rc.Opts.RegistryOptions, registryName)
 	if err != nil {
 		return nil, errors.Wrapf(err, "making transport for registry %q", registryName)
 	}
@@ -78,7 +79,7 @@ func (rc *RegistryCache) RetrieveLayer(ck string) (v1.Image, error) {
 		return nil, err
 	}
 
-	if err = verifyImage(img, rc.Opts.CacheTTL, cache); err != nil {
+	if err := verifyImage(img, rc.Opts.CacheTTL, cache); err != nil {
 		return nil, err
 	}
 	return img, nil
@@ -94,7 +95,7 @@ func verifyImage(img v1.Image, cacheTTL time.Duration, cache string) error {
 	// Layer is stale, rebuild it.
 	if expiry.Before(time.Now()) {
 		logrus.Infof("Cache entry expired: %s", cache)
-		return fmt.Errorf("Cache entry expired: %s", cache)
+		return fmt.Errorf("cache entry expired: %s", cache)
 	}
 
 	// Force the manifest to be populated
@@ -109,6 +110,7 @@ type LayoutCache struct {
 	Opts *config.KanikoOptions
 }
 
+// RetrieveLayer retrieves a layer from the OCI layout cache given the cache key ck.
 func (lc *LayoutCache) RetrieveLayer(ck string) (v1.Image, error) {
 	cache, err := Destination(lc.Opts, ck)
 	if err != nil {
@@ -121,17 +123,17 @@ func (lc *LayoutCache) RetrieveLayer(ck string) (v1.Image, error) {
 		return nil, errors.Wrap(err, "locating cache image")
 	}
 
-	if err = verifyImage(img, lc.Opts.CacheTTL, cache); err != nil {
+	if err := verifyImage(img, lc.Opts.CacheTTL, cache); err != nil {
 		return nil, err
 	}
 	return img, nil
 }
 
-func locateImage(path string) (v1.Image, error) {
+func locateImage(imagePath string) (v1.Image, error) {
 	var img v1.Image
-	layoutPath, err := layout.FromPath(path)
+	layoutPath, err := layout.FromPath(imagePath)
 	if err != nil {
-		return nil, errors.Wrap(err, fmt.Sprintf("constructing layout path from %s", path))
+		return nil, errors.Wrap(err, fmt.Sprintf("constructing layout path from %s", imagePath))
 	}
 	index, err := layoutPath.ImageIndex()
 	if err != nil {
@@ -141,7 +143,8 @@ func locateImage(path string) (v1.Image, error) {
 	if err != nil {
 		return nil, errors.Wrap(err, fmt.Sprintf("retrieving manifest file for %s", layoutPath))
 	}
-	for _, m := range manifest.Manifests {
+	for i := range manifest.Manifests {
+		m := &manifest.Manifests[i]
 		// assume there is only one image
 		img, err = layoutPath.Image(m.Digest)
 		if err != nil {
@@ -176,9 +179,9 @@ func LocalSource(opts *config.CacheOptions, cacheKey string) (v1.Image, error) {
 		return nil, nil
 	}
 
-	path := path.Join(cache, cacheKey)
+	cachePath := path.Join(cache, cacheKey)
 
-	fi, err := os.Stat(path)
+	fi, err := os.Stat(cachePath)
 	if err != nil {
 		msg := fmt.Sprintf("No file found for cache key %v %v", cacheKey, err)
 		logrus.Debug(msg)
@@ -194,7 +197,7 @@ func LocalSource(opts *config.CacheOptions, cacheKey string) (v1.Image, error) {
 	}
 
 	logrus.Infof("Found %s in local cache", cacheKey)
-	return cachedImageFromPath(path)
+	return cachedImageFromPath(cachePath)
 }
 
 // cachedImage represents a v1.Tarball that is cached locally in a CAS.
@@ -219,7 +222,12 @@ func (c *cachedImage) Manifest() (*v1.Manifest, error) {
 }
 
 func mfstFromPath(p string) (*v1.Manifest, error) {
-	f, err := os.Open(p)
+	// Validate the file path to prevent directory traversal
+	cleanPath := filepath.Clean(p)
+	if strings.Contains(cleanPath, "..") || strings.HasPrefix(cleanPath, "/") {
+		return nil, fmt.Errorf("invalid file path: potential directory traversal detected")
+	}
+	f, err := os.Open(cleanPath)
 	if err != nil {
 		return nil, err
 	}

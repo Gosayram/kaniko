@@ -14,21 +14,47 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// Package main provides the entry point for the Kaniko executor
 package main
 
 import (
+	"flag"
+	"fmt"
 	"os"
 
-	"github.com/GoogleContainerTools/kaniko/cmd/executor/cmd"
+	"github.com/Gosayram/kaniko/cmd/executor/cmd"
+	"github.com/Gosayram/kaniko/internal/version"
+	"github.com/Gosayram/kaniko/pkg/config"
+	"github.com/Gosayram/kaniko/pkg/executor"
+	"github.com/Gosayram/kaniko/pkg/util"
 
 	"github.com/google/slowjam/pkg/stacklog"
 )
 
 func main() {
+	// Initialize configuration
+	config.Initialize()
+	util.Initialize()
+
+	// Initialize multi-platform build functionality
+	executor.InitMultiPlatformBuild()
+
+	// Handle --version flag before cobra initialization
+	showVersion := flag.Bool("version", false, "Print version information and exit")
+	flag.Parse()
+
+	if *showVersion {
+		fmt.Printf("Kaniko Executor\n")
+		fmt.Printf("Version: %s\n", version.Version)
+		fmt.Printf("Commit: %s\n", version.Commit)
+		fmt.Printf("Build date: %s\n", version.Date)
+		os.Exit(0)
+	}
+
 	s := stacklog.MustStartFromEnv("STACKLOG_PATH")
-	defer s.Stop()
 
 	if err := cmd.RootCmd.Execute(); err != nil {
+		s.Stop()
 		os.Exit(1)
 	}
 }

@@ -14,6 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// Package bucket provides utilities for working with cloud storage buckets.
 package bucket
 
 import (
@@ -24,12 +25,13 @@ import (
 	"strings"
 
 	"cloud.google.com/go/storage"
-	"github.com/GoogleContainerTools/kaniko/pkg/constants"
 	"google.golang.org/api/option"
+
+	"github.com/Gosayram/kaniko/pkg/constants"
 )
 
 // Upload uploads everything from Reader to the bucket under path
-func Upload(ctx context.Context, bucketName string, path string, r io.Reader, client *storage.Client) error {
+func Upload(ctx context.Context, bucketName, path string, r io.Reader, client *storage.Client) error {
 	bucket := client.Bucket(bucketName)
 	w := bucket.Object(path).NewWriter(ctx)
 	if _, err := io.Copy(w, r); err != nil {
@@ -43,7 +45,7 @@ func Upload(ctx context.Context, bucketName string, path string, r io.Reader, cl
 
 // Delete will remove the content at path. path should be the full path
 // to a file in GCS.
-func Delete(ctx context.Context, bucketName string, path string, client *storage.Client) error {
+func Delete(ctx context.Context, bucketName, path string, client *storage.Client) error {
 	err := client.Bucket(bucketName).Object(path).Delete(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to delete file at %s in gcs bucket %v: %w", path, bucketName, err)
@@ -52,7 +54,7 @@ func Delete(ctx context.Context, bucketName string, path string, client *storage
 }
 
 // ReadCloser will create io.ReadCloser for the specified bucket and path
-func ReadCloser(ctx context.Context, bucketName string, path string, client *storage.Client) (io.ReadCloser, error) {
+func ReadCloser(ctx context.Context, bucketName, path string, client *storage.Client) (io.ReadCloser, error) {
 	bucket := client.Bucket(bucketName)
 	r, err := bucket.Object(path).NewReader(ctx)
 	if err != nil {
@@ -73,14 +75,14 @@ func NewClient(ctx context.Context, opts ...option.ClientOption) (*storage.Clien
 // GetNameAndFilepathFromURI returns the bucketname and the path to the item inside.
 // Will error if provided URI is not a valid URL.
 // If the filepath is empty, returns the contextTar filename
-func GetNameAndFilepathFromURI(bucketURI string) (bucketName string, path string, err error) {
-	url, err := url.Parse(bucketURI)
+func GetNameAndFilepathFromURI(bucketURI string) (bucketName, path string, err error) {
+	parsedURL, err := url.Parse(bucketURI)
 	if err != nil {
 		return "", "", err
 	}
-	bucketName = url.Host
+	bucketName = parsedURL.Host
 	// remove leading slash
-	filePath := strings.TrimPrefix(url.Path, "/")
+	filePath := strings.TrimPrefix(parsedURL.Path, "/")
 	if filePath == "" {
 		filePath = constants.ContextTar
 	}

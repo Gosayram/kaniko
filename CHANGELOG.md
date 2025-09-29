@@ -1,3 +1,348 @@
+# v1.24.1 Release 2025-09-16
+The executor images in this release are:
+```
+gcr.io/Gosayram/executor:v1.24.1
+gcr.io/Gosayram/executor:latest
+```
+
+The debug images are available at:
+```
+gcr.io/Gosayram/executor:debug
+gcr.io/Gosayram/executor:v1.24.1-debug
+```
+
+The slim executor images which don't contain any authentication binaries are available at:
+```
+gcr.io/Gosayram/executor:slim
+gcr.io/Gosayram/executor:v1.24.1-slim
+```
+
+
+
+Huge thank you for this release towards our contributors: 
+- 好风
+- Антон Костенко
+- Роман Небалуев
+- Aaron Lehmann
+- Aaron Prindle
+- Aaruni Aggarwal
+- Abdurakhman R.
+- Abirdcfly
+- aca
+- Achilleas Pipinellis
+- Adrià Garriga-Alonso
+- Adrian Duong
+- Adrian Mouat
+- Adrian Newby
+- Akihiro Suda
+- Akram Ben Aissi
+- Alban Crequy
+- Alec Rajeev
+- Aleksa Sarai
+- Alessandro Bitocchi
+- Alex Szakaly
+- alexa
+- Alexander Sharov
+- alexezio
+- almg80
+- Anbraten
+- Andrea Giardini
+- Andreas Bergmeier
+- Andreas Fleig
+- Andrei Kvapil
+- Andrew Rynhard
+- Angus Williams
+- ankitm123
+- Anna Levenberg
+- Anoop S
+- Anthony Davies
+- Anthony Weston
+- Anurag Goel
+- Aris Buzachis
+- Art Begolli
+- Asher
+- Aswin A
+- bahetiamit
+- Balint Pato
+- balopat
+- Batuhan Apaydın
+- Ben Einaudi
+- Benjamin EINAUDI
+- Benjamin Krenn
+- Benjamin Nørgaard
+- Bernardo Marques
+- Bob Du
+- Bryan A. S
+- Carlos Alexandro Becker
+- Carlos Garcia
+- Carlos Sanchez
+- chenggui53
+- chhsia0
+- Chris Hoffman
+- Chris Mellard
+- Chris Sng
+- Christian Jantz
+- Christie Wilson
+- Christophe
+- Christopher Hlubek
+- Chuang Wang
+- claudex
+- Cole Wippern
+- Colin
+- container-tools-bot
+- cvgw
+- Cyrille Hemidy
+- Daisuke Taniwaki
+- Dale Tristram
+- Damien Degois
+- Dan Cecile
+- Dani Raznikov
+- Daniel Marks
+- Daniel Strobusch
+- daniel-harrison
+- David Dooling
+- David McKay
+- Dávid Szakállas
+- Dawei Ma
+- debuggy
+- Deniz Zoeteman
+- dependabot[bot]
+- Didier Durand
+- Diego Gonzalez
+- Dirk Gustke
+- Djabx
+- dlorenc
+- dmr
+- Don McCasland
+- DracoBlue
+- Eduard Laur
+- ejose19
+- Eng Zer Jun
+- ePirat
+- Eric
+- Fabrice
+- Fahri Yardımcı
+- Fedor V
+- Fernando Giannetti
+- Ferran Vidal
+- Florian Apolloner
+- François JACQUES
+- Fred Cox
+- Fredrik Lönnegren
+- Gábor Lipták
+- Gabriel Nützi
+- Gabriel Virga
+- geekvest
+- Gijs
+- Gilbert Gilb's
+- Giovan Isa Musthofa
+- guangwu
+- Guilherme Rezende
+- Guillaume Calmettes
+- Harmen Stoppels
+- Herman
+- Herrmann Hinz
+- Hingbong Lo
+- Hugues Alary
+- Ian Beringer
+- Ian Kerins
+- Igor Scheller
+- Ishant Mrinal Haloi
+- j0shua
+- Jack
+- Jake Sanders
+- Jake Shadle
+- James Ravn
+- James Rawlings
+- Janosch Maier
+- Jason D'Amour
+- Jason Hall
+- Jasper Ben Orschulko
+- Jérémie Augustin
+- JeromeJu
+- Jerry Jones
+- jesusofsuburb1a
+- jeunii
+- Joe Kimmel
+- Joe Kutner
+- Joël Pepper
+- Johan Hernandez
+- Johannes 'fish' Ziemke
+- John Oss
+- Jon Friesen
+- Jon Henrik Bjørnstad
+- Jon Johnson
+- Jonas Gröger
+- jonjohnsonjr
+- Jordan Goasdoue
+- Jordan GOASDOUE
+- Jordan Goasdoué
+- Jose Donizetti
+- Josh Chorlton
+- Josh Soref
+- Joshua Knarr
+- Julian
+- Junwon Kwon
+- Kamal Nasser
+- Kartik Verma
+- Keisuke Umegaki
+- Konstantin Demin
+- Kraev Sergei
+- Kun Lu
+- Lars
+- Lars Gröber
+- Lars Seipel
+- Lars Toenning
+- Lavrenti Frobeen
+- Leo Palmer Sunmo
+- Liam Newman
+- linuxshokunin
+- Lio李歐
+- Liubov Grinkevich
+- Liwen Guo
+- Logan Price
+- Logan.Price
+- lou-lan
+- Lukas
+- Lukasz Jakimczuk
+- Luke Wood
+- Manish Giri
+- Marc Lallaouret
+- Mark Moretto
+- Martin Treusch von Buttlar
+- Matheus Pimenta
+- Matt Moore
+- Matt Rickard
+- Matthew Dawson
+- Matthias Schneider
+- Max Walther
+- Max Wittig
+- Maxime BOSSARD
+- Maximilian Hippler
+- Maximilian Schrupp
+- Mehdi Abaakouk
+- Michael Plump
+- Michel Hollands
+- Mick van Gelderen
+- mickkael
+- Mike Vanbuskirk
+- Mikhail Vasin
+- Mingliang Tao
+- Mitchell Friedman
+- MMeent
+- Monard Vong
+- Moritz Wanzenböck
+- Myers Carpenter
+- Nándor István Krácser
+- Nao YONASHIRO
+- Natalie Arellano
+- Naveen
+- Nick Kubala
+- Nicolas Byl
+- Niels Denissen
+- nihilo
+- ohchang-kwon
+- Oliver Gregorius
+- Oliver Radwell
+- Or Geva
+- Or Sela
+- Paolo Di Tommaso
+- Pat Litke
+- Patrick Barker
+- Patrick Decat
+- Peter van Zetten
+- peter-evans
+- Petr Ruzicka
+- PhoenixMage
+- Pierre-Louis Bonicoli
+- poy
+- Prashant
+- Prashant Arya
+- Prima Adi Pradana
+- Priya Wadhwa
+- priyawadhwa
+- Pweetoo
+- Quan Zhang
+- Ramy
+- Remko van Hunen
+- Renato Suero
+- Rhianna
+- Sacha Smart
+- Sam Stoelinga
+- Samarth08
+- Sascha Askani
+- Sascha Schwarze
+- schwannden
+- Sebastiaan Tammer
+- Sebastian Jackel
+- Severin Strobl
+- Sharif Elgamal
+- sharifelgamal
+- Shashank
+- Shihab Hasan
+- Shingo Omura
+- Shude Li
+- Shuhei Kitagawa
+- Sigurd Spieckermann
+- Silvano Cirujano Cuesta
+- Sladyn
+- slmagus
+- Stijn De Haes
+- Takeaki Matsumoto
+- Takumasa Sakao
+- tal66
+- Tao Yang
+- Taylor Barrella
+- Tejal Desai
+- Thao-Nguyen Do
+- Theofilos Papapanagiotou
+- Thomas Bonfort
+- Thomas L. Kjeldsen
+- Thomas Stromberg
+- Thomas Strömberg
+- timbavtbc
+- Tinjo Schöni
+- tinkerborg
+- Tom Prince
+- tommaso.doninelli
+- Tony De La Nuez
+- tralexa
+- Travis DePrato
+- tsufeki
+- v.rul
+- Valentin Rothberg
+- Verlhac Gaëtan
+- Viacheslav Artamonov
+- Víctor
+- Victor Noel
+- Viktor Farcic
+- Vincent Behar
+- Vincent Demeester
+- Vincent Latombe
+- Vishal Khot
+- Vivek Kumar
+- vivekkoya
+- Warren Seymour
+- Wietse Muizelaar
+- Will Ripley
+- Wolfgang Walther
+- wwade
+- xanonid
+- Xueshan Feng
+- Yahav Itzhak
+- yangtaokm
+- ygelfand
+- Yoan Blanc
+- Yonatan Koren
+- Yoriyasu Yano
+- Yuheng Zhang
+- Yulia Gaponenko
+- yw-liu
+- zhangzhiqiangcs
+- zhouhaibing089
+- Zigelboim Misha
+
+
 # v1.24.0 Release 2025-05-21
 The executor images in this release are:
 ```

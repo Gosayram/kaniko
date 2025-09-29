@@ -20,11 +20,12 @@ import (
 	"os"
 	"testing"
 
-	"github.com/GoogleContainerTools/kaniko/pkg/dockerfile"
+	"github.com/Gosayram/kaniko/pkg/dockerfile"
 
-	"github.com/GoogleContainerTools/kaniko/testutil"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/moby/buildkit/frontend/dockerfile/instructions"
+
+	"github.com/Gosayram/kaniko/testutil"
 )
 
 // Each test here changes the same WorkingDir field in the config

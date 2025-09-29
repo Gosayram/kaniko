@@ -14,11 +14,13 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// Package main provides a tool to list pull requests between two versions in changelog format.
 package main
 
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/google/go-github/github"
 	"github.com/sirupsen/logrus"
@@ -36,7 +38,7 @@ var rootCmd = &cobra.Command{
 	Use:        "listpullreqs fromTag toTag",
 	Short:      "Lists pull requests between two versions in our changelog markdown format",
 	ArgAliases: []string{"fromTag", "toTag"},
-	Run: func(cmd *cobra.Command, args []string) {
+	Run: func(_ *cobra.Command, _ []string) {
 		printPullRequests()
 	},
 }
@@ -45,8 +47,12 @@ const org = "GoogleContainerTools"
 const repo = "kaniko"
 
 func main() {
-	rootCmd.Flags().StringVar(&token, "token", "", "Specify personal Github Token if you are hitting a rate limit anonymously. https://github.com/settings/tokens")
-	rootCmd.Flags().StringVar(&fromTag, "fromTag", "", "comparison of commits is based on this tag (defaults to the latest tag in the repo)")
+	rootCmd.Flags().StringVar(&token, "token", "",
+		"Specify personal Github Token if you are hitting a rate limit anonymously. "+
+			"https://github.com/settings/tokens")
+	rootCmd.Flags().StringVar(&fromTag, "fromTag", "",
+		"comparison of commits is based on this tag "+
+			"(defaults to the latest tag in the repo)")
 	rootCmd.Flags().StringVar(&toTag, "toTag", "master", "this is the commit that is compared with fromTag")
 	if err := rootCmd.Execute(); err != nil {
 		logrus.Fatal(err)
@@ -56,8 +62,15 @@ func main() {
 func printPullRequests() {
 	client := getClient()
 
-	releases, _, _ := client.Repositories.ListReleases(context.Background(), org, repo, &github.ListOptions{})
-	lastReleaseTime := *releases[0].PublishedAt
+	var lastReleaseTime *github.Timestamp
+	releases, _, err := client.Repositories.ListReleases(context.Background(), org, repo, &github.ListOptions{})
+	if err != nil || len(releases) == 0 {
+		// If no releases found, use a very old date to include all PRs
+		oldDate := github.Timestamp{Time: time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)}
+		lastReleaseTime = &oldDate
+	} else {
+		lastReleaseTime = releases[0].PublishedAt
+	}
 
 	listSize := 1
 	seen := map[int]bool{}
@@ -68,7 +81,7 @@ func printPullRequests() {
 			Sort:      "updated",
 			Direction: "desc",
 			ListOptions: github.ListOptions{
-				PerPage: 100,
+				PerPage: 100, //nolint:mnd // 100 is the standard page size for GitHub API
 				Page:    page,
 			},
 		})
@@ -77,7 +90,8 @@ func printPullRequests() {
 			pr := pullRequests[idx]
 			if pr.MergedAt != nil {
 				if _, ok := seen[*pr.Number]; !ok && pr.GetMergedAt().After(lastReleaseTime.Time) {
-					fmt.Printf("* %s [#%d](https://github.com/%s/%s/pull/%d)\n", pr.GetTitle(), *pr.Number, org, repo, *pr.Number)
+					fmt.Printf("* %s [#%d](https://github.com/%s/%s/pull/%d)\n",
+						pr.GetTitle(), *pr.Number, org, repo, *pr.Number)
 					seen[*pr.Number] = true
 				}
 			}
@@ -88,7 +102,7 @@ func printPullRequests() {
 }
 
 func getClient() *github.Client {
-	if len(token) <= 0 {
+	if token == "" {
 		return github.NewClient(nil)
 	}
 	ctx := context.Background()

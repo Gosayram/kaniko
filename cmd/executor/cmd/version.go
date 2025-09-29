@@ -19,8 +19,9 @@ package cmd
 import (
 	"fmt"
 
-	"github.com/GoogleContainerTools/kaniko/pkg/version"
 	"github.com/spf13/cobra"
+
+	"github.com/Gosayram/kaniko/internal/version"
 )
 
 func init() {
@@ -30,7 +31,9 @@ func init() {
 var versionCmd = &cobra.Command{
 	Use:   "version",
 	Short: "Print the version number of kaniko",
-	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Println("Kaniko version : ", version.Version())
+	Run: func(_ *cobra.Command, _ []string) {
+		fmt.Printf("Kaniko version: %s\n", version.Version)
+		fmt.Printf("Commit: %s\n", version.Commit)
+		fmt.Printf("Build date: %s\n", version.Date)
 	},
 }

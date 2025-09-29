@@ -27,26 +27,35 @@ import (
 	"github.com/google/go-cmp/cmp"
 )
 
+const (
+	// defaultDirPerm is the default directory permissions (0o750)
+	defaultDirPerm = 0o750
+	// defaultFilePerm is the default file permissions (0o600)
+	defaultFilePerm = 0o600
+)
+
 // SetupFiles creates files at path
 func SetupFiles(path string, files map[string]string) error {
 	for p, c := range files {
-		path := filepath.Join(path, p)
-		if err := os.MkdirAll(filepath.Dir(path), 0750); err != nil {
+		fullPath := filepath.Join(path, p)
+		if err := os.MkdirAll(filepath.Dir(fullPath), defaultDirPerm); err != nil {
 			return err
 		}
-		if err := os.WriteFile(path, []byte(c), 0644); err != nil {
+		if err := os.WriteFile(fullPath, []byte(c), defaultFilePerm); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
+// CurrentUser represents the current user with primary group information
 type CurrentUser struct {
 	*user.User
 
 	PrimaryGroup string
 }
 
+// GetCurrentUser retrieves the current user with primary group information
 func GetCurrentUser(t *testing.T) CurrentUser {
 	currentUser, err := user.Current()
 	if err != nil {
@@ -68,6 +77,7 @@ func GetCurrentUser(t *testing.T) CurrentUser {
 	}
 }
 
+// CheckDeepEqual checks if two values are deeply equal using cmp.Diff
 func CheckDeepEqual(t *testing.T, expected, actual interface{}) {
 	t.Helper()
 	if diff := cmp.Diff(actual, expected); diff != "" {
@@ -76,9 +86,10 @@ func CheckDeepEqual(t *testing.T, expected, actual interface{}) {
 	}
 }
 
+// CheckErrorAndDeepEqual checks for expected errors and deep equality of values
 func CheckErrorAndDeepEqual(t *testing.T, shouldErr bool, err error, expected, actual interface{}) {
 	t.Helper()
-	if err := checkErr(shouldErr, err); err != nil {
+	if checkErr := checkErr(shouldErr, err); checkErr != nil {
 		t.Error(err)
 		return
 	}
@@ -89,12 +100,14 @@ func CheckErrorAndDeepEqual(t *testing.T, shouldErr bool, err error, expected, a
 	}
 }
 
+// CheckError checks if the error condition matches expectations
 func CheckError(t *testing.T, shouldErr bool, err error) {
-	if err := checkErr(shouldErr, err); err != nil {
+	if checkErr := checkErr(shouldErr, err); checkErr != nil {
 		t.Error(err)
 	}
 }
 
+// CheckNoError verifies that no error occurred
 func CheckNoError(t *testing.T, err error) {
 	if err != nil {
 		t.Errorf("%+v", err)
@@ -103,10 +116,10 @@ func CheckNoError(t *testing.T, err error) {
 
 func checkErr(shouldErr bool, err error) error {
 	if err == nil && shouldErr {
-		return fmt.Errorf("Expected error, but returned none")
+		return fmt.Errorf("expected error, but returned none")
 	}
 	if err != nil && !shouldErr {
-		return fmt.Errorf("Unexpected error: %w", err)
+		return fmt.Errorf("unexpected error: %w", err)
 	}
 	return nil
 }

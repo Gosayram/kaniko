@@ -14,56 +14,73 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// Package constants defines common constants used throughout the Kaniko project
+// including file paths, configuration values, and environment variable names
 package constants
 
 const (
 	// RootDir is the path to the root directory
 	RootDir = "/"
 
+	// MountInfoPath is the path to the mount information file in proc filesystem
 	MountInfoPath = "/proc/self/mountinfo"
 
+	// DefaultKanikoPath is the default path where Kaniko stores its working files
 	DefaultKanikoPath = "/kaniko"
 
+	// Author is the default author name used in image metadata
 	Author = "kaniko"
 
 	// ContextTar is the default name of the tar uploaded to GCS buckets
 	ContextTar = "context.tar.gz"
 
-	// Various snapshot modes:
+	// SnapshotModeTime is the time-based snapshot mode for filesystem tracking
 	SnapshotModeTime = "time"
+	// SnapshotModeFull is the full filesystem snapshot mode
 	SnapshotModeFull = "full"
+	// SnapshotModeRedo is the redo-based snapshot mode for filesystem tracking
 	SnapshotModeRedo = "redo"
 
 	// NoBaseImage is the scratch image
 	NoBaseImage = "scratch"
 
-	GCSBuildContextPrefix      = "gs://"
-	S3BuildContextPrefix       = "s3://"
+	// GCSBuildContextPrefix is the prefix for Google Cloud Storage build contexts
+	GCSBuildContextPrefix = "gs://"
+	// S3BuildContextPrefix is the prefix for Amazon S3 build contexts
+	S3BuildContextPrefix = "s3://"
+	// LocalDirBuildContextPrefix is the prefix for local directory build contexts
 	LocalDirBuildContextPrefix = "dir://"
-	GitBuildContextPrefix      = "git://"
-	HTTPSBuildContextPrefix    = "https://"
+	// GitBuildContextPrefix is the prefix for Git repository build contexts
+	GitBuildContextPrefix = "git://"
+	// HTTPSBuildContextPrefix is the prefix for HTTPS build contexts
+	HTTPSBuildContextPrefix = "https://"
 
+	// HOME is the environment variable name for the home directory
 	HOME = "HOME"
 	// DefaultHOMEValue is the default value Docker sets for $HOME
 	DefaultHOMEValue = "/root"
-	RootUser         = "root"
+	// RootUser is the default root user name
+	RootUser = "root"
 
-	// Docker command names
-	Cmd        = "CMD"
+	// Cmd represents the CMD Dockerfile instruction name
+	Cmd = "CMD"
+	// Entrypoint represents the ENTRYPOINT Dockerfile instruction name
 	Entrypoint = "ENTRYPOINT"
 
-	// Name of the .dockerignore file
+	// Dockerignore is the name of the .dockerignore file used for file exclusion
 	Dockerignore = ".dockerignore"
 
-	// S3 Custom endpoint ENV name
-	S3EndpointEnv    = "S3_ENDPOINT"
+	// S3EndpointEnv is the environment variable name for S3 custom endpoint configuration
+	S3EndpointEnv = "S3_ENDPOINT"
+	// S3ForcePathStyle is the environment variable name for S3 force path style configuration
 	S3ForcePathStyle = "S3_FORCE_PATH_STYLE"
 )
 
 // ScratchEnvVars are the default environment variables needed for a scratch image.
 var ScratchEnvVars = []string{"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"}
 
-// AzureBlobStorageHostRegEx is ReqEX for Valid azure blob storage host suffix in url for AzureCloud, AzureChinaCloud, AzureGermanCloud and AzureUSGovernment
+// AzureBlobStorageHostRegEx contains regex patterns for valid Azure blob storage host suffixes
+// across different Azure clouds: AzureCloud, AzureChinaCloud, AzureGermanCloud, and AzureUSGovernment
 var AzureBlobStorageHostRegEx = []string{
 	"https://(.+?)\\.blob\\.core\\.windows\\.net/(.+)",
 	"https://(.+?)\\.blob\\.core\\.chinacloudapi\\.cn/(.+)",

@@ -17,12 +17,14 @@ limitations under the License.
 package commands
 
 import (
-	"github.com/GoogleContainerTools/kaniko/pkg/dockerfile"
-	"github.com/GoogleContainerTools/kaniko/pkg/util"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/moby/buildkit/frontend/dockerfile/instructions"
+
+	"github.com/Gosayram/kaniko/pkg/dockerfile"
+	"github.com/Gosayram/kaniko/pkg/util"
 )
 
+// ArgCommand implements the Dockerfile ARG instruction
 type ArgCommand struct {
 	BaseCommand
 	cmd *instructions.ArgCommand
@@ -41,13 +43,15 @@ func (r *ArgCommand) ExecuteCommand(config *v1.Config, buildArgs *dockerfile.Bui
 	return nil
 }
 
-func ParseArg(key string, val *string, env []string, ba *dockerfile.BuildArgs) (string, *string, error) {
+// ParseArg parses and resolves ARG key/value pairs with environment variable substitution
+func ParseArg(key string, val *string, env []string,
+	ba *dockerfile.BuildArgs) (resolvedKey string, resolvedValue *string, err error) {
 	replacementEnvs := ba.ReplacementEnvs(env)
-	resolvedKey, err := util.ResolveEnvironmentReplacement(key, replacementEnvs, false)
+	resolvedKey, err = util.ResolveEnvironmentReplacement(key, replacementEnvs, false)
 	if err != nil {
 		return "", nil, err
 	}
-	var resolvedValue *string
+
 	if val != nil {
 		value, err := util.ResolveEnvironmentReplacement(*val, replacementEnvs, false)
 		if err != nil {

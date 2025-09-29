@@ -20,19 +20,22 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/GoogleContainerTools/kaniko/pkg/dockerfile"
-	"github.com/GoogleContainerTools/kaniko/pkg/util"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/moby/buildkit/frontend/dockerfile/instructions"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
+
+	"github.com/Gosayram/kaniko/pkg/dockerfile"
+	"github.com/Gosayram/kaniko/pkg/util"
 )
 
+// UserCommand implements the Dockerfile USER instruction
 type UserCommand struct {
 	BaseCommand
 	cmd *instructions.UserCommand
 }
 
+// ExecuteCommand processes the USER instruction by setting the user/group for subsequent commands
 func (r *UserCommand) ExecuteCommand(config *v1.Config, buildArgs *dockerfile.BuildArgs) error {
 	logrus.Info("Cmd: USER")
 	u := r.cmd.User

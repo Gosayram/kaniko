@@ -17,18 +17,20 @@ limitations under the License.
 package commands
 
 import (
-	"github.com/GoogleContainerTools/kaniko/pkg/dockerfile"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/moby/buildkit/frontend/dockerfile/instructions"
+
+	"github.com/Gosayram/kaniko/pkg/dockerfile"
 )
 
+// ShellCommand implements the Dockerfile SHELL instruction
 type ShellCommand struct {
 	BaseCommand
 	cmd *instructions.ShellCommand
 }
 
 // ExecuteCommand handles command processing similar to CMD and RUN,
-func (s *ShellCommand) ExecuteCommand(config *v1.Config, buildArgs *dockerfile.BuildArgs) error {
+func (s *ShellCommand) ExecuteCommand(config *v1.Config, _ *dockerfile.BuildArgs) error {
 	config.Shell = s.cmd.Shell
 	return nil
 }

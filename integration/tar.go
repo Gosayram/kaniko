@@ -21,9 +21,16 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
-	"github.com/GoogleContainerTools/kaniko/pkg/util"
+	"github.com/Gosayram/kaniko/pkg/util"
+)
+
+// File permissions constants
+const (
+	filePerm = 0o600
 )
 
 // CreateIntegrationTarball will take the contents of the integration directory and write
@@ -32,15 +39,20 @@ func CreateIntegrationTarball() (string, error) {
 	log.Println("Creating tarball of integration test files to use as build context")
 	dir, err := os.Getwd()
 	if err != nil {
-		return "nil", fmt.Errorf("Failed find path to integration dir: %w", err)
+		return "nil", fmt.Errorf("failed find path to integration dir: %w", err)
 	}
 	tempDir, err := os.MkdirTemp("", "")
 	if err != nil {
-		return "", fmt.Errorf("Failed to create temporary directory to hold tarball: %w", err)
+		return "", fmt.Errorf("failed to create temporary directory to hold tarball: %w", err)
 	}
 	contextFilePath := fmt.Sprintf("%s/context_%d.tar.gz", tempDir, time.Now().UnixNano())
+	// Validate the file path to prevent directory traversal
+	cleanContextFilePath := filepath.Clean(contextFilePath)
+	if !strings.HasPrefix(cleanContextFilePath, tempDir) {
+		return "", fmt.Errorf("invalid file path: potential directory traversal detected")
+	}
 
-	file, err := os.OpenFile(contextFilePath, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0644)
+	file, err := os.OpenFile(cleanContextFilePath, os.O_RDWR|os.O_CREATE|os.O_TRUNC, filePerm)
 	if err != nil {
 		return "", err
 	}

@@ -23,14 +23,15 @@ import (
 	"path/filepath"
 	"strings"
 
-	kConfig "github.com/GoogleContainerTools/kaniko/pkg/config"
-	"github.com/GoogleContainerTools/kaniko/pkg/constants"
-	"github.com/GoogleContainerTools/kaniko/pkg/util"
-	"github.com/GoogleContainerTools/kaniko/pkg/util/bucket"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	s3manager "github.com/aws/aws-sdk-go-v2/feature/s3/manager"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+
+	kConfig "github.com/Gosayram/kaniko/pkg/config"
+	"github.com/Gosayram/kaniko/pkg/constants"
+	"github.com/Gosayram/kaniko/pkg/util"
+	"github.com/Gosayram/kaniko/pkg/util/bucket"
 )
 
 // S3 unifies calls to download and unpack the build context.
@@ -40,52 +41,48 @@ type S3 struct {
 
 // UnpackTarFromBuildContext download and untar a file from s3
 func (s *S3) UnpackTarFromBuildContext() (string, error) {
-	bucket, item, err := bucket.GetNameAndFilepathFromURI(s.context)
+	bucketName, item, err := bucket.GetNameAndFilepathFromURI(s.context)
 	if err != nil {
 		return "", fmt.Errorf("getting bucketname and filepath from context: %w", err)
 	}
 
 	endpoint := os.Getenv(constants.S3EndpointEnv)
-	forcePath := false
-	if strings.ToLower(os.Getenv(constants.S3ForcePathStyle)) == "true" {
-		forcePath = true
-	}
+	forcePath := strings.ToLower(os.Getenv(constants.S3ForcePathStyle)) == "true"
 
-	customResolver := aws.EndpointResolverWithOptionsFunc(func(service, region string, options ...interface{}) (aws.Endpoint, error) {
-		if endpoint != "" {
-			return aws.Endpoint{
-				URL: endpoint,
-			}, nil
-		}
-		return aws.Endpoint{}, &aws.EndpointNotFoundError{}
-	})
-
-	cfg, err := config.LoadDefaultConfig(context.TODO(), config.WithEndpointResolverWithOptions(customResolver))
+	cfg, err := config.LoadDefaultConfig(context.TODO())
 	if err != nil {
-		return bucket, err
+		return bucketName, err
 	}
 	client := s3.NewFromConfig(cfg, func(options *s3.Options) {
 		if endpoint != "" {
 			options.UsePathStyle = forcePath
+			options.BaseEndpoint = aws.String(endpoint)
 		}
 	})
 	downloader := s3manager.NewDownloader(client)
 	directory := kConfig.BuildContextDir
 	tarPath := filepath.Join(directory, constants.ContextTar)
-	if err := os.MkdirAll(directory, 0750); err != nil {
+	const s3DirPermission = 0o750
+
+	if mkdirErr := os.MkdirAll(directory, s3DirPermission); mkdirErr != nil {
 		return directory, err
 	}
-	file, err := os.Create(tarPath)
+	// Ensure tarPath stays within the intended directory
+	if !strings.HasPrefix(filepath.Clean(tarPath), directory) {
+		return directory, fmt.Errorf("potential path traversal attempt - "+
+			"tarPath %s not within directory %s", tarPath, directory)
+	}
+	file, err := os.Create(filepath.Clean(tarPath))
 	if err != nil {
 		return directory, err
 	}
-	_, err = downloader.Download(context.TODO(), file,
+	_, downloadErr := downloader.Download(context.TODO(), file,
 		&s3.GetObjectInput{
-			Bucket: aws.String(bucket),
+			Bucket: aws.String(bucketName),
 			Key:    aws.String(item),
 		})
-	if err != nil {
-		return directory, err
+	if downloadErr != nil {
+		return directory, downloadErr
 	}
 
 	return directory, util.UnpackCompressedTar(tarPath, directory)

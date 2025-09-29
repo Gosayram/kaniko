@@ -21,10 +21,16 @@ import (
 	"fmt"
 	"os"
 
-	kConfig "github.com/GoogleContainerTools/kaniko/pkg/config"
-	"github.com/GoogleContainerTools/kaniko/pkg/util"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
+
+	kConfig "github.com/Gosayram/kaniko/pkg/config"
+	"github.com/Gosayram/kaniko/pkg/util"
+)
+
+// Directory permissions constants
+const (
+	dirPerm = 0o750
 )
 
 // Tar unifies calls to download and unpack the build context.
@@ -35,7 +41,7 @@ type Tar struct {
 // UnpackTarFromBuildContext unpack the compressed tar file
 func (t *Tar) UnpackTarFromBuildContext() (string, error) {
 	directory := kConfig.BuildContextDir
-	if err := os.MkdirAll(directory, 0750); err != nil {
+	if err := os.MkdirAll(directory, dirPerm); err != nil {
 		return "", errors.Wrap(err, "unpacking tar from build context")
 	}
 	if t.context == "stdin" {
@@ -52,9 +58,7 @@ func (t *Tar) UnpackTarFromBuildContext() (string, error) {
 		}
 		defer gzr.Close()
 		_, err = util.UnTar(gzr, directory)
-
 		return directory, err
-
 	}
 
 	return directory, util.UnpackCompressedTar(t.context, directory)

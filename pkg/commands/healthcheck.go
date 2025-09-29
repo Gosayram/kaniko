@@ -17,10 +17,11 @@ limitations under the License.
 package commands
 
 import (
-	"github.com/GoogleContainerTools/kaniko/pkg/dockerfile"
 	"github.com/docker/docker/api/types/container"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/moby/buildkit/frontend/dockerfile/instructions"
+
+	"github.com/Gosayram/kaniko/pkg/dockerfile"
 )
 
 func convertDockerHealthConfigToContainerRegistryFormat(dockerHealthcheck container.HealthConfig) v1.HealthConfig {
@@ -33,13 +34,14 @@ func convertDockerHealthConfigToContainerRegistryFormat(dockerHealthcheck contai
 	}
 }
 
+// HealthCheckCommand implements the Dockerfile HEALTHCHECK instruction
 type HealthCheckCommand struct {
 	BaseCommand
 	cmd *instructions.HealthCheckCommand
 }
 
 // ExecuteCommand handles command processing similar to CMD and RUN,
-func (h *HealthCheckCommand) ExecuteCommand(config *v1.Config, buildArgs *dockerfile.BuildArgs) error {
+func (h *HealthCheckCommand) ExecuteCommand(config *v1.Config, _ *dockerfile.BuildArgs) error {
 	check := convertDockerHealthConfigToContainerRegistryFormat(*h.cmd.Health)
 	config.Healthcheck = &check
 

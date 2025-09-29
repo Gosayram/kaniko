@@ -45,6 +45,9 @@ type RegistryOptions struct {
 	SkipTLSVerifyPull            bool
 	PushIgnoreImmutableTagErrors bool
 	PushRetry                    int
+	PushRetryInitialDelay        int
+	PushRetryMaxDelay            int
+	PushRetryBackoffMultiplier   float64
 	ImageDownloadRetry           int
 }
 
@@ -91,8 +94,43 @@ type KanikoOptions struct {
 	ForceBuildMetadata       bool
 	InitialFSUnpacked        bool
 	SkipPushPermissionCheck  bool
+
+	// Multi-platform build options
+	MultiPlatform       multiArg         // --multi-platform=linux/amd64,linux/arm64
+	PublishIndex        bool             // --publish-index[=true|false]
+	LegacyManifestList  bool             // --legacy-manifest-list[=true|false]
+	IndexAnnotations    multiKeyValueArg // --index-annotations=key=value,...
+	ArchCacheRepoSuffix string           // --arch-cache-repo-suffix=-${ARCH}
+	Driver              string           // --driver=[local|k8s|ci]
+	DigestsFrom         string           // --digests-from=/path
+	RequireNativeNodes  bool             // --require-native-nodes=true
+	OCIMode             string           // --oci-mode=[oci|auto|docker]
+	SignImages          bool             // --sign-images[=true|false]
+	CosignKeyPath       string           // --cosign-key-path=/path/to/key
+	CosignKeyPassword   string           // --cosign-key-password=secret
+
+	// Debug options for enhanced debugging and development
+	DebugOptions
 }
 
+// DebugOptions are options for enhanced debugging and development
+type DebugOptions struct {
+	EnableFullDebug       bool     `json:"enableFullDebug" yaml:"enableFullDebug"`
+	DebugBuildSteps       bool     `json:"debugBuildSteps" yaml:"debugBuildSteps"`
+	DebugMultiPlatform    bool     `json:"debugMultiPlatform" yaml:"debugMultiPlatform"`
+	DebugOCIOperations    bool     `json:"debugOCIOperations" yaml:"debugOCIOperations"`
+	DebugDriverOperations bool     `json:"debugDriverOperations" yaml:"debugDriverOperations"`
+	DebugFilesystem       bool     `json:"debugFilesystem" yaml:"debugFilesystem"`
+	DebugCacheOperations  bool     `json:"debugCacheOperations" yaml:"debugCacheOperations"`
+	DebugRegistry         bool     `json:"debugRegistry" yaml:"debugRegistry"`
+	DebugSigning          bool     `json:"debugSigning" yaml:"debugSigning"`
+	OutputDebugFiles      bool     `json:"outputDebugFiles" yaml:"outputDebugFiles"`
+	DebugLogLevel         string   `json:"debugLogLevel" yaml:"debugLogLevel"`     // trace, debug, info
+	DebugComponents       []string `json:"debugComponents" yaml:"debugComponents"` // specific components to debug
+}
+
+// KanikoGitOptions represents Git-specific configuration options
+// for handling Git repositories as build contexts
 type KanikoGitOptions struct {
 	Branch            string
 	SingleBranch      bool
@@ -100,8 +138,10 @@ type KanikoGitOptions struct {
 	InsecureSkipTLS   bool
 }
 
+// ErrInvalidGitFlag is returned when Git flag format is invalid
 var ErrInvalidGitFlag = errors.New("invalid git flag, must be in the key=value format")
 
+// Type returns the string identifier for Git options type
 func (k *KanikoGitOptions) Type() string {
 	return "gitoptions"
 }
@@ -110,9 +150,13 @@ func (k *KanikoGitOptions) String() string {
 	return fmt.Sprintf("branch=%s,single-branch=%t,recurse-submodules=%t", k.Branch, k.SingleBranch, k.RecurseSubmodules)
 }
 
+// Set parses and applies Git configuration options from string format
 func (k *KanikoGitOptions) Set(s string) error {
-	var parts = strings.SplitN(s, "=", 2)
-	if len(parts) != 2 {
+	// splitLimit is the limit for strings.SplitN operations when parsing key=value pairs
+	const splitLimit = 2
+
+	var parts = strings.SplitN(s, "=", splitLimit)
+	if len(parts) != splitLimit {
 		return fmt.Errorf("%w: %s", ErrInvalidGitFlag, s)
 	}
 	switch parts[0] {
@@ -153,6 +197,7 @@ func (c *Compression) String() string {
 	return string(*c)
 }
 
+// Set validates and sets the compression algorithm from string value
 func (c *Compression) Set(v string) error {
 	switch v {
 	case "gzip", "zstd":
@@ -163,6 +208,7 @@ func (c *Compression) Set(v string) error {
 	}
 }
 
+// Type returns the string identifier for compression type
 func (c *Compression) Type() string {
 	return "compression"
 }

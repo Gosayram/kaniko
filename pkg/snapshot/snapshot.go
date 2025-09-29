@@ -25,13 +25,12 @@ import (
 	"sort"
 	"syscall"
 
-	"github.com/GoogleContainerTools/kaniko/pkg/config"
-	"github.com/GoogleContainerTools/kaniko/pkg/filesystem"
-	"github.com/GoogleContainerTools/kaniko/pkg/timing"
-	"github.com/GoogleContainerTools/kaniko/pkg/util"
+	"github.com/Gosayram/kaniko/pkg/config"
+	"github.com/Gosayram/kaniko/pkg/filesystem"
+	"github.com/Gosayram/kaniko/pkg/timing"
+	"github.com/Gosayram/kaniko/pkg/util"
 
 	"github.com/sirupsen/logrus"
-	"golang.org/x/sys/unix"
 )
 
 // For testing
@@ -63,7 +62,7 @@ func (s *Snapshotter) Key() (string, error) {
 
 // TakeSnapshot takes a snapshot of the specified files, avoiding directories in the ignorelist, and creates
 // a tarball of the changed files. Return contents of the tarball, and whether or not any files were changed
-func (s *Snapshotter) TakeSnapshot(files []string, shdCheckDelete bool, forceBuildMetadata bool) (string, error) {
+func (s *Snapshotter) TakeSnapshot(files []string, shdCheckDelete, forceBuildMetadata bool) (string, error) {
 	f, err := os.CreateTemp(config.KanikoDir, "")
 	if err != nil {
 		return "", err
@@ -89,14 +88,14 @@ func (s *Snapshotter) TakeSnapshot(files []string, shdCheckDelete bool, forceBui
 	// Add files to current layer.
 	for _, file := range filesToAdd {
 		if err := s.l.Add(file); err != nil {
-			return "", fmt.Errorf("Unable to add file %s to layered map: %w", file, err)
+			return "", fmt.Errorf("unable to add file %s to layered map: %w", file, err)
 		}
 	}
 
 	// Get whiteout paths
 	var filesToWhiteout []string
 	if shdCheckDelete {
-		_, deletedFiles := util.WalkFS(s.directory, s.l.GetCurrentPaths(), func(s string) (bool, error) {
+		_, deletedFiles := util.WalkFS(s.directory, s.l.GetCurrentPaths(), func(_ string) (bool, error) {
 			return true, nil
 		})
 
@@ -104,7 +103,7 @@ func (s *Snapshotter) TakeSnapshot(files []string, shdCheckDelete bool, forceBui
 		// Whiteout files in current layer.
 		for file := range deletedFiles {
 			if err := s.l.AddDelete(file); err != nil {
-				return "", fmt.Errorf("Unable to whiteout file %s in layered map: %w", file, err)
+				return "", fmt.Errorf("unable to whiteout file %s in layered map: %w", file, err)
 			}
 		}
 
@@ -123,7 +122,7 @@ func (s *Snapshotter) TakeSnapshot(files []string, shdCheckDelete bool, forceBui
 // TakeSnapshotFS takes a snapshot of the filesystem, avoiding directories in the ignorelist, and creates
 // a tarball of the changed files.
 func (s *Snapshotter) TakeSnapshotFS() (string, error) {
-	f, err := os.CreateTemp(s.getSnashotPathPrefix(), "")
+	f, err := os.CreateTemp(s.getSnapshotPathPrefix(), "")
 	if err != nil {
 		return "", err
 	}
@@ -142,14 +141,14 @@ func (s *Snapshotter) TakeSnapshotFS() (string, error) {
 	return f.Name(), nil
 }
 
-func (s *Snapshotter) getSnashotPathPrefix() string {
+func (s *Snapshotter) getSnapshotPathPrefix() string {
 	if snapshotPathPrefix == "" {
 		return config.KanikoDir
 	}
 	return snapshotPathPrefix
 }
 
-func (s *Snapshotter) scanFullFilesystem() ([]string, []string, error) {
+func (s *Snapshotter) scanFullFilesystem() (filesToAdd, filesToWhiteout []string, err error) {
 	logrus.Info("Taking snapshot of full filesystem...")
 
 	// Some of the operations that follow (e.g. hashing) depend on the file system being synced,
@@ -157,17 +156,17 @@ func (s *Snapshotter) scanFullFilesystem() ([]string, []string, error) {
 	// which can lag if sync is not called. Unfortunately there can still be lag if too much data needs
 	// to be flushed or the disk does its own caching/buffering.
 	if runtime.GOOS == "linux" {
-		dir, err := os.Open(s.directory)
-		if err != nil {
-			return nil, nil, err
+		dir, openErr := os.Open(s.directory)
+		if openErr != nil {
+			return nil, nil, openErr
 		}
 		defer dir.Close()
-		_, _, errno := syscall.Syscall(unix.SYS_SYNCFS, dir.Fd(), 0, 0)
-		if errno != 0 {
-			return nil, nil, errno
-		}
+		// Try to use syncfs for Linux systems - this is more efficient than syncing all filesystems
+		// The syncfs system call number varies by architecture, so we need to handle this carefully
+		// For most modern Linux systems, syncfs is available
+		trySyncFs(dir)
 	} else {
-		// fallback to full page cache sync
+		// fallback to full page cache sync for non-Linux systems
 		syscall.Sync()
 	}
 
@@ -178,7 +177,7 @@ func (s *Snapshotter) scanFullFilesystem() ([]string, []string, error) {
 	changedPaths, deletedPaths := util.WalkFS(s.directory, s.l.GetCurrentPaths(), s.l.CheckFileChange)
 	timer := timing.Start("Resolving Paths")
 
-	filesToAdd := []string{}
+	filesToAdd = []string{}
 	resolvedFiles, err := filesystem.ResolvePaths(changedPaths, s.ignorelist)
 	if err != nil {
 		return nil, nil, err
@@ -197,16 +196,16 @@ func (s *Snapshotter) scanFullFilesystem() ([]string, []string, error) {
 	// Add files to the layered map
 	for _, file := range filesToAdd {
 		if err := s.l.Add(file); err != nil {
-			return nil, nil, fmt.Errorf("Unable to add file %s to layered map: %w", file, err)
+			return nil, nil, fmt.Errorf("unable to add file %s to layered map: %w", file, err)
 		}
 	}
 	for file := range deletedPaths {
 		if err := s.l.AddDelete(file); err != nil {
-			return nil, nil, fmt.Errorf("Unable to whiteout file %s in layered map: %w", file, err)
+			return nil, nil, fmt.Errorf("unable to whiteout file %s in layered map: %w", file, err)
 		}
 	}
 
-	filesToWhiteout := removeObsoleteWhiteouts(deletedPaths)
+	filesToWhiteout = removeObsoleteWhiteouts(deletedPaths)
 	timing.DefaultRun.Stop(timer)
 
 	sort.Strings(filesToAdd)
@@ -217,7 +216,6 @@ func (s *Snapshotter) scanFullFilesystem() ([]string, []string, error) {
 
 // removeObsoleteWhiteouts filters deleted files according to their parents delete status.
 func removeObsoleteWhiteouts(deletedFiles map[string]struct{}) (filesToWhiteout []string) {
-
 	for path := range deletedFiles {
 		// Only add the whiteout if the directory for the file still exists.
 		dir := filepath.Dir(path)
@@ -310,7 +308,36 @@ func filesWithLinks(path string) ([]string, error) {
 		link = filepath.Join(filepath.Dir(path), link)
 	}
 	if _, err := os.Stat(link); err != nil {
-		return []string{path}, nil //nolint:nilerr
+		return []string{path}, nil //nolint:nilerr // it's acceptable to ignore file not found errors for symlink targets
 	}
 	return []string{path, link}, nil
+}
+
+// trySyncFs attempts to use the syncfs system call on Linux systems
+// If syncfs is not available or fails, it falls back to syscall.Sync()
+func trySyncFs(dir *os.File) {
+	// syncfs system call numbers for different architectures
+	// These values are from the Linux kernel and may vary by architecture
+	var syncFsSyscallNum uintptr
+
+	// Determine the appropriate syscall number based on architecture
+	switch runtime.GOARCH {
+	case "amd64", "386":
+		syncFsSyscallNum = 306 // SYS_SYNCFS for x86/x86_64
+	case "arm", "arm64":
+		syncFsSyscallNum = 267 // SYS_SYNCFS for ARM
+	case "ppc64", "ppc64le":
+		syncFsSyscallNum = 348 // SYS_SYNCFS for PowerPC
+	default:
+		// For unknown architectures, use regular sync
+		syscall.Sync()
+		return
+	}
+
+	// Try the syncfs system call
+	_, _, errno := syscall.Syscall(syncFsSyscallNum, dir.Fd(), 0, 0)
+	if errno != 0 {
+		// If syncfs fails, fall back to regular sync
+		syscall.Sync()
+	}
 }

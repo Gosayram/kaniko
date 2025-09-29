@@ -26,13 +26,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/GoogleContainerTools/kaniko/pkg/cache"
-	"github.com/GoogleContainerTools/kaniko/pkg/config"
-	"github.com/GoogleContainerTools/kaniko/pkg/constants"
-	"github.com/GoogleContainerTools/kaniko/pkg/creds"
-	"github.com/GoogleContainerTools/kaniko/pkg/timing"
-	"github.com/GoogleContainerTools/kaniko/pkg/util"
-	"github.com/GoogleContainerTools/kaniko/pkg/version"
 	"github.com/google/go-containerregistry/pkg/name"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/empty"
@@ -45,6 +38,14 @@ import (
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/afero"
+
+	"github.com/Gosayram/kaniko/pkg/cache"
+	"github.com/Gosayram/kaniko/pkg/config"
+	"github.com/Gosayram/kaniko/pkg/constants"
+	"github.com/Gosayram/kaniko/pkg/creds"
+	"github.com/Gosayram/kaniko/pkg/timing"
+	"github.com/Gosayram/kaniko/pkg/util"
+	"github.com/Gosayram/kaniko/pkg/version"
 )
 
 type withUserAgent struct {
@@ -58,9 +59,24 @@ var (
 )
 
 const (
+	// UpstreamClientUaKey is the environment variable key for upstream client type
+	// used to set User-Agent header in HTTP requests
 	UpstreamClientUaKey = "UPSTREAM_CLIENT_TYPE"
-	DummyDestination    = "docker.io/unset-repo/unset-image-name"
+	// DummyDestination is a placeholder destination used when no push destinations are specified
+	DummyDestination = "docker.io/unset-repo/unset-image-name"
 )
+
+// File permission constants
+const (
+	dirPermission  = 0o700
+	filePermission = 0o600
+)
+
+// pushRetryDelay is the initial delay between push retry attempts in milliseconds
+const pushRetryDelay = 1000
+
+// defaultBackoffMultiplier is default multiplier for exponential backoff
+const defaultBackoffMultiplier = 2.0
 
 var (
 	// known tag immutability errors
@@ -92,11 +108,12 @@ var (
 func CheckPushPermissions(opts *config.KanikoOptions) error {
 	targets := opts.Destinations
 	// When no push and no push cache are set, we don't need to check permissions
-	if opts.SkipPushPermissionCheck {
+	switch {
+	case opts.SkipPushPermissionCheck:
 		targets = []string{}
-	} else if opts.NoPush && opts.NoPushCache {
+	case opts.NoPush && opts.NoPushCache:
 		targets = []string{}
-	} else if opts.NoPush && !opts.NoPushCache {
+	case opts.NoPush && !opts.NoPushCache:
 		// When no push is set, we want to check permissions for the cache repo
 		// instead of the destinations
 		if isOCILayout(opts.CacheRepo) {
@@ -116,21 +133,21 @@ func CheckPushPermissions(opts *config.KanikoOptions) error {
 			continue
 		}
 
-		registryName := destRef.Repository.Registry.Name()
+		registryName := destRef.Registry.Name()
 		if opts.Insecure || opts.InsecureRegistries.Contains(registryName) {
-			newReg, err := name.NewRegistry(registryName, name.WeakValidation, name.Insecure)
-			if err != nil {
-				return errors.Wrap(err, "getting new insecure registry")
+			newReg, regErr := name.NewRegistry(registryName, name.WeakValidation, name.Insecure)
+			if regErr != nil {
+				return errors.Wrap(regErr, "getting new insecure registry")
 			}
-			destRef.Repository.Registry = newReg
+			destRef.Registry = newReg
 		}
-		rt, err := util.MakeTransport(opts.RegistryOptions, registryName)
+		rt, err := util.MakeTransport(&opts.RegistryOptions, registryName)
 		if err != nil {
 			return errors.Wrapf(err, "making transport for registry %q", registryName)
 		}
 		tr := newRetry(rt)
-		if err := checkRemotePushPermission(destRef, creds.GetKeychain(), tr); err != nil {
-			return errors.Wrapf(err, "checking push permission for %q", destRef)
+		if pushErr := checkRemotePushPermission(destRef, creds.GetKeychain(), tr); pushErr != nil {
+			return errors.Wrapf(pushErr, "checking push permission for %q", destRef)
 		}
 		checked[destRef.Context().String()] = true
 	}
@@ -148,24 +165,28 @@ func getDigest(image v1.Image) ([]byte, error) {
 func writeDigestFile(path string, digestByteArray []byte) error {
 	if strings.HasPrefix(path, "https://") {
 		// Do a HTTP PUT to the URL; this could be a pre-signed URL to S3 or GCS or Azure
-		req, err := http.NewRequest("PUT", path, bytes.NewReader(digestByteArray)) //nolint:noctx
+		req, err := http.NewRequest("PUT", path, bytes.NewReader(digestByteArray)) //nolint:noctx // no ctx for HTTP PUT
 		if err != nil {
 			return err
 		}
 		req.Header.Set("Content-Type", "text/plain")
-		_, err = http.DefaultClient.Do(req)
-		return err
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return err
+		}
+		defer resp.Body.Close()
+		return nil
 	}
 
 	parentDir := filepath.Dir(path)
 	if _, err := os.Stat(parentDir); os.IsNotExist(err) {
-		if err := os.MkdirAll(parentDir, 0700); err != nil {
+		if err := os.MkdirAll(parentDir, dirPermission); err != nil {
 			logrus.Debugf("Error creating %s, %s", parentDir, err)
 			return err
 		}
 		logrus.Tracef("Created directory %v", parentDir)
 	}
-	return os.WriteFile(path, digestByteArray, 0644)
+	return os.WriteFile(path, digestByteArray, filePermission)
 }
 
 // DoPush is responsible for pushing image to the destinations specified in opts.
@@ -173,49 +194,89 @@ func writeDigestFile(path string, digestByteArray []byte) error {
 // is not empty with empty --destinations.
 func DoPush(image v1.Image, opts *config.KanikoOptions) error {
 	t := timing.Start("Total Push Time")
-	var digestByteArray []byte
-	var builder strings.Builder
+	defer timing.DefaultRun.Stop(t)
 
 	if !opts.NoPush && len(opts.Destinations) == 0 {
 		return errors.New("must provide at least one destination to push")
 	}
 
+	digestByteArray, handleErr := handleDigestFiles(image, opts)
+	if handleErr != nil {
+		return handleErr
+	}
+
+	if layoutErr := handleOCILayout(image, opts); layoutErr != nil {
+		return layoutErr
+	}
+
+	if opts.NoPush && len(opts.Destinations) == 0 && opts.TarPath != "" {
+		setDummyDestinations(opts)
+	}
+
+	destRefs, err := createDestRefs(opts, digestByteArray)
+	if err != nil {
+		return err
+	}
+
+	if err := handleTarballCreation(image, opts, destRefs); err != nil {
+		return err
+	}
+
+	if opts.NoPush {
+		logrus.Info("Skipping push to container registry due to --no-push flag")
+		return nil
+	}
+
+	if err := pushToDestinations(image, opts, destRefs); err != nil {
+		return err
+	}
+
+	return writeImageOutputs(image, destRefs)
+}
+
+func handleDigestFiles(image v1.Image, opts *config.KanikoOptions) ([]byte, error) {
+	var digestByteArray []byte
+
 	if opts.DigestFile != "" || opts.ImageNameDigestFile != "" || opts.ImageNameTagDigestFile != "" {
 		var err error
 		digestByteArray, err = getDigest(image)
 		if err != nil {
-			return errors.Wrap(err, "error fetching digest")
+			return nil, errors.Wrap(err, "error fetching digest")
 		}
 	}
 
 	if opts.DigestFile != "" {
-		err := writeDigestFile(opts.DigestFile, digestByteArray)
-		if err != nil {
-			return errors.Wrap(err, "writing digest to file failed")
+		if err := writeDigestFile(opts.DigestFile, digestByteArray); err != nil {
+			return nil, errors.Wrap(err, "writing digest to file failed")
 		}
 	}
 
-	if opts.OCILayoutPath != "" {
-		path, err := layout.Write(opts.OCILayoutPath, empty.Index)
-		if err != nil {
-			return errors.Wrap(err, "writing empty layout")
-		}
-		if err := path.AppendImage(image); err != nil {
-			return errors.Wrap(err, "appending image")
-		}
+	return digestByteArray, nil
+}
+
+func handleOCILayout(image v1.Image, opts *config.KanikoOptions) error {
+	if opts.OCILayoutPath == "" {
+		return nil
 	}
 
-	if opts.NoPush && len(opts.Destinations) == 0 {
-		if opts.TarPath != "" {
-			setDummyDestinations(opts)
-		}
+	path, err := layout.Write(opts.OCILayoutPath, empty.Index)
+	if err != nil {
+		return errors.Wrap(err, "writing empty layout")
 	}
+	if err := path.AppendImage(image); err != nil {
+		return errors.Wrap(err, "appending image")
+	}
+	return nil
+}
 
+func createDestRefs(opts *config.KanikoOptions, digestByteArray []byte) ([]name.Tag, error) {
+	var builder strings.Builder
 	destRefs := []name.Tag{}
+
 	for _, destination := range opts.Destinations {
 		destRef, err := name.NewTag(destination, name.WeakValidation)
 		if err != nil {
-			return errors.Wrap(err, "getting tag for destination")
+			return nil, errors.Wrap(err, "getting tag for destination")
 		}
 		if opts.ImageNameDigestFile != "" || opts.ImageNameTagDigestFile != "" {
 			tag := ""
@@ -230,45 +291,44 @@ func DoPush(image v1.Image, opts *config.KanikoOptions) error {
 	}
 
 	if opts.ImageNameDigestFile != "" {
-		err := writeDigestFile(opts.ImageNameDigestFile, []byte(builder.String()))
-		if err != nil {
-			return errors.Wrap(err, "writing image name with digest to file failed")
+		if err := writeDigestFile(opts.ImageNameDigestFile, []byte(builder.String())); err != nil {
+			return nil, errors.Wrap(err, "writing image name with digest to file failed")
 		}
 	}
 
 	if opts.ImageNameTagDigestFile != "" {
-		err := writeDigestFile(opts.ImageNameTagDigestFile, []byte(builder.String()))
-		if err != nil {
-			return errors.Wrap(err, "writing image name with image tag and digest to file failed")
+		if err := writeDigestFile(opts.ImageNameTagDigestFile, []byte(builder.String())); err != nil {
+			return nil, errors.Wrap(err, "writing image name with image tag and digest to file failed")
 		}
 	}
 
-	if opts.TarPath != "" {
-		tagToImage := map[name.Tag]v1.Image{}
+	return destRefs, nil
+}
 
-		for _, destRef := range destRefs {
-			tagToImage[destRef] = image
-		}
-		err := tarball.MultiWriteToFile(opts.TarPath, tagToImage)
-		if err != nil {
-			return errors.Wrap(err, "writing tarball to file failed")
-		}
-	}
-
-	if opts.NoPush {
-		logrus.Info("Skipping push to container registry due to --no-push flag")
+func handleTarballCreation(image v1.Image, opts *config.KanikoOptions, destRefs []name.Tag) error {
+	if opts.TarPath == "" {
 		return nil
 	}
 
-	// continue pushing unless an error occurs
+	tagToImage := map[name.Tag]v1.Image{}
 	for _, destRef := range destRefs {
-		registryName := destRef.Repository.Registry.Name()
+		tagToImage[destRef] = image
+	}
+	if err := tarball.MultiWriteToFile(opts.TarPath, tagToImage); err != nil {
+		return errors.Wrap(err, "writing tarball to file failed")
+	}
+	return nil
+}
+
+func pushToDestinations(image v1.Image, opts *config.KanikoOptions, destRefs []name.Tag) error {
+	for _, destRef := range destRefs {
+		registryName := destRef.Registry.Name()
 		if opts.Insecure || opts.InsecureRegistries.Contains(registryName) {
 			newReg, err := name.NewRegistry(registryName, name.WeakValidation, name.Insecure)
 			if err != nil {
 				return errors.Wrap(err, "getting new insecure registry")
 			}
-			destRef.Repository.Registry = newReg
+			destRef.Registry = newReg
 		}
 
 		pushAuth, err := creds.GetKeychain().Resolve(destRef.Context().Registry)
@@ -276,7 +336,7 @@ func DoPush(image v1.Image, opts *config.KanikoOptions) error {
 			return errors.Wrap(err, "resolving pushAuth")
 		}
 
-		localRt, err := util.MakeTransport(opts.RegistryOptions, registryName)
+		localRt, err := util.MakeTransport(&opts.RegistryOptions, registryName)
 		if err != nil {
 			return errors.Wrapf(err, "making transport for registry %q", registryName)
 		}
@@ -310,12 +370,18 @@ func DoPush(image v1.Image, opts *config.KanikoOptions) error {
 			return nil
 		}
 
-		if err := util.Retry(retryFunc, opts.PushRetry, 1000); err != nil {
+		// Use configurable exponential backoff retry
+		initialDelay := opts.PushRetryInitialDelay
+		if initialDelay <= 0 {
+			initialDelay = pushRetryDelay // fallback to default
+		}
+
+		if err := util.RetryWithConfig(retryFunc, opts.PushRetry, initialDelay,
+			opts.PushRetryMaxDelay, opts.PushRetryBackoffMultiplier, defaultBackoffMultiplier); err != nil {
 			return errors.Wrap(err, fmt.Sprintf("failed to push to destination %s", destRef))
 		}
 	}
-	timing.DefaultRun.Stop(t)
-	return writeImageOutputs(image, destRefs)
+	return nil
 }
 
 func writeImageOutputs(image v1.Image, destRefs []name.Tag) error {
@@ -351,9 +417,9 @@ func writeImageOutputs(image v1.Image, destRefs []name.Tag) error {
 
 // pushLayerToCache pushes layer (tagged with cacheKey) to opts.CacheRepo
 // if opts.CacheRepo doesn't exist, infer the cache from the given destination
-func pushLayerToCache(opts *config.KanikoOptions, cacheKey string, tarPath string, createdBy string) error {
+func pushLayerToCache(opts *config.KanikoOptions, cacheKey, tarPath, createdBy string) error {
 	var layerOpts []tarball.LayerOption
-	if opts.CompressedCaching == true {
+	if opts.CompressedCaching {
 		layerOpts = append(layerOpts, tarball.WithCompressedCaching)
 	}
 
@@ -374,18 +440,18 @@ func pushLayerToCache(opts *config.KanikoOptions, cacheKey string, tarPath strin
 		return err
 	}
 
-	cache, err := cache.Destination(opts, cacheKey)
+	cacheDest, err := cache.Destination(opts, cacheKey)
 	if err != nil {
 		return errors.Wrap(err, "getting cache destination")
 	}
-	logrus.Infof("Pushing layer %s to cache now", cache)
-	empty := empty.Image
-	empty, err = mutate.CreatedAt(empty, v1.Time{Time: time.Now()})
+	logrus.Infof("Pushing layer %s to cache now", cacheDest)
+	emptyImg := empty.Image
+	emptyImg, err = mutate.CreatedAt(emptyImg, v1.Time{Time: time.Now()})
 	if err != nil {
 		return errors.Wrap(err, "setting empty image created time")
 	}
 
-	empty, err = mutate.Append(empty,
+	emptyImg, err = mutate.Append(emptyImg,
 		mutate.Addendum{
 			Layer: layer,
 			History: v1.History{
@@ -400,14 +466,14 @@ func pushLayerToCache(opts *config.KanikoOptions, cacheKey string, tarPath strin
 	cacheOpts := *opts
 	cacheOpts.TarPath = ""              // tarPath doesn't make sense for Docker layers
 	cacheOpts.NoPush = opts.NoPushCache // we do not want to push cache if --no-push-cache is set.
-	cacheOpts.Destinations = []string{cache}
+	cacheOpts.Destinations = []string{cacheDest}
 	cacheOpts.InsecureRegistries = opts.InsecureRegistries
 	cacheOpts.SkipTLSVerifyRegistries = opts.SkipTLSVerifyRegistries
-	if isOCILayout(cache) {
-		cacheOpts.OCILayoutPath = strings.TrimPrefix(cache, "oci:")
+	if isOCILayout(cacheDest) {
+		cacheOpts.OCILayoutPath = strings.TrimPrefix(cacheDest, "oci:")
 		cacheOpts.NoPush = true
 	}
-	return DoPush(empty, &cacheOpts)
+	return DoPush(emptyImg, &cacheOpts)
 }
 
 // setDummyDestinations sets the dummy destinations required to generate new

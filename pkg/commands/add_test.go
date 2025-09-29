@@ -23,11 +23,12 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/GoogleContainerTools/kaniko/pkg/dockerfile"
-	"github.com/GoogleContainerTools/kaniko/pkg/util"
-	"github.com/GoogleContainerTools/kaniko/testutil"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/moby/buildkit/frontend/dockerfile/instructions"
+
+	"github.com/Gosayram/kaniko/pkg/dockerfile"
+	"github.com/Gosayram/kaniko/pkg/util"
+	"github.com/Gosayram/kaniko/testutil"
 )
 
 type TarList struct {
@@ -104,7 +105,7 @@ func setupAddTest(t *testing.T) string {
 	// Create directories with files and then create tar
 	for _, toCreate := range tarFiles {
 
-		err = os.Mkdir(filepath.Join(tempDir, toCreate.directory), 0755)
+		err = os.Mkdir(filepath.Join(tempDir, toCreate.directory), 0o755)
 		if err != nil {
 			t.Errorf("couldn't create directory %v", err)
 		}

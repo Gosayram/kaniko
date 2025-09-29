@@ -17,18 +17,24 @@ limitations under the License.
 package commands
 
 import (
-	"github.com/GoogleContainerTools/kaniko/pkg/dockerfile"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 
-	"github.com/GoogleContainerTools/kaniko/pkg/util"
+	"github.com/Gosayram/kaniko/pkg/dockerfile"
+
 	"github.com/moby/buildkit/frontend/dockerfile/instructions"
+
+	"github.com/Gosayram/kaniko/pkg/util"
 )
 
+// EnvCommand represents the ENV Dockerfile instruction
+// which sets environment variables in the container image
 type EnvCommand struct {
 	BaseCommand
 	cmd *instructions.EnvCommand
 }
 
+// ExecuteCommand processes the ENV instruction by setting environment variables
+// in the container configuration using build arguments replacement
 func (e *EnvCommand) ExecuteCommand(config *v1.Config, buildArgs *dockerfile.BuildArgs) error {
 	newEnvs := e.cmd.Env
 	replacementEnvs := buildArgs.ReplacementEnvs(config.Env)

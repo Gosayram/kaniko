@@ -23,8 +23,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/GoogleContainerTools/kaniko/pkg/util"
 	"github.com/pkg/errors"
+
+	"github.com/Gosayram/kaniko/pkg/util"
 )
 
 // NewCompositeCache returns an initialized composite cache object.
@@ -55,6 +56,7 @@ func (s *CompositeCache) Hash() (string, error) {
 	return util.SHA256(strings.NewReader(s.Key()))
 }
 
+// AddPath adds a file or directory path to the composite cache key
 func (s *CompositeCache) AddPath(p string, context util.FileContext) error {
 	sha := sha256.New()
 	fi, err := os.Lstat(p)
@@ -63,14 +65,14 @@ func (s *CompositeCache) AddPath(p string, context util.FileContext) error {
 	}
 
 	if fi.Mode().IsDir() {
-		empty, k, err := hashDir(p, context)
-		if err != nil {
-			return err
+		isEmptyDir, k, hashErr := hashDir(p, context)
+		if hashErr != nil {
+			return hashErr
 		}
 
 		// Only add the hash of this directory to the key
 		// if there is any ignored content.
-		if !empty || !context.ExcludesFile(p) {
+		if !isEmptyDir || !context.ExcludesFile(p) {
 			s.keys = append(s.keys, k)
 		}
 		return nil
@@ -92,10 +94,10 @@ func (s *CompositeCache) AddPath(p string, context util.FileContext) error {
 }
 
 // HashDir returns a hash of the directory.
-func hashDir(p string, context util.FileContext) (bool, string, error) {
+func hashDir(p string, context util.FileContext) (isEmpty bool, hash string, err error) {
 	sha := sha256.New()
 	empty := true
-	if err := filepath.Walk(p, func(path string, fi os.FileInfo, err error) error {
+	if err := filepath.Walk(p, func(path string, _ os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}

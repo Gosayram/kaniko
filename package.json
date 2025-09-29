@@ -1,0 +1,35 @@
+{
+  "name": "kaniko",
+  "version": "1.24.0",
+  "description": "Build container images from Dockerfiles in a Kubernetes cluster",
+  "main": "cmd/executor/main.go",
+  "scripts": {
+    "test": "go test ./...",
+    "integration-test-run": "make integration-test-run",
+    "lint": "golangci-lint run",
+    "lint:fix": "golangci-lint run --fix",
+    "security-check": "gosec ./...",
+    "deps": "go mod tidy",
+    "build": "go build -o ./bin/kaniko ./cmd/executor",
+    "build:warmer": "go build -o ./bin/warmer ./cmd/warmer"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Gosayram/kaniko.git"
+  },
+  "keywords": [
+    "docker",
+    "containers",
+    "kubernetes",
+    "build",
+    "ci-cd"
+  ],
+  "author": "Gosayram (fork by Google LLC)",
+  "license": "Apache-2.0",
+  "devDependencies": {
+    "golangci-lint": "^v1.60.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

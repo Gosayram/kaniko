@@ -14,15 +14,16 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// Package remote provides functionality for retrieving remote container images.
 package remote
 
 import (
 	"fmt"
 	"strings"
 
-	"github.com/GoogleContainerTools/kaniko/pkg/config"
-	"github.com/GoogleContainerTools/kaniko/pkg/creds"
-	"github.com/GoogleContainerTools/kaniko/pkg/util"
+	"github.com/Gosayram/kaniko/pkg/config"
+	"github.com/Gosayram/kaniko/pkg/creds"
+	"github.com/Gosayram/kaniko/pkg/util"
 
 	"github.com/google/go-containerregistry/pkg/name"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
@@ -37,7 +38,7 @@ var (
 )
 
 // RetrieveRemoteImage retrieves the manifest for the specified image from the specified registry
-func RetrieveRemoteImage(image string, opts config.RegistryOptions, customPlatform string) (v1.Image, error) {
+func RetrieveRemoteImage(image string, opts *config.RegistryOptions, customPlatform string) (v1.Image, error) {
 	logrus.Infof("Retrieving image manifest %s", image)
 
 	cachedRemoteImage := manifestCache[image]
@@ -53,14 +54,13 @@ func RetrieveRemoteImage(image string, opts config.RegistryOptions, customPlatfo
 
 	if newRegURLs, found := opts.RegistryMaps[ref.Context().RegistryStr()]; found {
 		for _, registryMapping := range newRegURLs {
-
 			regToMapTo, repositoryPrefix := parseRegistryMapping(registryMapping)
 
 			insecurePull := opts.InsecurePull || opts.InsecureRegistries.Contains(regToMapTo)
 
-			remappedRepository, err := remapRepository(ref.Context(), regToMapTo, repositoryPrefix, insecurePull)
+			remappedRepository, remapErr := remapRepository(ref.Context(), regToMapTo, repositoryPrefix, insecurePull)
 			if err != nil {
-				return nil, err
+				return nil, remapErr
 			}
 
 			remappedRef := setNewRepository(ref, remappedRepository)
@@ -71,8 +71,11 @@ func RetrieveRemoteImage(image string, opts config.RegistryOptions, customPlatfo
 			}
 
 			var remoteImage v1.Image
-			if remoteImage, err = util.RetryWithResult(retryFunc, opts.ImageDownloadRetry, 1000); err != nil {
-				logrus.Warnf("Failed to retrieve image %s from remapped registry %s: %s. Will try with the next registry, or fallback to the original registry.", remappedRef, regToMapTo, err)
+			const retryDelayMs = 1000 //nolint:mnd // 1000ms is a reasonable default retry delay
+			if remoteImage, err = util.RetryWithResult(retryFunc, opts.ImageDownloadRetry, retryDelayMs); err != nil {
+				logrus.Warnf("Failed to retrieve image %s from remapped registry %s: %s. "+
+					"Will try with the next registry, or fallback to the original registry.",
+					remappedRef, regToMapTo, err)
 				continue
 			}
 
@@ -88,9 +91,9 @@ func RetrieveRemoteImage(image string, opts config.RegistryOptions, customPlatfo
 
 	registryName := ref.Context().RegistryStr()
 	if opts.InsecurePull || opts.InsecureRegistries.Contains(registryName) {
-		newReg, err := name.NewRegistry(registryName, name.WeakValidation, name.Insecure)
+		newReg, regErr := name.NewRegistry(registryName, name.WeakValidation, name.Insecure)
 		if err != nil {
-			return nil, err
+			return nil, regErr
 		}
 		ref = setNewRegistry(ref, newReg)
 	}
@@ -102,20 +105,24 @@ func RetrieveRemoteImage(image string, opts config.RegistryOptions, customPlatfo
 	}
 
 	var remoteImage v1.Image
-	if remoteImage, err = util.RetryWithResult(retryFunc, opts.ImageDownloadRetry, 1000); remoteImage != nil {
+	const retryDelayMs = 1000 //nolint:mnd // 1000ms is a reasonable default retry delay
+	if remoteImage, err = util.RetryWithResult(retryFunc, opts.ImageDownloadRetry, retryDelayMs); remoteImage != nil {
 		manifestCache[image] = remoteImage
 	}
 
 	return remoteImage, err
 }
 
-// remapRepository adds the {repositoryPrefix}/ to the original repo, and normalizes with an additional library/ if necessary
-func remapRepository(repo name.Repository, regToMapTo string, repositoryPrefix string, insecurePull bool) (name.Repository, error) {
+// remapRepository adds the {repositoryPrefix}/ to the original repo,
+// and normalizes with an additional library/ if necessary
+func remapRepository(repo name.Repository, regToMapTo, repositoryPrefix string,
+	insecurePull bool) (name.Repository, error) {
 	if insecurePull {
-		return name.NewRepository(repositoryPrefix+repo.RepositoryStr(), name.WithDefaultRegistry(regToMapTo), name.WeakValidation, name.Insecure)
-	} else {
-		return name.NewRepository(repositoryPrefix+repo.RepositoryStr(), name.WithDefaultRegistry(regToMapTo), name.WeakValidation)
+		return name.NewRepository(repositoryPrefix+repo.RepositoryStr(),
+			name.WithDefaultRegistry(regToMapTo), name.WeakValidation, name.Insecure)
 	}
+	return name.NewRepository(repositoryPrefix+repo.RepositoryStr(),
+		name.WithDefaultRegistry(regToMapTo), name.WeakValidation)
 }
 
 func setNewRepository(ref name.Reference, newRepo name.Repository) name.Reference {
@@ -134,17 +141,17 @@ func setNewRepository(ref name.Reference, newRepo name.Repository) name.Referenc
 func setNewRegistry(ref name.Reference, newReg name.Registry) name.Reference {
 	switch r := ref.(type) {
 	case name.Tag:
-		r.Repository.Registry = newReg
+		r.Registry = newReg
 		return r
 	case name.Digest:
-		r.Repository.Registry = newReg
+		r.Registry = newReg
 		return r
 	default:
 		return ref
 	}
 }
 
-func remoteOptions(registryName string, opts config.RegistryOptions, customPlatform string) []remote.Option {
+func remoteOptions(registryName string, opts *config.RegistryOptions, customPlatform string) []remote.Option {
 	tr, err := util.MakeTransport(opts, registryName)
 
 	// The MakeTransport function will only return errors if there was a problem
@@ -159,18 +166,22 @@ func remoteOptions(registryName string, opts config.RegistryOptions, customPlatf
 		logrus.Fatalf("Invalid platform %q: %v", customPlatform, err)
 	}
 
-	return []remote.Option{remote.WithTransport(tr), remote.WithAuthFromKeychain(creds.GetKeychain()), remote.WithPlatform(*platform)}
+	return []remote.Option{
+		remote.WithTransport(tr),
+		remote.WithAuthFromKeychain(creds.GetKeychain()),
+		remote.WithPlatform(*platform),
+	}
 }
 
 // Parse the registry mapping
 // example: regMapping = "registry.example.com/subdir1/subdir2" will return registry.example.com and subdir1/subdir2/
-func parseRegistryMapping(regMapping string) (string, string) {
+func parseRegistryMapping(regMapping string) (regURL, repositoryPrefix string) {
 	// Split the registry mapping by first slash
-	regURL, repositoryPrefix, _ := strings.Cut(regMapping, "/")
+	regURL, repositoryPrefix, _ = strings.Cut(regMapping, "/")
 
 	// Normalize with a trailing slash if not empty
 	if repositoryPrefix != "" && !strings.HasSuffix(repositoryPrefix, "/") {
-		repositoryPrefix = repositoryPrefix + "/"
+		repositoryPrefix += "/"
 	}
 
 	return regURL, repositoryPrefix

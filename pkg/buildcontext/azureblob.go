@@ -14,6 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// Package buildcontext provides implementations for various build context sources
 package buildcontext
 
 import (
@@ -24,9 +25,10 @@ import (
 	"strings"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob"
-	kConfig "github.com/GoogleContainerTools/kaniko/pkg/config"
-	"github.com/GoogleContainerTools/kaniko/pkg/constants"
-	"github.com/GoogleContainerTools/kaniko/pkg/util"
+
+	kConfig "github.com/Gosayram/kaniko/pkg/config"
+	"github.com/Gosayram/kaniko/pkg/constants"
+	"github.com/Gosayram/kaniko/pkg/util"
 )
 
 // AzureBlob struct for Azure Blob Storage processing
@@ -34,12 +36,12 @@ type AzureBlob struct {
 	context string
 }
 
-// Download context file from given azure blob storage url and unpack it to BuildContextDir
+// UnpackTarFromBuildContext downloads context file from Azure Blob Storage URL
+// and unpacks it to BuildContextDir.
 func (b *AzureBlob) UnpackTarFromBuildContext() (string, error) {
-
 	// Get Azure_STORAGE_ACCESS_KEY from environment variables
 	accountKey := os.Getenv("AZURE_STORAGE_ACCESS_KEY")
-	if len(accountKey) == 0 {
+	if accountKey == "" {
 		return "", errors.New("AZURE_STORAGE_ACCESS_KEY environment variable is not set")
 	}
 

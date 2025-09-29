@@ -14,26 +14,30 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package util
+package util //nolint:revive // package name 'util' is intentionally generic
 
 import (
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"net/http"
 
-	"github.com/GoogleContainerTools/kaniko/pkg/config"
 	"github.com/sirupsen/logrus"
+
+	"github.com/Gosayram/kaniko/pkg/config"
 )
 
+// CertPool defines an interface for certificate pool operations
 type CertPool interface {
 	value() *x509.CertPool
 	append(path string) error
 }
 
+// X509CertPool implements CertPool using x509.CertPool
 type X509CertPool struct {
 	inner x509.CertPool
 }
@@ -43,7 +47,12 @@ func (p *X509CertPool) value() *x509.CertPool {
 }
 
 func (p *X509CertPool) append(path string) error {
-	pem, err := os.ReadFile(path)
+	// Validate the file path to prevent directory traversal
+	cleanPath := filepath.Clean(path)
+	if strings.Contains(cleanPath, "..") || strings.HasPrefix(cleanPath, "/") {
+		return fmt.Errorf("invalid certificate path: potential directory traversal detected")
+	}
+	pem, err := os.ReadFile(cleanPath)
 	if err != nil {
 		return err
 	}
@@ -53,10 +62,12 @@ func (p *X509CertPool) append(path string) error {
 
 var systemCertLoader CertPool
 
+// KeyPairLoader defines an interface for loading TLS key pairs
 type KeyPairLoader interface {
 	load(string, string) (tls.Certificate, error)
 }
 
+// X509KeyPairLoader implements KeyPairLoader using tls.LoadX509KeyPair
 type X509KeyPairLoader struct {
 }
 
@@ -66,7 +77,8 @@ func (p *X509KeyPairLoader) load(certFile, keyFile string) (tls.Certificate, err
 
 var systemKeyPairLoader KeyPairLoader
 
-func init() {
+// Initialize initializes the transport utilities
+func Initialize() {
 	systemCertPool, err := x509.SystemCertPool()
 	if err != nil {
 		logrus.Warn("Failed to load system cert pool. Loading empty one instead.")
@@ -79,30 +91,40 @@ func init() {
 	systemKeyPairLoader = &X509KeyPairLoader{}
 }
 
-func MakeTransport(opts config.RegistryOptions, registryName string) (http.RoundTripper, error) {
+// MakeTransport creates an HTTP transport with TLS configuration based on registry options
+func MakeTransport(opts *config.RegistryOptions, registryName string) (http.RoundTripper, error) {
 	// Create a transport to set our user-agent.
 	var tr http.RoundTripper = http.DefaultTransport.(*http.Transport).Clone()
 	if opts.SkipTLSVerify || opts.SkipTLSVerifyRegistries.Contains(registryName) {
+		// InsecureSkipVerify is intentionally set to true to allow connections to
+		// registries with self-signed certificates or other TLS issues.
+		// This is a user-controlled option for development/testing environments.
 		tr.(*http.Transport).TLSClientConfig = &tls.Config{
-			InsecureSkipVerify: true,
+			InsecureSkipVerify: true, //nolint:gosec // intentionally allowing insecure connections for development/testing
 		}
 	} else if certificatePath := opts.RegistriesCertificates[registryName]; certificatePath != "" {
 		if err := systemCertLoader.append(certificatePath); err != nil {
 			return nil, fmt.Errorf("failed to load certificate %s for %s: %w", certificatePath, registryName, err)
 		}
 		tr.(*http.Transport).TLSClientConfig = &tls.Config{
-			RootCAs: systemCertLoader.value(),
+			RootCAs:    systemCertLoader.value(),
+			MinVersion: tls.VersionTLS12, // Set minimum TLS version to 1.2 for security
 		}
 	}
 
 	if clientCertificatePath := opts.RegistriesClientCertificates[registryName]; clientCertificatePath != "" {
 		certFiles := strings.Split(clientCertificatePath, ",")
-		if len(certFiles) != 2 {
-			return nil, fmt.Errorf("failed to load client certificate/key '%s=%s', expected format: %s=/path/to/cert,/path/to/key", registryName, clientCertificatePath, registryName)
+		const expectedCertFilesCount = 2 // expected format: cert_path,key_path
+
+		if len(certFiles) != expectedCertFilesCount {
+			return nil, fmt.Errorf("failed to load client certificate/key '%s=%s', "+
+				"expected format: %s=/path/to/cert,/path/to/key",
+				registryName, clientCertificatePath, registryName)
 		}
 		cert, err := systemKeyPairLoader.load(certFiles[0], certFiles[1])
 		if err != nil {
-			return nil, fmt.Errorf("failed to load client certificate/key '%s' for %s: %w", clientCertificatePath, registryName, err)
+			return nil, fmt.Errorf("failed to load client certificate/key '%s' for %s: %w",
+				clientCertificatePath, registryName, err)
 		}
 		tr.(*http.Transport).TLSClientConfig.Certificates = []tls.Certificate{cert}
 	}

@@ -12,64 +12,82 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Bump these on release
+# -------------------------- Project metadata --------------------------
+SHELL := /bin/bash
+
+GOOS  ?= linux
+GOARCH ?= amd64
+
+ORG     := github.com/Gosayram
+PROJECT := kaniko
+REPOPATH ?= $(ORG)/$(PROJECT)
+
+VERSION_PACKAGE = $(REPOPATH)/internal/version
+
+# Single source of truth for version from .release-version file
+VERSION ?= $(shell cat .release-version 2>/dev/null || echo v1.24.0)
+# Extract version components for backward compatibility
 VERSION_MAJOR ?= 1
 VERSION_MINOR ?= 24
-VERSION_BUILD ?= 0
+VERSION_BUILD ?= 1
 
-VERSION ?= v$(VERSION_MAJOR).$(VERSION_MINOR).$(VERSION_BUILD)
-VERSION_PACKAGE = $(REPOPATH/pkg/version)
+GOPATH ?= $(shell go env GOPATH)
+GOLANGCI_LINT = $(GOPATH)/bin/golangci-lint
+GOIMPORTS     = $(GOPATH)/bin/goimports
 
-SHELL := /bin/bash
-GOOS ?= $(shell go env GOOS)
-GOARCH ?= $(shell go env GOARCH)
-ORG := github.com/GoogleContainerTools
-PROJECT := kaniko
-REGISTRY?=gcr.io/kaniko-project
-
-REPOPATH ?= $(ORG)/$(PROJECT)
-VERSION_PACKAGE = $(REPOPATH)/pkg/version
-
-GO_FILES := $(shell find . -type f -name '*.go' -not -path "./vendor/*")
-GO_LDFLAGS := '-extldflags "-static"
-GO_LDFLAGS += -X $(VERSION_PACKAGE).version=$(VERSION)
-GO_LDFLAGS += -w -s # Drop debugging symbols.
-GO_LDFLAGS += '
+REGISTRY ?= gcr.io/Gosayram/kaniko
 
 EXECUTOR_PACKAGE = $(REPOPATH)/cmd/executor
-WARMER_PACKAGE = $(REPOPATH)/cmd/warmer
-KANIKO_PROJECT = $(REPOPATH)/kaniko
+WARMER_PACKAGE   = $(REPOPATH)/cmd/warmer
+KANIKO_PROJECT   = $(REPOPATH)/kaniko
+
 BUILD_ARG ?=
 
-# Force using Go Modules and always read the dependencies from
-# the `vendor` folder.
+# Force using Go Modules and always read dependencies from vendor folder.
 export GO111MODULE = on
-export GOFLAGS = -mod=vendor
+export GOFLAGS     = -mod=vendor
 
+# All Go source files excluding vendor/
+GO_FILES := $(shell find . -type f -name '*.go' -not -path "./vendor/*")
+
+# Linker flags (static linking + version metadata)
+GO_LDFLAGS := -extldflags "-static"
+GO_LDFLAGS += -X $(VERSION_PACKAGE).Version=$(VERSION)
+GO_LDFLAGS += -X $(VERSION_PACKAGE).Commit=$(shell git rev-parse --short HEAD 2>/dev/null || echo "none")
+GO_LDFLAGS += -X $(VERSION_PACKAGE).Date=$(shell date -u +%Y-%m-%dT%H:%M:%SZ)
+GO_LDFLAGS += -w -s  # Drop debugging symbols.
+
+# ------------------------------ Binaries ------------------------------
+.PHONY: clean
+clean:
+	@echo "Cleaning up..."
+	rm -rf out/
+	@echo "Done."
 
 out/executor: $(GO_FILES)
-	GOARCH=$(GOARCH) GOOS=$(GOOS) CGO_ENABLED=0 go build -ldflags $(GO_LDFLAGS) -o $@ $(EXECUTOR_PACKAGE)
+	GOARCH=$(GOARCH) GOOS=$(GOOS) CGO_ENABLED=0 go build -ldflags '$(GO_LDFLAGS)' -o $@ $(EXECUTOR_PACKAGE)
 
 out/warmer: $(GO_FILES)
-	GOARCH=$(GOARCH) GOOS=$(GOOS) CGO_ENABLED=0 go build -ldflags $(GO_LDFLAGS) -o $@ $(WARMER_PACKAGE)
+	GOARCH=$(GOARCH) GOOS=$(GOOS) CGO_ENABLED=0 go build -ldflags '$(GO_LDFLAGS)' -o $@ $(WARMER_PACKAGE)
 
-.PHONY: install-container-diff
-install-container-diff:
-	@ curl -LO https://github.com/GoogleContainerTools/container-diff/releases/download/v0.17.0/container-diff-$(GOOS)-amd64 && \
-		chmod +x container-diff-$(GOOS)-amd64 && sudo mv container-diff-$(GOOS)-amd64 /usr/local/bin/container-diff
+# ------------------------------ Tools ------------------------------
+.PHONY: install-tools
+install-tools:
+	@echo "Installing development tools..."
+	GOFLAGS="" go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
+	GOFLAGS="" go install golang.org/x/tools/cmd/goimports@latest
+	@echo "Development tools installed successfully"
 
-.PHONY: k3s-setup
-k3s-setup:
-	@ ./scripts/k3s-setup.sh
-
+# ------------------------------ Tests ------------------------------
 .PHONY: test
 test: out/executor
 	@ ./scripts/test.sh
 
+.PHONY: test-with-coverage
 test-with-coverage: test
 	go tool cover -html=out/coverage.out
 
-
+# --------------------------- Integration ---------------------------
 .PHONY: integration-test
 integration-test:
 	@ ./scripts/integration-test.sh
@@ -91,23 +109,147 @@ integration-test-misc:
 	$(eval RUN_ARG=$(shell ./scripts/misc-integration-test.sh))
 	@ ./scripts/integration-test.sh -run "$(RUN_ARG)"
 
-.PHONY: k8s-executor-build-push
-k8s-executor-build-push:
-	DOCKER_BUILDKIT=1 docker build ${BUILD_ARG} --build-arg=GOARCH=$(GOARCH) --build-arg=TARGETOS=linux -t $(REGISTRY)/executor:latest -f deploy/Dockerfile --target kaniko-executor .
-	docker push $(REGISTRY)/executor:latest
+# --------------------------- Multi-Platform Integration ---------------------------
+.PHONY: integration-test-multiplatform
+integration-test-multiplatform:
+	@ ./scripts/integration-test.sh -tags "integration" -run "TestMultiPlatform"
 
+.PHONY: integration-test-local-driver
+integration-test-local-driver:
+	@ ./scripts/integration-test.sh -tags "integration" -run "TestMultiPlatformLocalDriver"
 
+.PHONY: integration-test-ci-driver
+integration-test-ci-driver:
+	@ ./scripts/integration-test.sh -tags "integration" -run "TestMultiPlatformCIDriver"
+
+.PHONY: integration-test-k8s-e2e
+integration-test-k8s-e2e:
+	@ ./scripts/integration-test.sh -tags "integration" -run "TestMultiPlatformK8sE2E"
+
+.PHONY: integration-test-image-verification
+integration-test-image-verification:
+	@ ./scripts/integration-test.sh -tags "integration" -run "TestMultiPlatformImageVerification"
+
+# --------------------------- Benchmarks ---------------------------
+.PHONY: benchmark
+benchmark:
+	@echo "Running multi-platform coordinator overhead benchmark..."
+	BENCHMARK=true go test ./integration/... -run "TestMultiplatformCoordinatorOverhead" -v
+
+.PHONY: benchmark-drivers
+benchmark-drivers:
+	@echo "Running multi-platform driver overhead benchmark..."
+	BENCHMARK=true go test ./integration/... -run "TestMultiplatformDriverOverhead" -v
+
+.PHONY: benchmark-all
+benchmark-all: benchmark benchmark-drivers
+	@echo "All benchmarks completed"
+
+# --------------------------- OCI Verification ---------------------------
+.PHONY: verify-oci
+verify-oci:
+	@echo "Running OCI compliance verification..."
+	@./scripts/verify-oci.sh
+
+.PHONY: verify-oci-quick
+verify-oci-quick:
+	@echo "Running quick OCI verification (uses existing images)..."
+	REGISTRY="gcr.io/kaniko-test" ./scripts/verify-oci.sh
+
+# ------------------------------ Images ------------------------------
 .PHONY: images
 images: DOCKER_BUILDKIT=1
 images:
+	@echo "Building Docker images..."
 	docker build ${BUILD_ARG} --build-arg=TARGETARCH=$(GOARCH) --build-arg=TARGETOS=linux -t $(REGISTRY)/executor:latest -f deploy/Dockerfile --target kaniko-executor .
-	docker build ${BUILD_ARG} --build-arg=TARGETARCH=$(GOARCH) --build-arg=TARGETOS=linux -t $(REGISTRY)/executor:debug -f deploy/Dockerfile --target kaniko-debug .
-	docker build ${BUILD_ARG} --build-arg=TARGETARCH=$(GOARCH) --build-arg=TARGETOS=linux -t $(REGISTRY)/executor:slim -f deploy/Dockerfile --target kaniko-slim .
-	docker build ${BUILD_ARG} --build-arg=TARGETARCH=$(GOARCH) --build-arg=TARGETOS=linux -t $(REGISTRY)/warmer:latest -f deploy/Dockerfile --target kaniko-warmer .
+	docker build ${BUILD_ARG} --build-arg=TARGETARCH=$(GOARCH) --build-arg=TARGETOS=linux -t $(REGISTRY)/executor:debug  -f deploy/Dockerfile --target kaniko-debug .
+	docker build ${BUILD_ARG} --build-arg=TARGETARCH=$(GOARCH) --build-arg=TARGETOS=linux -t $(REGISTRY)/executor:slim   -f deploy/Dockerfile --target kaniko-slim .
+	docker build ${BUILD_ARG} --build-arg=TARGETARCH=$(GOARCH) --build-arg=TARGETOS=linux -t $(REGISTRY)/warmer:latest   -f deploy/Dockerfile --target kaniko-warmer .
 
 .PHONY: push
 push:
+	@echo "Pushing Docker images..."
 	docker push $(REGISTRY)/executor:latest
 	docker push $(REGISTRY)/executor:debug
 	docker push $(REGISTRY)/executor:slim
 	docker push $(REGISTRY)/warmer:latest
+
+# --------------------------- Code quality ---------------------------
+.PHONY: lint
+lint: install-tools
+	@if command -v $(GOLANGCI_LINT) >/dev/null 2>&1; then \
+		echo "Running linter..."; \
+		GOARCH=$(GOARCH) GOOS=$(GOOS) CGO_ENABLED=0 $(GOLANGCI_LINT) run --timeout=5m; \
+		echo "Linter completed!"; \
+	else \
+		echo "golangci-lint is not installed."; \
+		exit 1; \
+	fi
+
+# --- formatting (gofmt + goimports, ignore vendor) ----------------------------
+LOCAL_PREFIX ?= $(REPOPATH)
+
+.PHONY: fmt
+fmt: install-tools
+	@echo "Running gofmt (excluding vendor/)..."
+	@files=$$(git ls-files -- '*.go' ':(exclude)vendor/**'); \
+	if [ -n "$$files" ]; then \
+		gofmt -s -w $$files; \
+	fi
+	@echo "Running goimports (excluding vendor/)..."
+	@files=$$(git ls-files -- '*.go' ':(exclude)vendor/**'); \
+	if [ -n "$$files" ]; then \
+		echo "$$files" | xargs -n 50 $(GOIMPORTS) -w -local $(LOCAL_PREFIX); \
+	fi
+	@echo "Formatting completed."
+
+.PHONY: fmt-check
+fmt-check: install-tools
+	@files=$$(git ls-files -- '*.go' ':(exclude)vendor/**'); \
+	if [ -n "$$files" ]; then \
+		bad_fmt=$$(gofmt -l $$files); \
+		bad_imports=$$($(GOIMPORTS) -l -local $(LOCAL_PREFIX) $$files); \
+		if [ -n "$$bad_fmt$$bad_imports" ]; then \
+			echo "The following files are not properly formatted:"; \
+			echo "$$bad_fmt"; \
+			echo "$$bad_imports"; \
+			echo ""; \
+			echo "=> Run: make fmt"; \
+			exit 1; \
+		fi; \
+	fi; \
+	echo "All files are properly formatted."
+
+.PHONY: check-all
+check-all: fmt-check lint
+	@echo "All code quality checks completed"
+
+# --------------------------- Misc utilities ---------------------------
+.PHONY: install-container-diff
+install-container-diff:
+	@ curl -LO https://github.com/Gosayram/container-diff/releases/download/v0.17.0/container-diff-$(GOOS)-amd64 && \
+		chmod +x container-diff-$(GOOS)-amd64 && sudo mv container-diff-$(GOOS)-amd64 /usr/local/bin/container-diff
+
+.PHONY: k3s-setup
+k3s-setup:
+	@ ./scripts/k3s-setup.sh
+
+.PHONY: tidy
+tidy:
+	@ echo "Tidying up go.mod and go.sum..."
+	GOFLAGS="" go mod tidy
+	GOFLAGS="" go mod vendor
+	@ echo "Done."
+
+.PHONY: update-deps
+update-deps:
+	@echo "Updating all Go packages to their latest minor or patch releases..."
+	@pkgs=$$(go list ./... | grep -v '/vendor/'); \
+	if [ -n "$$pkgs" ]; then \
+		GOFLAGS="" go get -u $$pkgs; \
+	else \
+		echo "No packages to update."; \
+	fi
+	GOFLAGS="" go mod tidy
+	GOFLAGS="" go mod vendor
+	@echo "Done."

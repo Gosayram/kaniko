@@ -17,19 +17,22 @@ limitations under the License.
 package commands
 
 import (
-	"github.com/GoogleContainerTools/kaniko/pkg/dockerfile"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/moby/buildkit/frontend/dockerfile/instructions"
 	"github.com/sirupsen/logrus"
+
+	"github.com/Gosayram/kaniko/pkg/dockerfile"
 )
 
+// OnBuildCommand implements the Dockerfile ONBUILD instruction
+// It handles storing commands to be executed when the image is used as a base
 type OnBuildCommand struct {
 	BaseCommand
 	cmd *instructions.OnbuildCommand
 }
 
 // ExecuteCommand adds the specified expression in Onbuild to the config
-func (o *OnBuildCommand) ExecuteCommand(config *v1.Config, buildArgs *dockerfile.BuildArgs) error {
+func (o *OnBuildCommand) ExecuteCommand(config *v1.Config, _ *dockerfile.BuildArgs) error {
 	logrus.Info("Cmd: ONBUILD")
 	logrus.Infof("Args: %s", o.cmd.Expression)
 	if config.OnBuild == nil {

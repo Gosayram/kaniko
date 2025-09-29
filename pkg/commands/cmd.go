@@ -19,12 +19,15 @@ package commands
 import (
 	"strings"
 
-	"github.com/GoogleContainerTools/kaniko/pkg/dockerfile"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
+
+	"github.com/Gosayram/kaniko/pkg/dockerfile"
 
 	"github.com/moby/buildkit/frontend/dockerfile/instructions"
 )
 
+// CmdCommand represents the CMD Dockerfile instruction
+// which specifies the default command to run in a container
 type CmdCommand struct {
 	BaseCommand
 	cmd *instructions.CmdCommand
@@ -32,7 +35,7 @@ type CmdCommand struct {
 
 // ExecuteCommand executes the CMD command
 // Argument handling is the same as RUN.
-func (c *CmdCommand) ExecuteCommand(config *v1.Config, buildArgs *dockerfile.BuildArgs) error {
+func (c *CmdCommand) ExecuteCommand(config *v1.Config, _ *dockerfile.BuildArgs) error {
 	var newCommand []string
 	if c.cmd.PrependShell {
 		// This is the default shell on Linux
@@ -43,7 +46,8 @@ func (c *CmdCommand) ExecuteCommand(config *v1.Config, buildArgs *dockerfile.Bui
 			shell = append(shell, "/bin/sh", "-c")
 		}
 
-		newCommand = append(shell, strings.Join(c.cmd.CmdLine, " "))
+		shell = append(shell, strings.Join(c.cmd.CmdLine, " "))
+		newCommand = shell
 	} else {
 		newCommand = c.cmd.CmdLine
 	}

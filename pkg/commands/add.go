@@ -24,12 +24,16 @@ import (
 	"github.com/moby/buildkit/frontend/dockerfile/instructions"
 	"github.com/pkg/errors"
 
-	"github.com/GoogleContainerTools/kaniko/pkg/dockerfile"
+	"github.com/Gosayram/kaniko/pkg/dockerfile"
 
-	"github.com/GoogleContainerTools/kaniko/pkg/util"
 	"github.com/sirupsen/logrus"
+
+	"github.com/Gosayram/kaniko/pkg/util"
 )
 
+// AddCommand represents the ADD Dockerfile instruction which copies files,
+// directories, or remote URLs from the build context or remote locations
+// into the container image
 type AddCommand struct {
 	BaseCommand
 	cmd           *instructions.AddCommand
@@ -53,7 +57,10 @@ func (a *AddCommand) ExecuteCommand(config *v1.Config, buildArgs *dockerfile.Bui
 		return errors.Wrap(err, "getting permissions from chmod")
 	}
 	if useDefaultChmod {
-		chmod = fs.FileMode(0o600)
+		// defaultFilePermission is the default file permission for downloaded remote files
+		const defaultFilePermission = 0o600
+
+		chmod = fs.FileMode(defaultFilePermission)
 	}
 
 	uid, gid, err := util.GetUserGroup(a.cmd.Chown, replacementEnvs)
@@ -74,7 +81,8 @@ func (a *AddCommand) ExecuteCommand(config *v1.Config, buildArgs *dockerfile.Bui
 	// Else, add to the list of unresolved sources
 	for _, src := range srcs {
 		fullPath := filepath.Join(a.fileContext.Root, src)
-		if util.IsSrcRemoteFileURL(src) {
+		switch {
+		case util.IsSrcRemoteFileURL(src):
 			urlDest, err := util.URLDestinationFilepath(src, dest, config.WorkingDir, replacementEnvs)
 			if err != nil {
 				return err
@@ -84,7 +92,7 @@ func (a *AddCommand) ExecuteCommand(config *v1.Config, buildArgs *dockerfile.Bui
 				return errors.Wrap(err, "downloading remote source file")
 			}
 			a.snapshotFiles = append(a.snapshotFiles, urlDest)
-		} else if util.IsFileLocalTarArchive(fullPath) {
+		case util.IsFileLocalTarArchive(fullPath):
 			tarDest, err := util.DestinationFilepath("", dest, config.WorkingDir)
 			if err != nil {
 				return errors.Wrap(err, "determining dest for tar")
@@ -96,7 +104,7 @@ func (a *AddCommand) ExecuteCommand(config *v1.Config, buildArgs *dockerfile.Bui
 			}
 			logrus.Debugf("Added %v from local tar archive %s", extractedFiles, src)
 			a.snapshotFiles = append(a.snapshotFiles, extractedFiles...)
-		} else {
+		default:
 			unresolvedSrcs = append(unresolvedSrcs, src)
 		}
 	}
@@ -131,6 +139,8 @@ func (a *AddCommand) String() string {
 	return a.cmd.String()
 }
 
+// FilesUsedFromContext returns the list of files from the build context
+// that are used by this ADD command, excluding remote URLs and local tar archives
 func (a *AddCommand) FilesUsedFromContext(config *v1.Config, buildArgs *dockerfile.BuildArgs) ([]string, error) {
 	replacementEnvs := buildArgs.ReplacementEnvs(config.Env)
 
@@ -155,10 +165,14 @@ func (a *AddCommand) FilesUsedFromContext(config *v1.Config, buildArgs *dockerfi
 	return files, nil
 }
 
+// MetadataOnly indicates whether this command only affects metadata
+// without modifying the filesystem contents
 func (a *AddCommand) MetadataOnly() bool {
 	return false
 }
 
+// RequiresUnpackedFS indicates whether this command requires an unpacked
+// filesystem to execute properly
 func (a *AddCommand) RequiresUnpackedFS() bool {
 	return true
 }

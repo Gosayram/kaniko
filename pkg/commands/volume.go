@@ -20,19 +20,24 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/GoogleContainerTools/kaniko/pkg/dockerfile"
+	"github.com/Gosayram/kaniko/pkg/dockerfile"
 
-	"github.com/GoogleContainerTools/kaniko/pkg/util"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/moby/buildkit/frontend/dockerfile/instructions"
 	"github.com/sirupsen/logrus"
+
+	"github.com/Gosayram/kaniko/pkg/util"
 )
 
+// VolumeCommand represents the VOLUME Dockerfile instruction
+// which creates mount points for external storage
 type VolumeCommand struct {
 	BaseCommand
 	cmd *instructions.VolumeCommand
 }
 
+// ExecuteCommand processes the VOLUME instruction by creating directories
+// and configuring volume mount points in the container image
 func (v *VolumeCommand) ExecuteCommand(config *v1.Config, buildArgs *dockerfile.BuildArgs) error {
 	logrus.Info("Cmd: VOLUME")
 	volumes := v.cmd.Volumes
@@ -53,7 +58,10 @@ func (v *VolumeCommand) ExecuteCommand(config *v1.Config, buildArgs *dockerfile.
 		// Only create and snapshot the dir if it didn't exist already
 		if _, err := os.Stat(volume); os.IsNotExist(err) {
 			logrus.Infof("Creating directory %s", volume)
-			if err := os.MkdirAll(volume, 0755); err != nil {
+			// defaultVolumePermission is the default directory permission for volume directories
+			const defaultVolumePermission = 0o750
+
+			if err := os.MkdirAll(volume, defaultVolumePermission); err != nil {
 				return fmt.Errorf("could not create directory for volume %s: %w", volume, err)
 			}
 		}
@@ -63,6 +71,8 @@ func (v *VolumeCommand) ExecuteCommand(config *v1.Config, buildArgs *dockerfile.
 	return nil
 }
 
+// FilesToSnapshot returns an empty array since VOLUME command
+// doesn't modify files that need to be included in snapshots
 func (v *VolumeCommand) FilesToSnapshot() []string {
 	return []string{}
 }
