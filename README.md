@@ -831,9 +831,73 @@ This is useful for example if you have parallel builds pushing the same tag and 
 
 Defaults to `false`.
 
+#### Flag `--multi-platform`
+
+Set this flag to specify a comma-separated list of target platforms for multi-architecture builds. For example: `--multi-platform=linux/amd64,linux/arm64`. This enables native multi-platform coordination without privileged operations.
+
+#### Flag `--driver`
+
+Set this flag to specify the execution driver for multi-architecture builds. Options: `local` (single architecture, host only), `k8s` (Kubernetes cluster with native nodes), `ci` (CI aggregation mode). Defaults to `local`.
+
+#### Flag `--publish-index`
+
+Set this boolean flag to `true` to publish an OCI Image Index after completing multi-architecture builds. This creates a manifest that references all platform-specific images. Defaults to `false`.
+
+#### Flag `--legacy-manifest-list`
+
+Set this boolean flag to `true` to create a Docker Manifest List for backward compatibility in addition to the OCI Image Index. Defaults to `false`.
+
+#### Flag `--index-annotations`
+
+Set this flag to add key-value annotations to the OCI Image Index. Format: `--index-annotations=key=value,key2=value2`. Useful for adding custom metadata to multi-arch manifests.
+
+#### Flag `--arch-cache-repo-suffix`
+
+Set this flag to specify a suffix for per-architecture cache repositories. Format: `--arch-cache-repo-suffix=-${ARCH}`. This enables separate cache repositories for each architecture.
+
+#### Flag `--digests-from`
+
+Set this flag to specify a path to digest files for CI driver integration. Format: `--digests-from=/path/to/digests`. Used in CI mode to collect digests from separate builds.
+
+#### Flag `--require-native-nodes`
+
+Set this boolean flag to `true` to fail if non-native architecture is requested. This ensures builds only run on nodes with the correct architecture support. Defaults to `false`.
+
+#### Flag `--oci-mode`
+
+Set this flag to specify OCI compliance mode. Options: `oci` (strict OCI 1.1 compliance), `auto` (automatic detection), `docker` (Docker format). Defaults to `auto`.
+
+#### Flag `--compression`
+
+Set this flag to specify layer compression format. Options: `gzip` (default), `zstd` (better compression ratio). Format: `--compression=zstd`.
+
+#### Flag `--sign-images`
+
+Set this boolean flag to `true` to enable optional image signing with cosign. This provides supply chain security for built images. Defaults to `false`.
+
+#### Flag `--cosign-key-path`
+
+Set this flag to specify the path to a cosign private key for image signing. Format: `--cosign-key-path=/path/to/private.key`. Requires `--sign-images=true`.
+
+#### Flag `--cosign-key-password`
+
+Set this flag to specify the password for a cosign private key. Format: `--cosign-key-password=secret`. Used when private key is password-protected.
+
 #### Flag `--push-retry`
 
 Set this flag to the number of retries that should happen for the push of an image to a remote destination. Defaults to `0`.
+
+#### Flag `--push-retry-initial-delay`
+
+Set this flag to specify the initial delay before the first retry attempt. Format: `--push-retry-initial-delay=1s`. Consecutive retries use exponential backoff. Defaults to `1s`.
+
+#### Flag `--push-retry-max-delay`
+
+Set this flag to specify the maximum delay between retry attempts. Format: `--push-retry-max-delay=30s`. This caps the exponential backoff growth. Defaults to `30s`.
+
+#### Flag `--push-retry-backoff-multiplier`
+
+Set this flag to specify the exponential backoff multiplier for retry delays. Format: `--push-retry-backoff-multiplier=2.0`. Higher values increase delay growth between retries. Defaults to `2.0`.
 
 #### Flag `--registry-certificate`
 
