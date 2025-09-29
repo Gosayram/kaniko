@@ -46,13 +46,14 @@ COPY . .
 # Then submit a PR with the changes to `go.mod`, `go.sum`, and `vendor`.
 
 # Get GCR credential helper
-RUN go install github.com/GoogleCloudPlatform/docker-credential-gcr/v2
+# NOTE: unset GOOS/GOARCH for native install to avoid "cannot install cross-compiled binaries when GOBIN is set"
+RUN GOOS= GOARCH= go install github.com/GoogleCloudPlatform/docker-credential-gcr/v2@latest
 
 # Get Amazon ECR credential helper
-RUN go install github.com/awslabs/amazon-ecr-credential-helper/ecr-login/cli/docker-credential-ecr-login
+RUN GOOS= GOARCH= go install github.com/awslabs/amazon-ecr-credential-helper/ecr-login/cli/docker-credential-ecr-login@latest
 
 # Get ACR docker env credential helper
-RUN go install github.com/chrismellard/docker-credential-acr-env
+RUN GOOS= GOARCH= go install github.com/chrismellard/docker-credential-acr-env@latest
 
 RUN \
   --mount=type=cache,target=/root/.cache/go-build \
@@ -77,52 +78,44 @@ RUN --mount=from=busybox,dst=/usr/ ["busybox", "sh", "-c", "mkdir -p /kaniko && 
 
 COPY --from=certs /etc/ssl/certs/ca-certificates.crt /kaniko/ssl/certs/
 COPY files/nsswitch.conf /etc/nsswitch.conf
-ENV HOME /root
-ENV USER root
-ENV PATH /usr/local/bin:/kaniko
+ENV HOME=/root
+ENV USER=root
+ENV PATH=/usr/local/bin:/kaniko
 ENV SSL_CERT_DIR=/kaniko/ssl/certs
 
 FROM kaniko-base-slim AS kaniko-base
 
+# Copy helpers from /usr/local/bin (matches GOBIN)
 COPY --from=builder --chown=0:0 /usr/local/bin/docker-credential-gcr /kaniko/docker-credential-gcr
 COPY --from=builder --chown=0:0 /usr/local/bin/docker-credential-ecr-login /kaniko/docker-credential-ecr-login
 COPY --from=builder --chown=0:0 /usr/local/bin/docker-credential-acr-env /kaniko/docker-credential-acr-env
 
 COPY --from=builder /kaniko/.docker /kaniko/.docker
 
-ENV DOCKER_CONFIG /kaniko/.docker/
-ENV DOCKER_CREDENTIAL_GCR_CONFIG /kaniko/.config/gcloud/docker_credential_gcr_config.json
+ENV DOCKER_CONFIG=/kaniko/.docker/
+# Remove sensitive config from ENV, use ARG instead
+ARG DOCKER_CREDENTIAL_GCR_CONFIG
 WORKDIR /workspace
 
 ### FINAL STAGES ###
 
 FROM kaniko-base AS kaniko-warmer
-
 COPY --from=builder /src/out/warmer /kaniko/warmer
-
 ENTRYPOINT ["/kaniko/warmer"]
 
 FROM kaniko-base AS kaniko-executor
-
 COPY --from=builder /src/out/executor /kaniko/executor
-
 ENTRYPOINT ["/kaniko/executor"]
 
 FROM kaniko-executor AS kaniko-debug
-
 ENV PATH /usr/local/bin:/kaniko:/busybox
-
 COPY --from=builder /src/out/warmer /kaniko/warmer
-
 COPY --from=busybox /bin /busybox
 # Declare /busybox as a volume to get it automatically in the path to ignore
 VOLUME /busybox
-
 RUN ["/busybox/mkdir", "-p", "/bin"]
 RUN ["/busybox/ln", "-s", "/busybox/sh", "/bin/sh"]
 
 FROM kaniko-base-slim AS kaniko-slim
-
 COPY --from=builder /src/out/executor /kaniko/executor
-
 ENTRYPOINT ["/kaniko/executor"]

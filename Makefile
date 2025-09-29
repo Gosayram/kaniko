@@ -56,6 +56,8 @@ GO_LDFLAGS += -X $(VERSION_PACKAGE).Version=$(VERSION)
 GO_LDFLAGS += -X $(VERSION_PACKAGE).Commit=$(shell git rev-parse --short HEAD 2>/dev/null || echo "none")
 GO_LDFLAGS += -X $(VERSION_PACKAGE).Date=$(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 GO_LDFLAGS += -w -s  # Drop debugging symbols.
+# Disable VCS stamping to avoid git-related errors in container builds
+export GOFLAGS += -buildvcs=false
 
 # ------------------------------ Binaries ------------------------------
 .PHONY: clean
