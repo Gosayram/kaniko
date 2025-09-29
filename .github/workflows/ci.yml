@@ -44,7 +44,8 @@ jobs:
           DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           
           IS_RELEASE="false"
-          if [[ "$VERSION" != "dev" && ! "$VERSION" =~ ^v ]]; then
+          # Check if VERSION is not "dev" and follows semantic versioning (e.g., 1.24.1)
+          if [[ "$VERSION" != "dev" && "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             IS_RELEASE="true"
           fi
           
@@ -156,6 +157,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
+          file: deploy/Dockerfile
           platforms: ${{ matrix.platform }}
           push: true
           tags: ${{ env.REGISTRY }}/${{ github.repository }}:temp-${{ matrix.platform }}
@@ -163,6 +165,8 @@ jobs:
             VERSION=${{ needs.detect.outputs.version }}
             COMMIT=${{ needs.detect.outputs.commit }}
             DATE=${{ needs.detect.outputs.date }}
+            TARGETARCH=${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}
+            TARGETOS=linux
           cache-from: type=gha
           cache-to: type=gha,mode=max
           outputs: type=image,name=image_digest,push=true
@@ -218,6 +222,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
+          file: deploy/Dockerfile
           platforms: linux/amd64
           load: true
           tags: kaniko-aggregator:latest
@@ -225,6 +230,8 @@ jobs:
             VERSION=${{ needs.detect.outputs.version }}
             COMMIT=${{ needs.detect.outputs.commit }}
             DATE=${{ needs.detect.outputs.date }}
+            TARGETARCH=amd64
+            TARGETOS=linux
   
       - name: Run kaniko CI driver to create and push index
         run: |
@@ -289,6 +296,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
+          file: deploy/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
