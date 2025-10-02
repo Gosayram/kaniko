@@ -175,9 +175,6 @@ func addKanikoOptionsFlags() {
 
 // addHiddenFlags marks certain flags as hidden from the executor help text
 func addHiddenFlags() {
-	if err := RootCmd.PersistentFlags().MarkHidden("azure-container-registry-config"); err != nil {
-		logrus.Warnf("Failed to hide flag: %v", err)
-	}
 }
 
 func validateDockerfilePath() error {

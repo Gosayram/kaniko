@@ -35,7 +35,6 @@ import (
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
-	"github.com/spf13/pflag"
 
 	"github.com/Gosayram/kaniko/pkg/buildcontext"
 	"github.com/Gosayram/kaniko/pkg/config"
@@ -525,10 +524,6 @@ func addDeprecatedFlags() {
 
 // addHiddenFlags marks certain flags as hidden from the executor help text
 func addHiddenFlags(cmd *cobra.Command) {
-	// This flag is added in a vendored directory, hide so that it doesn't come up via --help
-	if err := pflag.CommandLine.MarkHidden("azure-container-registry-config"); err != nil {
-		logrus.Warnf("Failed to hide flag: %v", err)
-	}
 	// Hide this flag as we want to encourage people to use the --context flag instead
 	if err := cmd.PersistentFlags().MarkHidden("bucket"); err != nil {
 		logrus.Warnf("Failed to hide flag: %v", err)

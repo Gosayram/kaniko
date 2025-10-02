@@ -41,7 +41,6 @@ func main() {
 
 	// Handle --version flag before cobra initialization
 	showVersion := flag.Bool("version", false, "Print version information and exit")
-	flag.Parse()
 
 	if *showVersion {
 		fmt.Printf("Kaniko Executor\n")
