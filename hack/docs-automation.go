@@ -16,24 +16,26 @@ limitations under the License.
 
 // Package main provides a documentation automation tool for Kaniko CLI.
 // It generates comprehensive documentation including CLI reference, README updates,
-// migration guides, and JSON documentation from source code analysis.
+// migration guides, changelog generation, and JSON documentation from source code analysis.
 package main
 
 import (
 	"bytes"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
 	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
-	"github.com/Gosayram/kaniko/internal/version"
 	"github.com/Gosayram/kaniko/pkg/config"
 	"github.com/Gosayram/kaniko/pkg/debug"
 )
@@ -77,6 +79,23 @@ type DocumentationConfig struct {
 	TemplateDir    string `json:"templateDir"`
 	IncludeTests   bool   `json:"includeTests"`
 	IncludePrivate bool   `json:"includePrivate"`
+	GenerateChangelog bool `json:"generateChangelog"`
+}
+
+// ChangelogEntry represents a single changelog entry.
+type ChangelogEntry struct {
+	Type        string    `json:"type"`
+	Title       string    `json:"title"`
+	Description string    `json:"description"`
+	PRNumber    int       `json:"prNumber,omitempty"`
+	Author      string    `json:"author"`
+	Date        time.Time `json:"date"`
+}
+
+// ChangelogSection represents a section in the changelog.
+type ChangelogSection struct {
+	Title   string          `json:"title"`
+	Entries []ChangelogEntry `json:"entries"`
 }
 
 // DocumentationGenerator holds state and results of the docs build.
@@ -86,6 +105,7 @@ type DocumentationGenerator struct {
 	filesByPkg map[string][]*ast.File // collected AST files by package name
 	commands   []CLICommand
 	version    string
+	changelog  []ChangelogSection
 }
 
 // NewDocumentationGenerator constructs the generator.
@@ -95,7 +115,7 @@ func NewDocumentationGenerator(cfg *DocumentationConfig) *DocumentationGenerator
 		fset:       token.NewFileSet(),
 		filesByPkg: make(map[string][]*ast.File),
 		commands:   make([]CLICommand, 0),
-		version:    version.Version,
+		version:    getReleaseVersion(),
 	}
 }
 
@@ -302,7 +322,292 @@ func inferFlagType(funcName string) string {
 	}
 }
 
-// generateDocumentationFiles writes out generated docs (CLI ref, README, migration).
+// generateChangelog generates a changelog based on git commits and pull requests.
+func (dg *DocumentationGenerator) generateChangelog() error {
+	debug.LogComponent("docs", "Generating changelog for version: %s", dg.version)
+
+	// Load changelog template
+	templatePath := filepath.Join(dg.config.SourceDir, "hack", "release_notes", "changelog_template.txt")
+	templateContent, err := os.ReadFile(templatePath)
+	if err != nil {
+		return fmt.Errorf("failed to read changelog template: %w", err)
+	}
+
+	// Get the latest tag to determine the range for changelog entries
+	latestTag, err := dg.getLatestGitTag()
+	if err != nil {
+		debug.LogComponent("docs", "No git tags found, using all commits: %v", err)
+		latestTag = ""
+	}
+
+	// Get commits since the latest tag
+	commits, err := dg.getCommitsSinceTag(latestTag)
+	if err != nil {
+		return fmt.Errorf("failed to get commits: %w", err)
+	}
+
+	// Group commits by type and generate changelog entries
+	changelogSections := dg.groupCommitsByType(commits)
+
+	// Generate changelog content using template
+	changelogContent := dg.generateChangelogFromTemplate(string(templateContent), changelogSections, dg.version)
+
+	// Read existing changelog
+	changelogPath := "CHANGELOG.md"
+	
+	var existingContent string
+	if _, err := os.Stat(changelogPath); err == nil {
+		existingContentBytes, err := os.ReadFile(changelogPath)
+		if err != nil {
+			return fmt.Errorf("failed to read existing changelog: %w", err)
+		}
+		existingContent = string(existingContentBytes)
+	}
+
+	// Combine new content with existing content
+	finalContent := dg.combineChangelogContent(changelogContent, existingContent)
+
+	// Write changelog to file
+	if err := os.WriteFile(changelogPath, []byte(finalContent), filePermissions); err != nil {
+		return fmt.Errorf("failed to write changelog: %w", err)
+	}
+
+	debug.LogComponent("docs", "Changelog generated successfully: %s", changelogPath)
+	return nil
+}
+
+// getLatestGitTag returns the latest git tag.
+func (dg *DocumentationGenerator) getLatestGitTag() (string, error) {
+	cmd := exec.Command("git", "describe", "--tags", "--abbrev=0")
+	cmd.Dir = dg.config.SourceDir
+	output, err := cmd.Output()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(output)), nil
+}
+
+// getCommitsSinceTag returns commits since a specific tag.
+func (dg *DocumentationGenerator) getCommitsSinceTag(tag string) ([]string, error) {
+	var cmd *exec.Cmd
+	if tag == "" {
+		// If no tag, get all commits
+		cmd = exec.Command("git", "log", "--pretty=format:%s (%an)", "--reverse")
+	} else {
+		// Get commits since the tag
+		cmd = exec.Command("git", "log", "--pretty=format:%s (%an)", "--reverse", tag+"..HEAD")
+	}
+	cmd.Dir = dg.config.SourceDir
+	output, err := cmd.Output()
+	if err != nil {
+		return nil, err
+	}
+
+	commits := strings.Split(strings.TrimSpace(string(output)), "\n")
+	return commits, nil
+}
+
+// groupCommitsByType groups commits by their type (feat, fix, docs, etc.).
+func (dg *DocumentationGenerator) groupCommitsByType(commits []string) []ChangelogSection {
+	sections := make(map[string][]ChangelogEntry)
+
+	// Common commit prefixes and their types
+	typeMappings := map[string]string{
+		"feat:":     "New Features",
+		"feature:":  "New Features",
+		"fix:":      "Bug Fixes",
+		"bugfix:":   "Bug Fixes",
+		"docs:":     "Documentation",
+		"doc:":      "Documentation",
+		"test:":     "Tests",
+		"chore:":    "Updates and Refactors",
+		"style:":    "Style",
+		"refactor:": "Updates and Refactors",
+		"ci:":       "CI/CD",
+		"build:":    "Build",
+		"perf:":     "Performance",
+		"revert:":   "Reverts",
+	}
+
+	for _, commit := range commits {
+		if commit == "" {
+			continue
+		}
+
+		var entry ChangelogEntry
+		entry.Date = time.Now()
+		entry.Description = commit
+
+		// Determine commit type
+		found := false
+		for prefix, sectionTitle := range typeMappings {
+			if strings.HasPrefix(commit, prefix) {
+				entry.Type = sectionTitle
+				entry.Title = strings.TrimSpace(strings.TrimPrefix(commit, prefix))
+				sections[sectionTitle] = append(sections[sectionTitle], entry)
+				found = true
+				break
+			}
+		}
+
+		// If no specific type found, put in "Other" category
+		if !found {
+			entry.Type = "Other"
+			entry.Title = commit
+			sections["Other"] = append(sections["Other"], entry)
+		}
+	}
+
+	// Convert map to sorted slice
+	var result []ChangelogSection
+	sectionOrder := []string{
+		"New Features",
+		"Bug Fixes",
+		"Documentation",
+		"Performance",
+		"Tests",
+		"Updates and Refactors",
+		"CI/CD",
+		"Build",
+		"Style",
+		"Reverts",
+		"Other",
+	}
+
+	for _, title := range sectionOrder {
+		if entries, exists := sections[title]; exists {
+			result = append(result, ChangelogSection{
+				Title:   title,
+				Entries: entries,
+			})
+		}
+	}
+
+	return result
+}
+
+// generateChangelogMarkdown generates the changelog markdown content.
+func (dg *DocumentationGenerator) generateChangelogMarkdown(sections []ChangelogSection, version string) string {
+	var buf bytes.Buffer
+
+	fmt.Fprintf(&buf, "# %s Release %s\n\n", version, time.Now().Format("2006-01-02"))
+	fmt.Fprintf(&buf, "The executor images in this release are:\n")
+	fmt.Fprintf(&buf, "```\n")
+	fmt.Fprintf(&buf, "gcr.io/Gosayram/executor:%s\n", version)
+	fmt.Fprintf(&buf, "gcr.io/Gosayram/executor:latest\n")
+	fmt.Fprintf(&buf, "```\n\n")
+
+	fmt.Fprintf(&buf, "The debug images are available at:\n")
+	fmt.Fprintf(&buf, "```\n")
+	fmt.Fprintf(&buf, "gcr.io/Gosayram/executor:debug\n")
+	fmt.Fprintf(&buf, "gcr.io/Gosayram/executor:%s-debug\n", version)
+	fmt.Fprintf(&buf, "```\n\n")
+
+	fmt.Fprintf(&buf, "The slim executor images which don't contain any authentication binaries are available at:\n")
+	fmt.Fprintf(&buf, "```\n")
+	fmt.Fprintf(&buf, "gcr.io/Gosayram/executor:slim\n")
+	fmt.Fprintf(&buf, "gcr.io/Gosayram/executor:%s-slim\n", version)
+	fmt.Fprintf(&buf, "```\n\n")
+
+	// Write changelog sections
+	for _, section := range sections {
+		if len(section.Entries) == 0 {
+			continue
+		}
+
+		fmt.Fprintf(&buf, "## %s\n\n", section.Title)
+		for _, entry := range section.Entries {
+			fmt.Fprintf(&buf, "* %s\n", entry.Description)
+		}
+		fmt.Fprintf(&buf, "\n")
+	}
+
+	fmt.Fprintf(&buf, "Huge thank you for this release towards our contributors:\n")
+	fmt.Fprintf(&buf, "- Generated by docs automation tool\n\n")
+
+	return buf.String()
+}
+
+// generateChangelogFromTemplate generates changelog content using the provided template.
+func (dg *DocumentationGenerator) generateChangelogFromTemplate(template string, sections []ChangelogSection, version string) string {
+	// Generate pull requests section
+	var prs []string
+	for _, section := range sections {
+		for _, entry := range section.Entries {
+			if strings.Contains(entry.Description, "#") {
+				prs = append(prs, entry.Description)
+			}
+		}
+	}
+	prContent := strings.Join(prs, "\n")
+
+	// Generate contributors section
+	var contributors []string
+	for _, section := range sections {
+		for _, entry := range section.Entries {
+			if strings.Contains(entry.Description, "(") && strings.Contains(entry.Description, ")") {
+				parts := strings.Split(entry.Description, "(")
+				if len(parts) > 1 {
+					contributor := strings.TrimSuffix(parts[1], ")")
+					if contributor != "dependabot[bot]" && contributor != "container-tools-bot" {
+						contributors = append(contributors, contributor)
+					}
+				}
+			}
+		}
+	}
+	
+	// Remove duplicates
+	uniqueContributors := make(map[string]bool)
+	for _, contributor := range contributors {
+		uniqueContributors[contributor] = true
+	}
+	
+	var contributorList []string
+	for contributor := range uniqueContributors {
+		contributorList = append(contributorList, contributor)
+	}
+	contributorsContent := strings.Join(contributorList, "\n- ")
+
+	// Replace template variables
+	result := strings.ReplaceAll(template, "{{VERSION}}", version)
+	result = strings.ReplaceAll(result, "{{DATE}}", time.Now().Format("2006-01-02"))
+	result = strings.ReplaceAll(result, "{{PULL_REQUESTS}}", prContent)
+	result = strings.ReplaceAll(result, "{{CONTRIBUTORS}}", contributorsContent)
+
+	return result
+}
+
+// combineChangelogContent combines new changelog content with existing content.
+func (dg *DocumentationGenerator) combineChangelogContent(newContent, existingContent string) string {
+	if existingContent == "" {
+		return newContent
+	}
+
+	// Find the position after the first release section in existing content
+	lines := strings.Split(existingContent, "\n")
+	insertPosition := 0
+	
+	for i, line := range lines {
+		if strings.HasPrefix(line, "# v") && i > 0 {
+			insertPosition = i
+			break
+		}
+	}
+
+	// Insert new content before the first existing release
+	if insertPosition > 0 {
+		result := strings.Join(lines[:insertPosition], "\n")
+		result += "\n" + newContent + "\n"
+		result += strings.Join(lines[insertPosition:], "\n")
+		return result
+	}
+
+	// If no release found, just append
+	return existingContent + "\n\n" + newContent
+}
+
+// generateDocumentationFiles writes out generated docs (CLI ref, README, migration, changelog).
 func (dg *DocumentationGenerator) generateDocumentationFiles() error {
 	debug.LogComponent("docs", "Generating documentation files in: %s", dg.config.OutputDir)
 
@@ -318,6 +623,11 @@ func (dg *DocumentationGenerator) generateDocumentationFiles() error {
 	}
 	if err := dg.generateMigrationGuides(); err != nil {
 		return fmt.Errorf("failed to generate migration guides: %w", err)
+	}
+	if dg.config.GenerateChangelog {
+		if err := dg.generateChangelog(); err != nil {
+			return fmt.Errorf("failed to generate changelog: %w", err)
+		}
 	}
 
 	return nil
@@ -707,42 +1017,226 @@ func (dg *DocumentationGenerator) UpdateReadmeWithExamples() {
 
 // main is the entry point for the docs automation tool.
 func main() {
+	// Parse command line arguments
+	generateCLI := flag.Bool("cli", false, "Generate CLI documentation")
+	generateJSON := flag.Bool("json", false, "Generate JSON documentation")
+	generateReadme := flag.Bool("readme", false, "Generate README updates")
+	generateMigration := flag.Bool("migration", false, "Generate migration guides")
+	generateChangelog := flag.Bool("changelog", false, "Generate changelog")
+	flag.Parse()
+
 	// Initialize structured debug logging.
 	debugOpts := &config.DebugOptions{
 		EnableFullDebug:  true,
-		OutputDebugFiles: true,
+		OutputDebugFiles: false, // Disable debug file output to avoid filesystem issues
 		DebugLogLevel:    "debug",
 		DebugComponents:  []string{"docs"},
 	}
 	if _, err := debug.Init(debugOpts); err != nil {
-		log.Fatalf("Failed to initialize debug logging: %v", err)
+		log.Printf("Warning: Failed to initialize debug logging: %v", err)
 	}
 
 	// Build generator config from current repository layout.
 	docConfig := DocumentationConfig{
 		ProjectName:    "Kaniko",
-		Version:        version.Version,
+		Version:        getReleaseVersion(),
 		OutputDir:      "docs/generated",
 		SourceDir:      ".",
 		TemplateDir:    "docs/templates",
 		IncludeTests:   false,
 		IncludePrivate: false,
+		GenerateChangelog: generateChangelog != nil,
 	}
 
 	// Create generator.
 	generator := NewDocumentationGenerator(&docConfig)
 
-	// Generate docs.
-	if err := generator.GenerateCLIDocs(); err != nil {
-		log.Fatalf("Failed to generate CLI documentation: %v", err)
+	// Generate docs based on flags
+	if *generateCLI {
+		if err := generator.GenerateCLIDocs(); err != nil {
+			log.Fatalf("Failed to generate CLI documentation: %v", err)
+		}
 	}
-	if err := generator.GenerateCLIDocsJSON(); err != nil {
-		log.Fatalf("Failed to generate JSON documentation: %v", err)
+	if *generateJSON {
+		if err := generator.GenerateCLIDocsJSON(); err != nil {
+			log.Fatalf("Failed to generate JSON documentation: %v", err)
+		}
 	}
-	generator.UpdateReadmeWithExamples()
-	if err := generator.generateMigrationGuides(); err != nil {
-		log.Fatalf("Failed to generate migration guides: %v", err)
+	if *generateReadme {
+		generator.UpdateReadmeWithExamples()
+	}
+	if *generateMigration {
+		if err := generator.generateMigrationGuides(); err != nil {
+			log.Fatalf("Failed to generate migration guides: %v", err)
+		}
+	}
+	if *generateChangelog {
+		if err := generator.updateExistingChangelog(); err != nil {
+			log.Fatalf("Failed to generate changelog: %v", err)
+		}
 	}
 
 	log.Println("Documentation generation completed successfully")
+}
+
+// getReleaseVersion reads the version from .release-version file
+func getReleaseVersion() string {
+	versionBytes, err := os.ReadFile(".release-version")
+	if err != nil {
+		log.Printf("Failed to read .release-version file: %v", err)
+		return "dev"
+	}
+	return strings.TrimSpace(string(versionBytes))
+}
+
+// updateExistingChangelog reads the current CHANGELOG.md and updates it with a new version entry at the beginning.
+func (dg *DocumentationGenerator) updateExistingChangelog() error {
+	debug.LogComponent("docs", "Updating existing CHANGELOG.md")
+
+	changelogPath := "CHANGELOG.md"
+	
+	// Read current changelog
+	currentContent, err := os.ReadFile(changelogPath)
+	if err != nil {
+		return fmt.Errorf("failed to read current changelog: %w", err)
+	}
+
+	// Get pull requests and contributors from current main branch since last tag
+	prs, contributors, err := dg.getCurrentBranchPRsAndContributors()
+	if err != nil {
+		debug.LogComponent("docs", "Warning: Failed to get PRs and contributors: %v", err)
+		// Continue with empty lists
+		prs = []string{}
+		contributors = []string{}
+	}
+
+	// Generate new version entry
+	newVersionEntry := dg.generateVersionEntry(prs, contributors)
+
+	// Combine new entry with existing content
+	updatedContent := newVersionEntry + "\n\n" + string(currentContent)
+
+	// Write back to file
+	if err := os.WriteFile(changelogPath, []byte(updatedContent), filePermissions); err != nil {
+		return fmt.Errorf("failed to write updated changelog: %w", err)
+	}
+
+	debug.LogComponent("docs", "CHANGELOG.md updated successfully with new version entry")
+	return nil
+}
+
+// getCurrentBranchPRsAndContributors fetches pull requests and contributors from the current main branch since last tag
+func (dg *DocumentationGenerator) getCurrentBranchPRsAndContributors() ([]string, []string, error) {
+	var prs []string
+	var contributors []string
+
+	// Get the latest tag to determine the range for changelog entries
+	latestTag, err := dg.getLatestGitTag()
+	if err != nil {
+		debug.LogComponent("docs", "No git tags found, using all commits: %v", err)
+		latestTag = ""
+	}
+
+	// Get commits since the latest tag in current branch
+	commits, err := dg.getCommitsSinceTag(latestTag)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to get commits: %w", err)
+	}
+
+	debug.LogComponent("docs", "Found %d commits since tag %s", len(commits), latestTag)
+
+	// Process commits to extract PRs and contributors
+	for _, commit := range commits {
+		if commit == "" {
+			continue
+		}
+
+		// Extract PR numbers from commit messages (format: "message (#123)")
+		if strings.Contains(commit, "#") {
+			// Extract the PR number part
+			prMatch := regexp.MustCompile(`#(\d+)`)
+			if prMatch.MatchString(commit) {
+				prs = append(prs, commit)
+			}
+		}
+
+		// Extract author information (format: "message (author)")
+		if strings.Contains(commit, "(") && strings.Contains(commit, ")") {
+			parts := strings.Split(commit, "(")
+			if len(parts) > 1 {
+				contributor := strings.TrimSuffix(parts[1], ")")
+				if contributor != "dependabot[bot]" && contributor != "container-tools-bot" && contributor != "" && contributor != "unknown" {
+					contributors = append(contributors, contributor)
+				}
+			}
+		}
+	}
+
+	// Remove duplicate contributors
+	uniqueContributors := make(map[string]bool)
+	for _, contributor := range contributors {
+		uniqueContributors[contributor] = true
+	}
+	
+	var contributorList []string
+	for contributor := range uniqueContributors {
+		contributorList = append(contributorList, contributor)
+	}
+	sort.Strings(contributorList)
+
+	debug.LogComponent("docs", "Found %d PRs and %d contributors", len(prs), len(contributorList))
+	return prs, contributorList, nil
+}
+
+// generateVersionEntry creates a new version entry for the changelog with real PR and contributor data.
+func (dg *DocumentationGenerator) generateVersionEntry(prs []string, contributors []string) string {
+	var sb strings.Builder
+
+	// Get current date in YYYY-MM-DD format
+	currentDate := time.Now().Format("2006-01-02")
+
+	// Write version header
+	sb.WriteString(fmt.Sprintf("# v%s Release %s\n\n", dg.version, currentDate))
+
+	// Write image information
+	sb.WriteString("The executor images in this release are:\n")
+	sb.WriteString("```\n")
+	sb.WriteString(fmt.Sprintf("gcr.io/Gosayram/executor:%s\n", dg.version))
+	sb.WriteString("gcr.io/Gosayram/executor:latest\n")
+	sb.WriteString("```\n\n")
+
+	sb.WriteString("The debug images are available at:\n")
+	sb.WriteString("```\n")
+	sb.WriteString("gcr.io/Gosayram/executor:debug\n")
+	sb.WriteString(fmt.Sprintf("gcr.io/Gosayram/executor:%s-debug\n", dg.version))
+	sb.WriteString("```\n\n")
+
+	sb.WriteString("The slim executor images which don't contain any authentication binaries are available at:\n")
+	sb.WriteString("```\n")
+	sb.WriteString("gcr.io/Gosayram/executor:slim\n")
+	sb.WriteString(fmt.Sprintf("gcr.io/Gosayram/executor:%s-slim\n", dg.version))
+	sb.WriteString("```\n\n")
+
+	// Write PRs if any
+	if len(prs) > 0 {
+		sb.WriteString("### Pull Requests\n\n")
+		for _, pr := range prs {
+			sb.WriteString(fmt.Sprintf("* %s\n", pr))
+		}
+		sb.WriteString("\n")
+	}
+
+	// Write contributors if any
+	if len(contributors) > 0 {
+		sb.WriteString("Huge thank you for this release towards our contributors:\n")
+		for _, contributor := range contributors {
+			sb.WriteString(fmt.Sprintf("- %s\n", contributor))
+		}
+		sb.WriteString("\n")
+	} else {
+		sb.WriteString("Huge thank you for this release towards our contributors:\n")
+		sb.WriteString("- No contributors found in this release\n\n")
+	}
+
+	return sb.String()
 }
