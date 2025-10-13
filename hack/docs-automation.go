@@ -1111,7 +1111,7 @@ func (dg *DocumentationGenerator) updateExistingChangelog() error {
 	}
 
 	// Generate new version entry
-	newVersionEntry := dg.generateVersionEntry(prs, contributors)
+	newVersionEntry := dg.generateVersionEntry(dg.version, prs, contributors)
 
 	// Combine new entry with existing content
 	updatedContent := newVersionEntry + "\n\n" + string(currentContent)
@@ -1147,29 +1147,29 @@ func (dg *DocumentationGenerator) getCurrentBranchPRsAndContributors() ([]string
 
 	// Process commits to extract PRs and contributors
 	for _, commit := range commits {
-		if commit == "" {
-			continue
-		}
+	    if commit == "" {
+	        continue
+	    }
 
-		// Extract PR numbers from commit messages (format: "message (#123)")
-		if strings.Contains(commit, "#") {
-			// Extract the PR number part
-			prMatch := regexp.MustCompile(`#(\d+)`)
-			if prMatch.MatchString(commit) {
-				prs = append(prs, commit)
-			}
-		}
+	    // Extract PR numbers from commit messages (format: "message (#123)")
+	    prMatch := regexp.MustCompile(`#(\d+)`)
+	    matches := prMatch.FindStringSubmatch(commit)
+	    if len(matches) > 1 {
+	        prNumber := matches[1]
+	        // Append the PR number as a string for simplicity
+	        prs = append(prs, "PR #"+prNumber)
+	    }
 
-		// Extract author information (format: "message (author)")
-		if strings.Contains(commit, "(") && strings.Contains(commit, ")") {
-			parts := strings.Split(commit, "(")
-			if len(parts) > 1 {
-				contributor := strings.TrimSuffix(parts[1], ")")
-				if contributor != "dependabot[bot]" && contributor != "container-tools-bot" && contributor != "" && contributor != "unknown" {
-					contributors = append(contributors, contributor)
-				}
-			}
-		}
+	    // Extract author information (format: "message (author)")
+	    if strings.Contains(commit, "(") && strings.Contains(commit, ")") {
+	        parts := strings.Split(commit, "(")
+	        if len(parts) > 1 {
+	            contributor := strings.TrimSuffix(parts[1], ")")
+	            if contributor != "dependabot[bot]" && contributor != "container-tools-bot" && contributor != "" && contributor != "unknown" {
+	                contributors = append(contributors, contributor)
+	            }
+	        }
+	    }
 	}
 
 	// Remove duplicate contributors
@@ -1189,32 +1189,32 @@ func (dg *DocumentationGenerator) getCurrentBranchPRsAndContributors() ([]string
 }
 
 // generateVersionEntry creates a new version entry for the changelog with real PR and contributor data.
-func (dg *DocumentationGenerator) generateVersionEntry(prs []string, contributors []string) string {
+func (dg *DocumentationGenerator) generateVersionEntry(version string, prs []string, contributors []string) string {
 	var sb strings.Builder
 
 	// Get current date in YYYY-MM-DD format
 	currentDate := time.Now().Format("2006-01-02")
 
 	// Write version header
-	sb.WriteString(fmt.Sprintf("# v%s Release %s\n\n", dg.version, currentDate))
+	sb.WriteString(fmt.Sprintf("# v%s Release %s\n\n", version, currentDate))
 
 	// Write image information
 	sb.WriteString("The executor images in this release are:\n")
 	sb.WriteString("```\n")
-	sb.WriteString(fmt.Sprintf("gcr.io/Gosayram/executor:%s\n", dg.version))
+	sb.WriteString(fmt.Sprintf("gcr.io/Gosayram/executor:%s\n", version))
 	sb.WriteString("gcr.io/Gosayram/executor:latest\n")
 	sb.WriteString("```\n\n")
 
 	sb.WriteString("The debug images are available at:\n")
 	sb.WriteString("```\n")
 	sb.WriteString("gcr.io/Gosayram/executor:debug\n")
-	sb.WriteString(fmt.Sprintf("gcr.io/Gosayram/executor:%s-debug\n", dg.version))
+	sb.WriteString(fmt.Sprintf("gcr.io/Gosayram/executor:%s-debug\n", version))
 	sb.WriteString("```\n\n")
 
 	sb.WriteString("The slim executor images which don't contain any authentication binaries are available at:\n")
 	sb.WriteString("```\n")
 	sb.WriteString("gcr.io/Gosayram/executor:slim\n")
-	sb.WriteString(fmt.Sprintf("gcr.io/Gosayram/executor:%s-slim\n", dg.version))
+	sb.WriteString(fmt.Sprintf("gcr.io/Gosayram/executor:%s-slim\n", version))
 	sb.WriteString("```\n\n")
 
 	// Write PRs if any
