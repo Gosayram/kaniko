@@ -901,9 +901,11 @@ func CopyFile(src, dest string, context FileContext, uid, gid int64,
 	logrus.Debugf("Copying file %s to %s", src, dest)
 	// Validate the source file path to prevent directory traversal
 	cleanSrc := filepath.Clean(src)
-	if strings.Contains(cleanSrc, "..") || strings.HasPrefix(cleanSrc, "/") {
+	if strings.Contains(cleanSrc, "..") {
 		return false, fmt.Errorf("invalid source file path: potential directory traversal detected")
 	}
+	// Allow absolute paths, they are not inherently malicious
+	// The path validation should focus on ".." components which could indicate directory traversal
 	srcFile, err := os.Open(cleanSrc)
 	if err != nil {
 		return false, err
