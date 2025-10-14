@@ -29,7 +29,7 @@ VERSION ?= $(shell cat .release-version 2>/dev/null || echo v1.24.0)
 # Extract version components for backward compatibility
 VERSION_MAJOR ?= 1
 VERSION_MINOR ?= 24
-VERSION_BUILD ?= 1
+VERSION_BUILD ?= 2
 
 GOPATH ?= $(shell go env GOPATH)
 GOLANGCI_LINT = $(GOPATH)/bin/golangci-lint
