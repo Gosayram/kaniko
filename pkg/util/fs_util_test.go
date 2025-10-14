@@ -1562,7 +1562,7 @@ func Test_setFileTimes(t *testing.T) {
 			}
 		})
 	}
-	
+
 }
 
 func TestValidateFilePath(t *testing.T) {
@@ -1631,11 +1631,11 @@ func TestValidateFilePath(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			err := validateFilePath(tt.path)
-			
+
 			if tt.expectError && err == nil {
 				t.Errorf("Expected error for path '%s' but got none", tt.path)
 			}
-			
+
 			if !tt.expectError && err != nil {
 				t.Errorf("Expected no error for path '%s' but got: %v", tt.path, err)
 			}
@@ -1684,11 +1684,11 @@ func TestValidateLinkPathName(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			err := validateLinkPathName(tt.path)
-			
+
 			if tt.expectError && err == nil {
 				t.Errorf("Expected error for path '%s' but got none", tt.path)
 			}
-			
+
 			if !tt.expectError && err != nil {
 				t.Errorf("Expected no error for path '%s' but got: %v", tt.path, err)
 			}
