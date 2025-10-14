@@ -53,7 +53,7 @@ func main() {
 		token = envToken
 		fmt.Printf("Using GITHUB_TOKEN from environment variable\n")
 	}
-	
+
 	rootCmd.Flags().StringVar(&token, "token", token,
 		"Specify personal Github Token if you are hitting a rate limit anonymously. "+
 			"https://github.com/settings/tokens (can also be set via GITHUB_TOKEN env var)")
@@ -61,7 +61,7 @@ func main() {
 		"comparison of commits is based on this tag "+
 			"(defaults to the latest tag in the repo)")
 	rootCmd.Flags().StringVar(&toTag, "toTag", "master", "this is the commit that is compared with fromTag")
-	
+
 	// Add help text for the repository constants
 	rootCmd.PersistentPreRun = func(cmd *cobra.Command, args []string) {
 		fmt.Printf("Repository: https://github.com/%s/%s\n", org, repo)
@@ -74,7 +74,7 @@ func main() {
 		}
 		fmt.Println()
 	}
-	
+
 	if err := rootCmd.Execute(); err != nil {
 		logrus.Fatal(err)
 	}
@@ -85,7 +85,7 @@ func printPullRequests() {
 
 	// Test API access first with a simple request
 	fmt.Printf("Testing API access to https://github.com/%s/%s...\n", org, repo)
-	
+
 	// Try to get repository info to test access
 	_, resp, err := client.Repositories.Get(context.Background(), org, repo)
 	if err != nil {
@@ -165,7 +165,7 @@ func printPullRequests() {
 
 		listSize = len(pullRequests)
 	}
-	
+
 	fmt.Printf("Processed %d total pull requests, found %d merged PRs since last release\n", prCount, len(seen))
 }
 

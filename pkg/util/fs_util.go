@@ -402,8 +402,8 @@ func extractRegularFile(path string, mode os.FileMode, uid, gid int, tr io.Reade
 
 	// Validate file path to prevent directory traversal
 	cleanPath := filepath.Clean(path)
-	if strings.Contains(cleanPath, "..") || strings.HasPrefix(cleanPath, "/") {
-		return fmt.Errorf("invalid file path: potential directory traversal detected")
+	if err := validateFilePath(path); err != nil {
+		return err
 	}
 
 	// Create and write file
@@ -459,8 +459,8 @@ func extractHardLink(dest, path string, hdr *tar.Header) error {
 	}
 
 	// Validate linkname to prevent directory traversal before joining paths
-	if strings.Contains(hdr.Linkname, "..") || strings.HasPrefix(hdr.Linkname, "/") {
-		return fmt.Errorf("invalid linkname: potential directory traversal detected")
+	if err := validateLinkPathName(hdr.Linkname); err != nil {
+		return err
 	}
 
 	// Construct the link path safely
@@ -590,8 +590,8 @@ func DetectFilesystemIgnoreList(path string) error {
 	logrus.Trace("Detecting filesystem ignore list")
 	// Validate the file path to prevent directory traversal
 	cleanPath := filepath.Clean(path)
-	if strings.Contains(cleanPath, "..") || strings.HasPrefix(cleanPath, "/") {
-		return fmt.Errorf("invalid file path: potential directory traversal detected")
+	if err := validateFilePath(path); err != nil {
+		return err
 	}
 	f, err := os.Open(cleanPath)
 	if err != nil {
@@ -729,8 +729,8 @@ func CreateFile(path string, reader io.Reader, perm os.FileMode, uid, gid uint32
 
 	// Validate the file path to prevent directory traversal
 	cleanPath := filepath.Clean(path)
-	if strings.Contains(cleanPath, "..") || strings.HasPrefix(cleanPath, "/") {
-		return fmt.Errorf("invalid file path: potential directory traversal detected")
+	if err := validateFilePath(path); err != nil {
+		return err
 	}
 	dest, err := os.Create(cleanPath)
 	if err != nil {
@@ -899,14 +899,16 @@ func CopyFile(src, dest string, context FileContext, uid, gid int64,
 		return false, err
 	}
 	logrus.Debugf("Copying file %s to %s", src, dest)
+
 	// Validate the source file path to prevent directory traversal
-	cleanSrc := filepath.Clean(src)
-	if strings.Contains(cleanSrc, "..") {
-		return false, fmt.Errorf("invalid source file path: potential directory traversal detected")
+	if err := validateFilePath(src); err != nil {
+		logrus.Debugf("Path validation failed for source file %s: %v", src, err)
+		return false, err
 	}
+
 	// Allow absolute paths, they are not inherently malicious
 	// The path validation should focus on ".." components which could indicate directory traversal
-	srcFile, err := os.Open(cleanSrc)
+	srcFile, err := os.Open(src)
 	if err != nil {
 		return false, err
 	}
@@ -950,8 +952,8 @@ func getExcludedFiles(dockerfilePath, buildcontext string) ([]string, error) {
 	logrus.Infof("Using dockerignore file: %v", path)
 	// Validate the file path to prevent directory traversal
 	cleanPath := filepath.Clean(path)
-	if strings.Contains(cleanPath, "..") || strings.HasPrefix(cleanPath, "/") {
-		return nil, fmt.Errorf("invalid file path: potential directory traversal detected")
+	if err := validateFilePath(path); err != nil {
+		return nil, err
 	}
 	contents, err := os.ReadFile(cleanPath)
 	if err != nil {
@@ -1093,8 +1095,8 @@ func CreateTargetTarfile(tarpath string) (*os.File, error) {
 	}
 	// Validate the tar path to prevent directory traversal
 	cleanTarPath := filepath.Clean(tarpath)
-	if strings.Contains(cleanTarPath, "..") || strings.HasPrefix(cleanTarPath, "/") {
-		return nil, fmt.Errorf("invalid tar path: potential directory traversal detected")
+	if err := validateFilePath(tarpath); err != nil {
+		return nil, err
 	}
 	return os.Create(cleanTarPath)
 }
@@ -1405,4 +1407,41 @@ func isSame(fi1, fi2 os.FileInfo) bool {
 		uint64(fi1.Sys().(*syscall.Stat_t).Uid) == uint64(fi2.Sys().(*syscall.Stat_t).Uid) &&
 		// file group id is
 		uint64(fi1.Sys().(*syscall.Stat_t).Gid) == uint64(fi2.Sys().(*syscall.Stat_t).Gid)
+}
+
+// validateFilePath validates a file path to prevent directory traversal attacks
+// It allows legitimate relative paths (like ".kaniko/Dockerfile") but blocks
+// actual directory traversal attempts (like "../file" or "dir/../file")
+func validateFilePath(path string) error {
+	logrus.Debugf("Validating file path: %s", path)
+
+	// Clean the path to normalize it
+	cleanPath := filepath.Clean(path)
+	logrus.Debugf("Cleaned path: %s", cleanPath)
+
+	// Block actual directory traversal attempts
+	// Check for patterns like: "../file", "dir/../file", or just ".."
+	if strings.Contains(cleanPath, "/../") || strings.HasPrefix(cleanPath, "../") || cleanPath == ".." {
+		logrus.Warnf("Directory traversal attempt detected in path: %s", path)
+		return fmt.Errorf("invalid file path: potential directory traversal detected")
+	}
+
+	logrus.Debugf("Path validation successful for: %s", path)
+	return nil
+}
+
+// validateLinkPathName validates a link path name to prevent directory traversal attacks
+// Similar to validateFilePath but specifically for link names
+func validateLinkPathName(path string) error {
+	logrus.Debugf("Validating link path name: %s", path)
+
+	// Block actual directory traversal attempts
+	// Check for patterns like: "../file", "dir/../file", or just ".."
+	if strings.Contains(path, "/../") || strings.HasPrefix(path, "../") || path == ".." {
+		logrus.Warnf("Directory traversal attempt detected in link path name: %s", path)
+		return fmt.Errorf("invalid linkname: potential directory traversal detected")
+	}
+
+	logrus.Debugf("Link path name validation successful for: %s", path)
+	return nil
 }

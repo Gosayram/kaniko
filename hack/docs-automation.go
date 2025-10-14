@@ -72,14 +72,14 @@ type CLIExample struct {
 
 // DocumentationConfig defines input/output config for docs generation.
 type DocumentationConfig struct {
-	ProjectName    string `json:"projectName"`
-	Version        string `json:"version"`
-	OutputDir      string `json:"outputDir"`
-	SourceDir      string `json:"sourceDir"`
-	TemplateDir    string `json:"templateDir"`
-	IncludeTests   bool   `json:"includeTests"`
-	IncludePrivate bool   `json:"includePrivate"`
-	GenerateChangelog bool `json:"generateChangelog"`
+	ProjectName       string `json:"projectName"`
+	Version           string `json:"version"`
+	OutputDir         string `json:"outputDir"`
+	SourceDir         string `json:"sourceDir"`
+	TemplateDir       string `json:"templateDir"`
+	IncludeTests      bool   `json:"includeTests"`
+	IncludePrivate    bool   `json:"includePrivate"`
+	GenerateChangelog bool   `json:"generateChangelog"`
 }
 
 // ChangelogEntry represents a single changelog entry.
@@ -94,7 +94,7 @@ type ChangelogEntry struct {
 
 // ChangelogSection represents a section in the changelog.
 type ChangelogSection struct {
-	Title   string          `json:"title"`
+	Title   string           `json:"title"`
 	Entries []ChangelogEntry `json:"entries"`
 }
 
@@ -354,7 +354,7 @@ func (dg *DocumentationGenerator) generateChangelog() error {
 
 	// Read existing changelog
 	changelogPath := "CHANGELOG.md"
-	
+
 	var existingContent string
 	if _, err := os.Stat(changelogPath); err == nil {
 		existingContentBytes, err := os.ReadFile(changelogPath)
@@ -556,13 +556,13 @@ func (dg *DocumentationGenerator) generateChangelogFromTemplate(template string,
 			}
 		}
 	}
-	
+
 	// Remove duplicates
 	uniqueContributors := make(map[string]bool)
 	for _, contributor := range contributors {
 		uniqueContributors[contributor] = true
 	}
-	
+
 	var contributorList []string
 	for contributor := range uniqueContributors {
 		contributorList = append(contributorList, contributor)
@@ -587,7 +587,7 @@ func (dg *DocumentationGenerator) combineChangelogContent(newContent, existingCo
 	// Find the position after the first release section in existing content
 	lines := strings.Split(existingContent, "\n")
 	insertPosition := 0
-	
+
 	for i, line := range lines {
 		if strings.HasPrefix(line, "# v") && i > 0 {
 			insertPosition = i
@@ -1038,13 +1038,13 @@ func main() {
 
 	// Build generator config from current repository layout.
 	docConfig := DocumentationConfig{
-		ProjectName:    "Kaniko",
-		Version:        getReleaseVersion(),
-		OutputDir:      "docs/generated",
-		SourceDir:      ".",
-		TemplateDir:    "docs/templates",
-		IncludeTests:   false,
-		IncludePrivate: false,
+		ProjectName:       "Kaniko",
+		Version:           getReleaseVersion(),
+		OutputDir:         "docs/generated",
+		SourceDir:         ".",
+		TemplateDir:       "docs/templates",
+		IncludeTests:      false,
+		IncludePrivate:    false,
 		GenerateChangelog: generateChangelog != nil,
 	}
 
@@ -1094,7 +1094,7 @@ func (dg *DocumentationGenerator) updateExistingChangelog() error {
 	debug.LogComponent("docs", "Updating existing CHANGELOG.md")
 
 	changelogPath := "CHANGELOG.md"
-	
+
 	// Read current changelog
 	currentContent, err := os.ReadFile(changelogPath)
 	if err != nil {
@@ -1147,29 +1147,29 @@ func (dg *DocumentationGenerator) getCurrentBranchPRsAndContributors() ([]string
 
 	// Process commits to extract PRs and contributors
 	for _, commit := range commits {
-	    if commit == "" {
-	        continue
-	    }
+		if commit == "" {
+			continue
+		}
 
-	    // Extract PR numbers from commit messages (format: "message (#123)")
-	    prMatch := regexp.MustCompile(`#(\d+)`)
-	    matches := prMatch.FindStringSubmatch(commit)
-	    if len(matches) > 1 {
-	        prNumber := matches[1]
-	        // Append the PR number as a string for simplicity
-	        prs = append(prs, "PR #"+prNumber)
-	    }
+		// Extract PR numbers from commit messages (format: "message (#123)")
+		prMatch := regexp.MustCompile(`#(\d+)`)
+		matches := prMatch.FindStringSubmatch(commit)
+		if len(matches) > 1 {
+			prNumber := matches[1]
+			// Append the PR number as a string for simplicity
+			prs = append(prs, "PR #"+prNumber)
+		}
 
-	    // Extract author information (format: "message (author)")
-	    if strings.Contains(commit, "(") && strings.Contains(commit, ")") {
-	        parts := strings.Split(commit, "(")
-	        if len(parts) > 1 {
-	            contributor := strings.TrimSuffix(parts[1], ")")
-	            if contributor != "dependabot[bot]" && contributor != "container-tools-bot" && contributor != "" && contributor != "unknown" {
-	                contributors = append(contributors, contributor)
-	            }
-	        }
-	    }
+		// Extract author information (format: "message (author)")
+		if strings.Contains(commit, "(") && strings.Contains(commit, ")") {
+			parts := strings.Split(commit, "(")
+			if len(parts) > 1 {
+				contributor := strings.TrimSuffix(parts[1], ")")
+				if contributor != "dependabot[bot]" && contributor != "container-tools-bot" && contributor != "" && contributor != "unknown" {
+					contributors = append(contributors, contributor)
+				}
+			}
+		}
 	}
 
 	// Remove duplicate contributors
@@ -1177,7 +1177,7 @@ func (dg *DocumentationGenerator) getCurrentBranchPRsAndContributors() ([]string
 	for _, contributor := range contributors {
 		uniqueContributors[contributor] = true
 	}
-	
+
 	var contributorList []string
 	for contributor := range uniqueContributors {
 		contributorList = append(contributorList, contributor)
