@@ -1419,8 +1419,10 @@ func validateFilePath(path string) error {
 	// Block actual directory traversal attempts
 	// Check for patterns like: "../file", "dir/../file", or just ".."
 	// We check both the original and cleaned paths to catch different cases
-	if strings.Contains(path, "/../") || strings.HasPrefix(path, "../") || path == ".." || strings.HasSuffix(path, "/..") ||
-		strings.Contains(cleanPath, "/../") || strings.HasPrefix(cleanPath, "../") || cleanPath == ".." || strings.HasSuffix(cleanPath, "/..") {
+	if strings.HasPrefix(path, "../") || path == ".." ||
+		strings.HasPrefix(cleanPath, "../") || cleanPath == ".." ||
+		strings.Contains(path, "/../") || strings.Contains(cleanPath, "/../") ||
+		strings.HasSuffix(path, "/..") {
 		logrus.Warnf("Directory traversal attempt detected in path: %s", path)
 		return fmt.Errorf("invalid file path: potential directory traversal detected")
 	}
@@ -1437,8 +1439,10 @@ func validateLinkPathName(path string) error {
 	// Block actual directory traversal attempts
 	// Check for patterns like: "../file", "dir/../file", or just ".."
 	// We check both the original and cleaned paths to catch different cases
-	if strings.Contains(path, "/../") || strings.HasPrefix(path, "../") || path == ".." || strings.HasSuffix(path, "/..") ||
-		strings.Contains(cleanPath, "/../") || strings.HasPrefix(cleanPath, "../") || cleanPath == ".." || strings.HasSuffix(cleanPath, "/..") {
+	if strings.HasPrefix(path, "../") || path == ".." ||
+		strings.HasPrefix(cleanPath, "../") || cleanPath == ".." ||
+		strings.Contains(path, "/../") || strings.Contains(cleanPath, "/../") ||
+		strings.HasSuffix(path, "/..") {
 		logrus.Warnf("Directory traversal attempt detected in link path name: %s", path)
 		return fmt.Errorf("invalid linkname: potential directory traversal detected")
 	}
