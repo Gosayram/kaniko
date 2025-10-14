@@ -1413,35 +1413,35 @@ func isSame(fi1, fi2 os.FileInfo) bool {
 // It allows legitimate relative paths (like ".kaniko/Dockerfile") but blocks
 // actual directory traversal attempts (like "../file" or "dir/../file")
 func validateFilePath(path string) error {
-	logrus.Debugf("Validating file path: %s", path)
-
 	// Clean the path to normalize it
 	cleanPath := filepath.Clean(path)
-	logrus.Debugf("Cleaned path: %s", cleanPath)
 
 	// Block actual directory traversal attempts
 	// Check for patterns like: "../file", "dir/../file", or just ".."
-	if strings.Contains(cleanPath, "/../") || strings.HasPrefix(cleanPath, "../") || cleanPath == ".." {
+	// We check both the original and cleaned paths to catch different cases
+	if strings.Contains(path, "/../") || strings.HasPrefix(path, "../") || path == ".." || strings.HasSuffix(path, "/..") ||
+		strings.Contains(cleanPath, "/../") || strings.HasPrefix(cleanPath, "../") || cleanPath == ".." || strings.HasSuffix(cleanPath, "/..") {
 		logrus.Warnf("Directory traversal attempt detected in path: %s", path)
 		return fmt.Errorf("invalid file path: potential directory traversal detected")
 	}
 
-	logrus.Debugf("Path validation successful for: %s", path)
 	return nil
 }
 
 // validateLinkPathName validates a link path name to prevent directory traversal attacks
 // Similar to validateFilePath but specifically for link names
 func validateLinkPathName(path string) error {
-	logrus.Debugf("Validating link path name: %s", path)
+	// Clean the path to normalize it
+	cleanPath := filepath.Clean(path)
 
 	// Block actual directory traversal attempts
 	// Check for patterns like: "../file", "dir/../file", or just ".."
-	if strings.Contains(path, "/../") || strings.HasPrefix(path, "../") || path == ".." {
+	// We check both the original and cleaned paths to catch different cases
+	if strings.Contains(path, "/../") || strings.HasPrefix(path, "../") || path == ".." || strings.HasSuffix(path, "/..") ||
+		strings.Contains(cleanPath, "/../") || strings.HasPrefix(cleanPath, "../") || cleanPath == ".." || strings.HasSuffix(cleanPath, "/..") {
 		logrus.Warnf("Directory traversal attempt detected in link path name: %s", path)
 		return fmt.Errorf("invalid linkname: potential directory traversal detected")
 	}
 
-	logrus.Debugf("Link path name validation successful for: %s", path)
 	return nil
 }

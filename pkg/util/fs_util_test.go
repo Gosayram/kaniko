@@ -1562,4 +1562,136 @@ func Test_setFileTimes(t *testing.T) {
 			}
 		})
 	}
+	
+}
+
+func TestValidateFilePath(t *testing.T) {
+	tests := []struct {
+		name        string
+		path        string
+		expectError bool
+	}{
+		{
+			name:        "Valid relative path with dot",
+			path:        ".kaniko/Dockerfile",
+			expectError: false,
+		},
+		{
+			name:        "Valid relative path",
+			path:        "Dockerfile",
+			expectError: false,
+		},
+		{
+			name:        "Valid relative path with subdirectory",
+			path:        "src/app/Dockerfile",
+			expectError: false,
+		},
+		{
+			name:        "Valid absolute path",
+			path:        "/path/to/Dockerfile",
+			expectError: false,
+		},
+		{
+			name:        "Invalid path with parent directory",
+			path:        "../Dockerfile",
+			expectError: true,
+		},
+		{
+			name:        "Invalid path with parent directory in middle",
+			path:        "dir/../Dockerfile",
+			expectError: true,
+		},
+		{
+			name:        "Invalid path with parent directory at end",
+			path:        "path/..",
+			expectError: true,
+		},
+		{
+			name:        "Invalid path just parent directory",
+			path:        "..",
+			expectError: true,
+		},
+		{
+			name:        "Valid path with multiple dots",
+			path:        ".../file.txt",
+			expectError: false,
+		},
+		{
+			name:        "Valid path with dot in filename",
+			path:        ".dockerignore",
+			expectError: false,
+		},
+		{
+			name:        "Valid path with dot in directory",
+			path:        "./config/.env",
+			expectError: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateFilePath(tt.path)
+			
+			if tt.expectError && err == nil {
+				t.Errorf("Expected error for path '%s' but got none", tt.path)
+			}
+			
+			if !tt.expectError && err != nil {
+				t.Errorf("Expected no error for path '%s' but got: %v", tt.path, err)
+			}
+		})
+	}
+}
+
+func TestValidateLinkPathName(t *testing.T) {
+	tests := []struct {
+		name        string
+		path        string
+		expectError bool
+	}{
+		{
+			name:        "Valid relative link path",
+			path:        "link/to/file",
+			expectError: false,
+		},
+		{
+			name:        "Valid absolute link path",
+			path:        "/absolute/link",
+			expectError: false,
+		},
+		{
+			name:        "Invalid link path with parent directory",
+			path:        "../link",
+			expectError: true,
+		},
+		{
+			name:        "Invalid link path with parent directory in middle",
+			path:        "dir/../link",
+			expectError: true,
+		},
+		{
+			name:        "Invalid link path just parent directory",
+			path:        "..",
+			expectError: true,
+		},
+		{
+			name:        "Valid link path with multiple dots",
+			path:        ".../link",
+			expectError: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateLinkPathName(tt.path)
+			
+			if tt.expectError && err == nil {
+				t.Errorf("Expected error for path '%s' but got none", tt.path)
+			}
+			
+			if !tt.expectError && err != nil {
+				t.Errorf("Expected no error for path '%s' but got: %v", tt.path, err)
+			}
+		})
+	}
 }
