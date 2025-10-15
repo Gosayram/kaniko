@@ -389,6 +389,8 @@ func (s *stageBuilder) unpackFilesystemIfNeeded() error {
 
 func (s *stageBuilder) executeCommands(compositeKey *CompositeCache, initSnapshotTaken bool) error {
 	cacheGroup := errgroup.Group{}
+	var commandErrors []error
+	var errorMutex sync.Mutex
 
 	for index, command := range s.cmds {
 		if command == nil {
@@ -400,15 +402,25 @@ func (s *stageBuilder) executeCommands(compositeKey *CompositeCache, initSnapsho
 			defer timing.DefaultRun.Stop(t)
 			err := s.processCommand(command, index, compositeKey, &cacheGroup, initSnapshotTaken)
 			if err != nil {
-				// Error is handled by the outer function
-				return
+				// Collect errors instead of ignoring them
+				errorMutex.Lock()
+				commandErrors = append(commandErrors, fmt.Errorf("command %d (%s) failed: %w", index, command.String(), err))
+				errorMutex.Unlock()
 			}
 		}()
 	}
 
+	// Wait for cache operations to complete
 	if err := cacheGroup.Wait(); err != nil {
 		logrus.Warnf("Error uploading layer to cache: %s", err)
+		// Cache errors are non-fatal, but we should log them
 	}
+
+	// Return the first command error if any occurred
+	if len(commandErrors) > 0 {
+		return fmt.Errorf("command execution failed: %v", commandErrors[0])
+	}
+
 	return nil
 }
 

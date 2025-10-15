@@ -403,6 +403,29 @@ func copyCmdFilesUsedFromContext(
 
 	replacementEnvs := buildArgs.ReplacementEnvs(config.Env)
 
+	// For cross-stage dependencies, we can't resolve wildcards until the source stage is built
+	// So we just return the paths as-is without validation
+	if cmd.From != "" {
+		files := []string{}
+		for _, src := range cmd.SourcesAndDest.SourcePaths {
+			resolved, err := util.ResolveEnvironmentReplacement(src, replacementEnvs, true)
+			if err != nil {
+				return nil, err
+			}
+
+			// Enhanced path validation for security
+			if err := validateFilePath(resolved); err != nil {
+				return nil, fmt.Errorf("invalid file path %s: %w", resolved, err)
+			}
+
+			fullPath := filepath.Join(fileContext.Root, resolved)
+			files = append(files, fullPath)
+		}
+		logrus.Debugf("Using files from cross-stage context (unvalidated): %v", files)
+		return files, nil
+	}
+
+	// For regular context, resolve wildcards normally
 	srcs, _, err := util.ResolveEnvAndWildcards(
 		cmd.SourcesAndDest, fileContext, replacementEnvs,
 	)
@@ -444,4 +467,39 @@ func CastAbstractCopyCommand[T CommandType](cmd T) (AbstractCopyCommand, bool) {
 	}
 
 	return nil, false
+}
+
+// validateFilePath performs security validation on file paths
+func validateFilePath(path string) error {
+	// Check for directory traversal attempts
+	if strings.Contains(path, "..") {
+		return fmt.Errorf("directory traversal detected: %s", path)
+	}
+
+	// Check for absolute paths (should be relative to context)
+	if filepath.IsAbs(path) {
+		return fmt.Errorf("absolute paths not allowed: %s", path)
+	}
+
+	// Check for suspicious patterns
+	suspiciousPatterns := []string{
+		"~",       // Home directory
+		"$HOME",   // Environment variable
+		"${HOME}", // Environment variable
+		"//",      // Double slashes
+		"\\",      // Windows path separators
+	}
+
+	for _, pattern := range suspiciousPatterns {
+		if strings.Contains(path, pattern) {
+			return fmt.Errorf("suspicious path pattern detected: %s in %s", pattern, path)
+		}
+	}
+
+	// Check for null bytes (potential injection)
+	if strings.Contains(path, "\x00") {
+		return fmt.Errorf("null byte injection detected: %s", path)
+	}
+
+	return nil
 }
