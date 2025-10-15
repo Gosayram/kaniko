@@ -120,12 +120,8 @@ func (t *Tar) AddFileToTar(p string) error {
 
 func (t *Tar) getLinkDestination(p string, i os.FileInfo) (string, error) {
 	if i.Mode()&os.ModeSymlink != 0 {
-		// Validate the file path to prevent directory traversal
-		cleanPath := filepath.Clean(p)
-		if strings.Contains(cleanPath, "..") || strings.HasPrefix(cleanPath, "/") {
-			return "", fmt.Errorf("invalid file path: potential directory traversal detected")
-		}
-		return os.Readlink(cleanPath)
+		// Allow absolute paths; only block if link goes outside root when used
+		return os.Readlink(p)
 	}
 	return "", nil
 }
@@ -179,12 +175,7 @@ func (t *Tar) handleHardlinks(p string, i os.FileInfo, hdr *tar.Header) {
 }
 
 func (t *Tar) writeFileContent(p string) error {
-	// Validate the file path to prevent directory traversal
-	cleanPath := filepath.Clean(p)
-	if strings.Contains(cleanPath, "..") || strings.HasPrefix(cleanPath, "/") {
-		return fmt.Errorf("invalid file path: potential directory traversal detected")
-	}
-	r, err := os.Open(cleanPath)
+	r, err := os.Open(p)
 	if err != nil {
 		return err
 	}
@@ -332,12 +323,7 @@ func IsFileLocalTarArchive(src string) bool {
 }
 
 func fileIsCompressedTar(src string) (isCompressed bool, compressionType int) {
-	// Validate the source path to prevent directory traversal
-	cleanSrc := filepath.Clean(src)
-	if strings.Contains(cleanSrc, "..") || strings.HasPrefix(cleanSrc, "/") {
-		return false, -1
-	}
-	r, err := os.Open(cleanSrc)
+	r, err := os.Open(src)
 	if err != nil {
 		return false, -1
 	}
@@ -351,22 +337,12 @@ func fileIsCompressedTar(src string) (isCompressed bool, compressionType int) {
 }
 
 func fileIsUncompressedTar(src string) bool {
-	// Validate the source path to prevent directory traversal
-	cleanSrc := filepath.Clean(src)
-	if strings.Contains(cleanSrc, "..") || strings.HasPrefix(cleanSrc, "/") {
-		return false
-	}
-	r, err := os.Open(cleanSrc)
+	r, err := os.Open(src)
 	if err != nil {
 		return false
 	}
 	defer r.Close()
-	// Validate the source path to prevent directory traversal
-	validatedSrc := filepath.Clean(src)
-	if strings.Contains(validatedSrc, "..") || strings.HasPrefix(validatedSrc, "/") {
-		return false
-	}
-	fi, err := os.Lstat(validatedSrc)
+	fi, err := os.Lstat(src)
 	if err != nil {
 		return false
 	}

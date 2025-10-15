@@ -168,17 +168,33 @@ func matchSources(srcs, files []string) ([]string, error) {
 				testFile = file
 			}
 
-            matched, err := filepath.Match(src, testFile)
+			// Also consider matching against "context/"-prefixed file when src starts with "context/"
+			testFileWithContext := filepath.Join("context", file)
+			if !strings.HasPrefix(src, "context/") {
+				testFileWithContext = ""
+			}
+
+			matched, err := filepath.Match(src, testFile)
 			if err != nil {
 				return nil, err
 			}
-            if matched || src == testFile {
-                // Preserve "context/" prefix in results when source pattern includes it
-                if strings.HasPrefix(src, "context/") && !strings.HasPrefix(file, "context/") {
-                    matchedSources = append(matchedSources, filepath.Join("context", file))
-                } else {
-                    matchedSources = append(matchedSources, file)
-                }
+			if matched || src == testFile {
+				// Preserve "context/" prefix in results when source pattern includes it
+				if strings.HasPrefix(src, "context/") && !strings.HasPrefix(file, "context/") {
+					matchedSources = append(matchedSources, filepath.Join("context", file))
+				} else {
+					matchedSources = append(matchedSources, file)
+				}
+			}
+
+			if testFileWithContext != "" {
+				matchedWithCtx, err := filepath.Match(src, testFileWithContext)
+				if err != nil {
+					return nil, err
+				}
+				if matchedWithCtx || src == testFileWithContext {
+					matchedSources = append(matchedSources, filepath.Join("context", file))
+				}
 			}
 
 			// Also try matching with absolute path for absolute sources
@@ -188,12 +204,12 @@ func matchSources(srcs, files []string) ([]string, error) {
 				if err != nil {
 					return nil, err
 				}
-                if matched || src == absoluteTestFile {
-                    if strings.HasPrefix(src, "context/") && !strings.HasPrefix(file, "context/") {
-                        matchedSources = append(matchedSources, filepath.Join("context", file))
-                    } else {
-                        matchedSources = append(matchedSources, file)
-                    }
+				if matched || src == absoluteTestFile {
+					if strings.HasPrefix(src, "context/") && !strings.HasPrefix(file, "context/") {
+						matchedSources = append(matchedSources, filepath.Join("context", file))
+					} else {
+						matchedSources = append(matchedSources, file)
+					}
 				}
 			}
 		}

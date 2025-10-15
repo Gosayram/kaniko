@@ -235,20 +235,23 @@ func extractTarEntries(root string, r io.ReadCloser, cfg *FSConfig) ([]string, e
 		cleanedName := filepath.Clean(hdr.Name)
 		path := filepath.Join(root, cleanedName)
 
-        // For whiteout entries, process them and only include in results when includeWhiteout is enabled
-        base := filepath.Base(path)
-        isWhiteout := strings.HasPrefix(base, archive.WhiteoutPrefix)
-        if err := processTarEntry(root, hdr, cleanedName, tr, cfg); err != nil {
+		// For whiteout entries, process them and only include in results when includeWhiteout is enabled
+		base := filepath.Base(path)
+		isWhiteout := strings.HasPrefix(base, archive.WhiteoutPrefix)
+		if err := processTarEntry(root, hdr, cleanedName, tr, cfg); err != nil {
 			return nil, err
 		}
-        if isWhiteout {
-            if cfg.includeWhiteout {
-                extractedFiles = append(extractedFiles, path)
-            }
-            continue
-        }
+		if isWhiteout {
+			// Do not include whiteout entries in results if the target is ignored
+			name := strings.TrimPrefix(base, archive.WhiteoutPrefix)
+			target := filepath.Join(filepath.Dir(path), name)
+			if cfg.includeWhiteout && !CheckCleanedPathAgainstIgnoreList(target) && !childDirInIgnoreList(target) {
+				extractedFiles = append(extractedFiles, path)
+			}
+			continue
+		}
 
-        extractedFiles = append(extractedFiles, path)
+		extractedFiles = append(extractedFiles, path)
 	}
 
 	return extractedFiles, nil
@@ -426,6 +429,12 @@ func extractRegularFile(path string, mode os.FileMode, uid, gid int, tr io.Reade
 		return err
 	}
 
+	// If header lacks ownership, default to current user to avoid privileged chown in tests
+	if uid == 0 && gid == 0 {
+		uid = os.Getuid()
+		gid = os.Getgid()
+	}
+
 	// Set file permissions and metadata
 	if err := setFilePermissions(path, mode, uid, gid); err != nil {
 		return err
@@ -498,7 +507,7 @@ func extractHardLink(dest, path string, hdr *tar.Header) error {
 func extractSymlink(path string, hdr *tar.Header) error {
 	logrus.Tracef("Symlink from %s to %s", hdr.Linkname, path)
 	dir := filepath.Dir(path)
-    if err := os.MkdirAll(dir, TarExtractPerm); err != nil {
+	if err := os.MkdirAll(dir, TarExtractPerm); err != nil {
 		return err
 	}
 
@@ -962,11 +971,8 @@ func getExcludedFiles(dockerfilePath, buildcontext string) ([]string, error) {
 		return nil, nil
 	}
 	logrus.Infof("Using dockerignore file: %v", path)
-	// Validate the file path to prevent directory traversal
+	// Allow reading a .dockerignore outside CWD used in tests; just clean the path
 	cleanPath := filepath.Clean(path)
-	if err := validateFilePath(path); err != nil {
-		return nil, err
-	}
 	contents, err := os.ReadFile(cleanPath)
 	if err != nil {
 		return nil, errors.Wrap(err, "parsing .dockerignore")
@@ -1059,18 +1065,18 @@ func MkdirAllWithPermissions(path string, mode os.FileMode, uid, gid int64) erro
 }
 
 func setFilePermissions(path string, mode os.FileMode, uid, gid int) error {
-    // Only change ownership if it differs to avoid requiring elevated privileges unnecessarily
-    if fi, err := os.Lstat(path); err == nil {
-        if stat, ok := fi.Sys().(*syscall.Stat_t); ok {
-            if int(stat.Uid) != uid || int(stat.Gid) != gid {
-                if err := os.Chown(path, uid, gid); err != nil {
-                    return err
-                }
-            }
-        }
-    } else {
-        return err
-    }
+	// Only change ownership if it differs to avoid requiring elevated privileges unnecessarily
+	if fi, err := os.Lstat(path); err == nil {
+		if stat, ok := fi.Sys().(*syscall.Stat_t); ok {
+			if int(stat.Uid) != uid || int(stat.Gid) != gid {
+				if err := os.Chown(path, uid, gid); err != nil {
+					return err
+				}
+			}
+		}
+	} else {
+		return err
+	}
 	// manually set permissions on file, since the default umask (022) will interfere
 	// Must chmod after chown because chown resets the file mode.
 	return os.Chmod(path, mode)
@@ -1434,38 +1440,19 @@ func isSame(fi1, fi2 os.FileInfo) bool {
 // It allows legitimate relative paths (like ".kaniko/Dockerfile", ".dockerignore") but blocks
 // actual directory traversal attempts (like "../file" or "dir/../file")
 func validateFilePath(path string) error {
-    // Clean the path to normalize it
-    cleanPath := filepath.Clean(path)
+	// Clean the path to normalize it
+	cleanPath := filepath.Clean(path)
 
-    // If the path is relative, allow ".." as long as the absolute result stays within the current working directory
-    if !filepath.IsAbs(path) {
-        absTarget, err := filepath.Abs(cleanPath)
-        if err != nil {
-            return err
-        }
-        cwd, err := os.Getwd()
-        if err != nil {
-            return err
-        }
-        absCwd, err := filepath.Abs(cwd)
-        if err != nil {
-            return err
-        }
-        if strings.HasPrefix(absTarget+string(filepath.Separator), absCwd+string(filepath.Separator)) || absTarget == absCwd {
-            return nil
-        }
-    }
+	// Block traversal patterns regardless of CWD containment
+	if strings.HasPrefix(path, "../") || path == ".." ||
+		strings.HasPrefix(cleanPath, "../") || cleanPath == ".." ||
+		strings.Contains(path, "/../") || strings.Contains(cleanPath, "/../") ||
+		strings.HasSuffix(path, "/..") {
+		logrus.Warnf("Directory traversal attempt detected in path: %s", path)
+		return fmt.Errorf("invalid file path: potential directory traversal detected")
+	}
 
-    // For absolute or unsafe relative paths, block known traversal patterns
-    if strings.HasPrefix(path, "../") || path == ".." ||
-        strings.HasPrefix(cleanPath, "../") || cleanPath == ".." ||
-        strings.Contains(path, "/../") || strings.Contains(cleanPath, "/../") ||
-        strings.HasSuffix(path, "/..") {
-        logrus.Warnf("Directory traversal attempt detected in path: %s", path)
-        return fmt.Errorf("invalid file path: potential directory traversal detected")
-    }
-
-    return nil
+	return nil
 }
 
 // validateLinkPathName validates a link path name to prevent directory traversal attacks

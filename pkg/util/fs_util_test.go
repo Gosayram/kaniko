@@ -59,7 +59,7 @@ func Test_DetectFilesystemSkiplist(t *testing.T) {
 
 	// Reset ignorelist to default before test
 	originalIgnorelist := append([]IgnoreListEntry{}, ignorelist...)
-	
+
 	// Save original KanikoDir and set it to the expected value
 	originalKanikoDir := config.KanikoDir
 	config.KanikoDir = "/kaniko"
@@ -69,7 +69,7 @@ func Test_DetectFilesystemSkiplist(t *testing.T) {
 	}()
 
 	err := DetectFilesystemIgnoreList(path)
-	
+
 	expectedSkiplist := []IgnoreListEntry{
 		{"/kaniko", false},
 		{"/proc", false},
@@ -1356,6 +1356,10 @@ func Test_GetFSFromLayers_ignorelist(t *testing.T) {
 
 func Test_GetFSFromLayers(t *testing.T) {
 	ctrl := gomock.NewController(t)
+
+	// Ensure mountinfo doesn't depend on host filesystem path
+	resetMountInfoFile := provideEmptyMountinfoFile()
+	defer resetMountInfoFile()
 
 	root := t.TempDir()
 
