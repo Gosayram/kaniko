@@ -72,6 +72,12 @@ const (
 	// MaxTotalArchiveSize is the maximum total size for all files in an archive (10GB)
 	// This prevents DoS attacks with many large files
 	MaxTotalArchiveSize = 10 * 1024 * 1024 * 1024
+
+	// Security configuration
+	// AutoSanitizePermissions enables automatic sanitization of overly permissive permissions
+	AutoSanitizePermissions = true
+	// StrictSecurityMode enables strict security checks that may fail builds with unsafe permissions
+	StrictSecurityMode = false
 )
 
 const (
@@ -759,6 +765,15 @@ func CreateFile(path string, reader io.Reader, perm os.FileMode, uid, gid uint32
 		return fmt.Errorf("file permission validation failed for %s: %w", path, err)
 	}
 
+	// Auto-sanitize permissions if enabled
+	if AutoSanitizePermissions {
+		originalPerm := perm
+		perm = SanitizeFilePermissions(perm)
+		if perm != originalPerm {
+			logrus.Infof("Auto-sanitized file permissions for %s from %o to %o", path, originalPerm, perm)
+		}
+	}
+
 	// Validate UID/GID to prevent privilege escalation
 	if err := validateUserGroupIDs(int64(uid), int64(gid)); err != nil {
 		return fmt.Errorf("user/group ID validation failed for %s: %w", path, err)
@@ -1118,6 +1133,15 @@ func MkdirAllWithPermissions(path string, mode os.FileMode, uid, gid int64) erro
 	// Validate permissions to prevent overly permissive directories
 	if err := validateDirectoryPermissions(mode); err != nil {
 		return fmt.Errorf("invalid directory permissions for %s: %w", path, err)
+	}
+
+	// Auto-sanitize permissions if enabled
+	if AutoSanitizePermissions {
+		originalMode := mode
+		mode = SanitizeDirectoryPermissions(mode)
+		if mode != originalMode {
+			logrus.Infof("Auto-sanitized directory permissions for %s from %o to %o", path, originalMode, mode)
+		}
 	}
 
 	// Validate UID/GID to prevent privilege escalation
@@ -1907,4 +1931,36 @@ func validateFilePermissions(mode os.FileMode) error {
 	}
 
 	return nil
+}
+
+// SanitizeFilePermissions automatically fixes overly permissive file permissions
+func SanitizeFilePermissions(mode os.FileMode) os.FileMode {
+	// Remove world-writable permissions (002)
+	if mode&0o002 != 0 {
+		logrus.Warnf("Sanitizing world-writable file permissions from %o to %o", mode, mode&^0o002)
+		mode = mode &^ 0o002
+	}
+
+	// Ensure owner has at least read permissions
+	if mode&0o400 == 0 {
+		mode |= 0o400
+	}
+
+	return mode
+}
+
+// SanitizeDirectoryPermissions automatically fixes overly permissive directory permissions
+func SanitizeDirectoryPermissions(mode os.FileMode) os.FileMode {
+	// Remove world-writable permissions (002)
+	if mode&0o002 != 0 {
+		logrus.Warnf("Sanitizing world-writable directory permissions from %o to %o", mode, mode&^0o002)
+		mode = mode &^ 0o002
+	}
+
+	// Ensure owner has at least read and execute permissions
+	if mode&0o500 == 0 {
+		mode |= 0o500
+	}
+
+	return mode
 }

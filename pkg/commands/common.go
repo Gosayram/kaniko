@@ -111,7 +111,8 @@ func (h *CommonCommandHelper) ResolveWorkingDirectory(
 func (h *CommonCommandHelper) GetUserGroupFromConfig(
 	cfg *v1.Config, replacementEnvs []string) (uid, gid int64, err error) {
 	if cfg.User == "" {
-		return -1, -1, nil
+		// Use safe default UID/GID instead of -1, -1 to prevent "invalid user/group IDs" errors
+		return util.SafeDefaultUID, util.SafeDefaultGID, nil
 	}
 
 	logrus.Debugf("Fetching uid and gid for USER '%s'", cfg.User)
