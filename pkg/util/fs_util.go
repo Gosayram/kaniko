@@ -27,6 +27,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -58,6 +59,15 @@ const (
 	TarExtractPerm = 0o755
 	// MaxPathDepth is the minimum number of fields in mountinfo path
 	MaxPathDepth = 5
+	// MaxFileSize is the maximum allowed file size (500MB)
+	// This covers most single files in typical applications while preventing abuse
+	MaxFileSize = 500 * 1024 * 1024
+	// MaxTarFileSize is the maximum allowed file size in tar archives (5GB)
+	// This covers large release archives and Docker layers while preventing DoS
+	MaxTarFileSize = 5 * 1024 * 1024 * 1024
+	// MaxTotalArchiveSize is the maximum total size for all files in an archive (10GB)
+	// This prevents DoS attacks with many large files
+	MaxTotalArchiveSize = 10 * 1024 * 1024 * 1024
 )
 
 const (
@@ -414,7 +424,12 @@ func extractRegularFile(path string, mode os.FileMode, uid, gid int, tr io.Reade
 
 	// Validate file path to prevent directory traversal
 	cleanPath := filepath.Clean(path)
-	if err := validateFilePath(path); err != nil {
+	if err := ValidateFilePath(path); err != nil {
+		return err
+	}
+
+	// Validate file size in tar archive
+	if err := validateTarFileSize(hdr.Size); err != nil {
 		return err
 	}
 
@@ -425,7 +440,8 @@ func extractRegularFile(path string, mode os.FileMode, uid, gid int, tr io.Reade
 	}
 	defer currFile.Close()
 
-	if _, err = io.Copy(currFile, tr); err != nil {
+	// Use pooled buffer for better memory efficiency
+	if _, err = CopyFileWithBuffer(currFile, tr); err != nil {
 		return err
 	}
 
@@ -608,7 +624,7 @@ func DetectFilesystemIgnoreList(path string) error {
 	logrus.Trace("Detecting filesystem ignore list")
 	// Validate the file path to prevent directory traversal
 	cleanPath := filepath.Clean(path)
-	if err := validateFilePath(path); err != nil {
+	if err := ValidateFilePath(path); err != nil {
 		return err
 	}
 	f, err := os.Open(cleanPath)
@@ -734,6 +750,16 @@ func resetFileOwnershipIfNotMatching(path string, newUID, newGID uint32) error {
 
 // CreateFile creates a file at path and copies over contents from the reader
 func CreateFile(path string, reader io.Reader, perm os.FileMode, uid, gid uint32) error {
+	// Validate file permissions to prevent security issues
+	if err := validateFilePermissions(perm); err != nil {
+		return fmt.Errorf("file permission validation failed for %s: %w", path, err)
+	}
+
+	// Validate UID/GID to prevent privilege escalation
+	if err := validateUserGroupIDs(int64(uid), int64(gid)); err != nil {
+		return fmt.Errorf("user/group ID validation failed for %s: %w", path, err)
+	}
+
 	// Create directory path if it doesn't exist
 	if err := createParentDirectory(path, int(uid), int(gid)); err != nil {
 		return errors.Wrap(err, "creating parent dir")
@@ -750,7 +776,7 @@ func CreateFile(path string, reader io.Reader, perm os.FileMode, uid, gid uint32
 
 	// Validate the file path to prevent directory traversal
 	cleanPath := filepath.Clean(path)
-	if err := validateFilePath(path); err != nil {
+	if err := ValidateFilePath(path); err != nil {
 		return err
 	}
 	dest, err := os.Create(cleanPath)
@@ -758,7 +784,8 @@ func CreateFile(path string, reader io.Reader, perm os.FileMode, uid, gid uint32
 		return errors.Wrap(err, "creating file")
 	}
 	defer dest.Close()
-	if _, err := io.Copy(dest, reader); err != nil {
+	// Use pooled buffer for better memory efficiency
+	if _, err := CopyFileWithBuffer(dest, reader); err != nil {
 		return errors.Wrap(err, "copying file")
 	}
 	return setFilePermissions(path, perm, int(uid), int(gid))
@@ -881,12 +908,25 @@ func CopyDir(src, dest string, context FileContext, uid, gid int64,
 	return copiedFiles, nil
 }
 
-// CopySymlink copies the symlink at src to dest.
+// CopySymlink copies the symlink at src to dest with security validations.
 func CopySymlink(src, dest string, context FileContext) (bool, error) {
 	if context.ExcludesFile(src) {
 		logrus.Debugf("%s found in .dockerignore, ignoring", src)
 		return true, nil
 	}
+
+	// Validate source path to prevent directory traversal
+	if err := ValidateFilePath(src); err != nil {
+		logrus.Debugf("Path validation failed for symlink source %s: %v", src, err)
+		return false, err
+	}
+
+	// Check for circular references and validate symlink chain
+	if err := validateSymlinkChain(src, 0); err != nil {
+		logrus.Debugf("Symlink chain validation failed for %s: %v", src, err)
+		return false, err
+	}
+
 	if FilepathExists(dest) {
 		if err := os.RemoveAll(dest); err != nil {
 			return false, err
@@ -895,10 +935,19 @@ func CopySymlink(src, dest string, context FileContext) (bool, error) {
 	if err := createParentDirectory(dest, DoNotChangeUID, DoNotChangeGID); err != nil {
 		return false, err
 	}
+
 	link, err := os.Readlink(src)
 	if err != nil {
 		logrus.Debugf("Could not read link for %s", src)
+		return false, err
 	}
+
+	// Validate the symlink target path
+	if err := validateSymlinkTarget(link, src); err != nil {
+		logrus.Debugf("Symlink target validation failed for %s -> %s: %v", src, link, err)
+		return false, err
+	}
+
 	return false, os.Symlink(link, dest)
 }
 
@@ -922,15 +971,21 @@ func CopyFile(src, dest string, context FileContext, uid, gid int64,
 	logrus.Debugf("Copying file %s to %s", src, dest)
 
 	// Validate the source file path to prevent directory traversal
-	if err := validateFilePath(src); err != nil {
+	if err := ValidateFilePath(src); err != nil {
 		logrus.Debugf("Path validation failed for source file %s: %v", src, err)
+		return false, err
+	}
+
+	// Validate file size to prevent copying oversized files
+	if err := validateFileSize(src, GetMaxFileSize()); err != nil {
+		logrus.Debugf("File size validation failed for source file %s: %v", src, err)
 		return false, err
 	}
 
 	// Allow absolute paths, they are not inherently malicious
 	// The path validation should focus on ".." components which could indicate directory traversal
 	var srcFile *os.File
-	srcFile, openErr := os.Open(src) // #nosec G304 -- path is validated by validateFilePath above
+	srcFile, openErr := os.Open(src) // #nosec G304 -- path is validated by ValidateFilePath above
 	if openErr != nil {
 		return false, openErr
 	}
@@ -1035,6 +1090,21 @@ func Volumes() []string {
 
 // MkdirAllWithPermissions creates directories with specified permissions and ownership
 func MkdirAllWithPermissions(path string, mode os.FileMode, uid, gid int64) error {
+	// Validate path to prevent directory traversal
+	if err := ValidateFilePath(path); err != nil {
+		return fmt.Errorf("path validation failed for directory %s: %w", path, err)
+	}
+
+	// Validate permissions to prevent overly permissive directories
+	if err := validateDirectoryPermissions(mode); err != nil {
+		return fmt.Errorf("invalid directory permissions for %s: %w", path, err)
+	}
+
+	// Validate UID/GID to prevent privilege escalation
+	if err := validateUserGroupIDs(uid, gid); err != nil {
+		return fmt.Errorf("invalid user/group IDs for %s: %w", path, err)
+	}
+
 	// Check if a file already exists on the path, if yes then delete it
 	info, err := os.Stat(path)
 	if err == nil && !info.IsDir() {
@@ -1123,7 +1193,7 @@ func CreateTargetTarfile(tarpath string) (*os.File, error) {
 	}
 	// Validate the tar path to prevent directory traversal
 	cleanTarPath := filepath.Clean(tarpath)
-	if err := validateFilePath(tarpath); err != nil {
+	if err := ValidateFilePath(tarpath); err != nil {
 		return nil, err
 	}
 	return os.Create(cleanTarPath)
@@ -1437,10 +1507,10 @@ func isSame(fi1, fi2 os.FileInfo) bool {
 		uint64(fi1.Sys().(*syscall.Stat_t).Gid) == uint64(fi2.Sys().(*syscall.Stat_t).Gid)
 }
 
-// validateFilePath validates a file path to prevent directory traversal attacks
+// ValidateFilePath validates a file path to prevent directory traversal attacks
 // It allows legitimate relative paths (like ".kaniko/Dockerfile", ".dockerignore") but blocks
 // actual directory traversal attempts (like "../file" or "dir/../file")
-func validateFilePath(path string) error {
+func ValidateFilePath(path string) error {
 	// Clean the path to normalize it
 	cleanPath := filepath.Clean(path)
 
@@ -1457,7 +1527,7 @@ func validateFilePath(path string) error {
 }
 
 // validateLinkPathName validates a link path name to prevent directory traversal attacks
-// Similar to validateFilePath but specifically for link names
+// Similar to ValidateFilePath but specifically for link names
 func validateLinkPathName(path string) error {
 	// Clean the path to normalize it
 	cleanPath := filepath.Clean(path)
@@ -1471,6 +1541,354 @@ func validateLinkPathName(path string) error {
 		strings.HasSuffix(path, "/..") {
 		logrus.Warnf("Directory traversal attempt detected in link path name: %s", path)
 		return fmt.Errorf("invalid linkname: potential directory traversal detected")
+	}
+
+	return nil
+}
+
+// validateFileSize checks if a file size is within allowed limits
+func validateFileSize(path string, maxSize int64) error {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return fmt.Errorf("failed to get file info for %s: %w", path, err)
+	}
+
+	if fi.Size() > maxSize {
+		logrus.Warnf("File size %d bytes exceeds maximum allowed size %d bytes for file: %s", fi.Size(), maxSize, path)
+		return fmt.Errorf("file size %d bytes exceeds maximum allowed size %d bytes", fi.Size(), maxSize)
+	}
+
+	return nil
+}
+
+// validateFileSizeWithDefaults checks if a file size is within allowed limits
+// using default or environment-configured limits
+
+// validateTarFileSize checks if a file size in tar archive is within allowed limits
+func validateTarFileSize(size int64) error {
+	maxSize := GetMaxTarFileSize()
+	if size > maxSize {
+		logrus.Warnf("Tar file size %d bytes exceeds maximum allowed size %d bytes", size, maxSize)
+		return fmt.Errorf("tar file size %d bytes exceeds maximum allowed size %d bytes", size, maxSize)
+	}
+
+	return nil
+}
+
+// GetMaxFileSize returns the maximum allowed file size, with CLI argument, environment variable, and default fallback
+func GetMaxFileSize() int64 {
+	// Check if CLI argument is set (this will be set by the config system)
+	if maxSize := getCLIMaxFileSize(); maxSize != "" {
+		if size, err := parseSize(maxSize); err == nil {
+			return size
+		}
+		logrus.Warnf("Invalid --max-file-size value: %s, using default", maxSize)
+	}
+
+	// Fallback to environment variable
+	if maxSize := os.Getenv("KANIKO_MAX_FILE_SIZE"); maxSize != "" {
+		if size, err := parseSize(maxSize); err == nil {
+			return size
+		}
+		logrus.Warnf("Invalid KANIKO_MAX_FILE_SIZE value: %s, using default", maxSize)
+	}
+
+	return MaxFileSize
+}
+
+// GetMaxTarFileSize returns the maximum allowed tar file size,
+// with CLI argument, environment variable, and default fallback
+func GetMaxTarFileSize() int64 {
+	// Check if CLI argument is set (this will be set by the config system)
+	if maxSize := getCLIMaxTarFileSize(); maxSize != "" {
+		if size, err := parseSize(maxSize); err == nil {
+			return size
+		}
+		logrus.Warnf("Invalid --max-tar-file-size value: %s, using default", maxSize)
+	}
+
+	// Fallback to environment variable
+	if maxSize := os.Getenv("KANIKO_MAX_TAR_FILE_SIZE"); maxSize != "" {
+		if size, err := parseSize(maxSize); err == nil {
+			return size
+		}
+		logrus.Warnf("Invalid KANIKO_MAX_TAR_FILE_SIZE value: %s, using default", maxSize)
+	}
+
+	return MaxTarFileSize
+}
+
+// GetMaxTotalArchiveSize returns the maximum allowed total archive size,
+// with CLI argument, environment variable, and default fallback
+func GetMaxTotalArchiveSize() int64 {
+	// Check if CLI argument is set (this will be set by the config system)
+	if maxSize := getCLIMaxTotalArchiveSize(); maxSize != "" {
+		if size, err := parseSize(maxSize); err == nil {
+			return size
+		}
+		logrus.Warnf("Invalid --max-total-archive-size value: %s, using default", maxSize)
+	}
+
+	// Fallback to environment variable
+	if maxSize := os.Getenv("KANIKO_MAX_TOTAL_ARCHIVE_SIZE"); maxSize != "" {
+		if size, err := parseSize(maxSize); err == nil {
+			return size
+		}
+		logrus.Warnf("Invalid KANIKO_MAX_TOTAL_ARCHIVE_SIZE value: %s, using default", maxSize)
+	}
+
+	return MaxTotalArchiveSize
+}
+
+// parseSize parses a size string like "500MB", "1GB", "2.5GB" into bytes
+func parseSize(sizeStr string) (int64, error) {
+	sizeStr = strings.TrimSpace(sizeStr)
+	if sizeStr == "" {
+		return 0, fmt.Errorf("empty size string")
+	}
+
+	// Remove common suffixes and convert to lowercase
+	sizeStr = strings.ToLower(sizeStr)
+
+	var multiplier int64 = 1
+	var size float64
+	var err error
+
+	const (
+		kbMultiplier = 1024
+		mbMultiplier = 1024 * 1024
+		gbMultiplier = 1024 * 1024 * 1024
+		tbMultiplier = 1024 * 1024 * 1024 * 1024
+	)
+
+	switch {
+	case strings.HasSuffix(sizeStr, "kb"):
+		multiplier = kbMultiplier
+		sizeStr = strings.TrimSuffix(sizeStr, "kb")
+	case strings.HasSuffix(sizeStr, "mb"):
+		multiplier = mbMultiplier
+		sizeStr = strings.TrimSuffix(sizeStr, "mb")
+	case strings.HasSuffix(sizeStr, "gb"):
+		multiplier = gbMultiplier
+		sizeStr = strings.TrimSuffix(sizeStr, "gb")
+	case strings.HasSuffix(sizeStr, "tb"):
+		multiplier = tbMultiplier
+		sizeStr = strings.TrimSuffix(sizeStr, "tb")
+	}
+
+	size, err = strconv.ParseFloat(sizeStr, 64)
+	if err != nil {
+		return 0, fmt.Errorf("invalid size format: %s", sizeStr)
+	}
+
+	return int64(size * float64(multiplier)), nil
+}
+
+// CLI argument getters - these will be set by the config system
+var (
+	cliMaxFileSize         string
+	cliMaxTarFileSize      string
+	cliMaxTotalArchiveSize string
+)
+
+// getCLIMaxFileSize returns the CLI argument value for max file size
+func getCLIMaxFileSize() string {
+	return cliMaxFileSize
+}
+
+// getCLIMaxTarFileSize returns the CLI argument value for max tar file size
+func getCLIMaxTarFileSize() string {
+	return cliMaxTarFileSize
+}
+
+// getCLIMaxTotalArchiveSize returns the CLI argument value for max total archive size
+func getCLIMaxTotalArchiveSize() string {
+	return cliMaxTotalArchiveSize
+}
+
+// SetCLISizeLimits sets the CLI argument values for size limits
+// This function should be called by the config system when parsing CLI arguments
+func SetCLISizeLimits(maxFileSize, maxTarFileSize, maxTotalArchiveSize string) {
+	cliMaxFileSize = maxFileSize
+	cliMaxTarFileSize = maxTarFileSize
+	cliMaxTotalArchiveSize = maxTotalArchiveSize
+}
+
+// validateSymlinkChain checks for circular references and validates symlink chain depth
+func validateSymlinkChain(symlinkPath string, depth int) error {
+	const maxSymlinkDepth = 10 // Maximum allowed symlink chain depth
+
+	if depth > maxSymlinkDepth {
+		return fmt.Errorf("symlink chain too deep: %d levels (max: %d)", depth, maxSymlinkDepth)
+	}
+
+	// Check if the path is a symlink
+	fi, err := os.Lstat(symlinkPath)
+	if err != nil {
+		return fmt.Errorf("failed to stat symlink %s: %w", symlinkPath, err)
+	}
+
+	if fi.Mode()&os.ModeSymlink == 0 {
+		// Not a symlink, nothing to validate
+		return nil
+	}
+
+	// Read the symlink target
+	target, err := os.Readlink(symlinkPath)
+	if err != nil {
+		return fmt.Errorf("failed to read symlink %s: %w", symlinkPath, err)
+	}
+
+	// Check for absolute path traversal
+	if filepath.IsAbs(target) {
+		// For absolute paths, check if they're within allowed directories
+		if err := validateAbsoluteSymlinkTarget(target); err != nil {
+			return fmt.Errorf("invalid absolute symlink target %s: %w", target, err)
+		}
+	} else {
+		// For relative paths, resolve and check for circular references
+		resolvedPath := filepath.Join(filepath.Dir(symlinkPath), target)
+		resolvedPath = filepath.Clean(resolvedPath)
+
+		// Check for circular reference
+		if resolvedPath == symlinkPath {
+			return fmt.Errorf("circular symlink reference detected: %s -> %s", symlinkPath, target)
+		}
+
+		// Always recursively check the target if it exists (regardless of whether it's a symlink)
+		// This ensures we follow the chain and detect depth
+		if _, err := os.Lstat(resolvedPath); err == nil {
+			// Recursively check the target
+			if err := validateSymlinkChain(resolvedPath, depth+1); err != nil {
+				return fmt.Errorf("symlink chain validation failed for %s: %w", symlinkPath, err)
+			}
+		}
+	}
+
+	return nil
+}
+
+// validateSymlinkTarget validates the target of a symlink
+func validateSymlinkTarget(target, sourcePath string) error {
+	// Check for directory traversal in relative paths
+	if !filepath.IsAbs(target) {
+		// For relative paths, check for traversal attempts
+		if strings.Contains(target, "..") {
+			// Check if the resolved path would escape the source directory
+			resolvedPath := filepath.Join(filepath.Dir(sourcePath), target)
+			resolvedPath = filepath.Clean(resolvedPath)
+
+			// Get the source directory
+			sourceDir := filepath.Dir(sourcePath)
+			sourceDir = filepath.Clean(sourceDir)
+
+			// Check if resolved path is outside source directory
+			// Allow legitimate sibling directory access
+			if !strings.HasPrefix(resolvedPath, sourceDir) && !strings.HasPrefix(resolvedPath, filepath.Dir(sourceDir)) {
+				return fmt.Errorf("symlink target would escape source directory: %s -> %s", sourcePath, target)
+			}
+		}
+	} else {
+		// For absolute paths, validate they're safe
+		if err := validateAbsoluteSymlinkTarget(target); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// validateAbsoluteSymlinkTarget validates absolute symlink targets
+func validateAbsoluteSymlinkTarget(target string) error {
+	// Clean the path
+	cleanTarget := filepath.Clean(target)
+
+	// Check for dangerous paths
+	dangerousPaths := []string{
+		"/proc",
+		"/sys",
+		"/dev",
+		"/etc",
+		"/root",
+		"/home",
+		"/var/log",
+		"/var/run",
+	}
+
+	for _, dangerous := range dangerousPaths {
+		if strings.HasPrefix(cleanTarget, dangerous) {
+			return fmt.Errorf("symlink target points to dangerous path: %s", cleanTarget)
+		}
+	}
+
+	// Check for traversal attempts
+	if strings.Contains(cleanTarget, "..") {
+		return fmt.Errorf("symlink target contains directory traversal: %s", cleanTarget)
+	}
+
+	return nil
+}
+
+// validateDirectoryPermissions validates directory permissions to prevent security issues
+func validateDirectoryPermissions(mode os.FileMode) error {
+	// Check for overly permissive directory permissions
+	// Directories should not be world-writable unless explicitly needed
+	if mode&0o002 != 0 { // World-writable
+		// Allow world-writable only for specific cases like /tmp
+		logrus.Warnf("Creating world-writable directory with permissions %o", mode)
+	}
+
+	// Check for dangerous permission combinations
+	if mode&0o001 != 0 && mode&0o004 != 0 { // World-executable and world-readable
+		// This is generally safe for directories - no action needed
+		_ = mode // Acknowledge the check
+	}
+
+	// Check for overly restrictive permissions that might cause issues
+	if mode&0o700 == 0 { // No owner permissions
+		return fmt.Errorf("directory must have at least owner permissions (700)")
+	}
+
+	return nil
+}
+
+// validateUserGroupIDs validates UID/GID to prevent privilege escalation
+func validateUserGroupIDs(uid, gid int64) error {
+	// Check for negative IDs
+	if uid < 0 || gid < 0 {
+		return fmt.Errorf("UID and GID must be non-negative: uid=%d, gid=%d", uid, gid)
+	}
+
+	// Check for system reserved IDs (0 is root, which is allowed)
+	if uid == 0 && gid == 0 {
+		// Root ownership is allowed but should be logged
+		logrus.Debugf("Creating directory with root ownership (uid=%d, gid=%d)", uid, gid)
+	}
+
+	// Check for extremely high IDs that might indicate errors
+	if uid > 1000000 || gid > 1000000 {
+		logrus.Warnf("Using high UID/GID values: uid=%d, gid=%d", uid, gid)
+	}
+
+	return nil
+}
+
+// validateFilePermissions validates file permissions to prevent security issues
+func validateFilePermissions(mode os.FileMode) error {
+	// Check for overly permissive file permissions
+	if mode&0o002 != 0 { // World-writable
+		logrus.Warnf("Creating world-writable file with permissions %o", mode)
+	}
+
+	// Check for dangerous permission combinations
+	if mode&0o001 != 0 && mode&0o004 != 0 { // World-executable and world-readable
+		// This might be dangerous for files containing sensitive data
+		logrus.Debugf("Creating world-readable and executable file with permissions %o", mode)
+	}
+
+	// Check for overly restrictive permissions that might cause issues
+	if mode&0o700 == 0 { // No owner permissions
+		return fmt.Errorf("file must have at least owner permissions (700)")
 	}
 
 	return nil

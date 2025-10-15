@@ -21,6 +21,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/moby/buildkit/frontend/dockerfile/instructions"
@@ -48,64 +49,105 @@ type CopyCommand struct {
 
 // ExecuteCommand executes the COPY command by copying files from source to destination.
 func (c *CopyCommand) ExecuteCommand(config *v1.Config, buildArgs *dockerfile.BuildArgs) error {
-	// Resolve from
-	if c.cmd.From != "" {
-		c.fileContext = util.FileContext{Root: filepath.Join(kConfig.KanikoDir, c.cmd.From)}
-	}
+	// Use common helper for setup
+	helper := NewCommonCommandHelper()
+
+	// Setup file context
+	c.fileContext = helper.SetupFileContext(c.cmd, c.fileContext)
 
 	// Setup environment and permissions
 	replacementEnvs := buildArgs.ReplacementEnvs(config.Env)
-	uid, gid, err := c.setupUserGroup(replacementEnvs)
+	uid, gid, err := helper.SetupUserGroup(c.cmd.Chown, replacementEnvs)
 	if err != nil {
 		return err
 	}
 
-	// Resolve sources and destination
-	srcs, dest, err := c.resolveSourcesAndDest(replacementEnvs)
+	// Resolve sources and destination using common helper
+	srcs, dest, err := helper.ResolveSourcesAndDestination(c.cmd, c.fileContext, replacementEnvs)
 	if err != nil {
 		return err
 	}
 
-	// Get file permissions
-	chmod, useDefaultChmod, err := util.GetChmod(c.cmd.Chmod, replacementEnvs)
+	// Get file permissions using common helper
+	chmod, useDefaultChmod, err := helper.SetupFilePermissions(c.cmd.Chmod, replacementEnvs)
 	if err != nil {
-		return errors.Wrap(err, "getting permissions from chmod")
+		return err
 	}
 
 	// Copy each source
 	return c.copySources(srcs, dest, config, uid, gid, chmod, useDefaultChmod)
 }
 
-// setupUserGroup sets up the user and group for the copy operation
-func (c *CopyCommand) setupUserGroup(replacementEnvs []string) (uid, gid int64, err error) {
-	uid, gid, err = getUserGroup(c.cmd.Chown, replacementEnvs)
-	logrus.Debugf("found uid %v and gid %v for chown string %v", uid, gid, c.cmd.Chown)
-	if err != nil {
-		return 0, 0, errors.Wrap(err, "getting user group from chown")
-	}
-	return uid, gid, nil
-}
+// Note: setupUserGroup and resolveSourcesAndDest functions have been moved to common.go
+// to reduce code duplication across commands
 
-// resolveSourcesAndDest resolves sources and destination paths
-func (c *CopyCommand) resolveSourcesAndDest(
-	replacementEnvs []string) (sources []string, destination string, err error) {
-	// sources from the Copy command are resolved with wildcards {*?[}
-	sources, destination, err = util.ResolveEnvAndWildcards(c.cmd.SourcesAndDest, c.fileContext, replacementEnvs)
-	if err != nil {
-		return nil, "", errors.Wrap(err, "resolving src")
-	}
-	return sources, destination, nil
-}
-
-// copySources copies each source to the destination
+// copySources copies each source to the destination with parallel processing
 func (c *CopyCommand) copySources(
 	srcs []string, dest string, config *v1.Config, uid, gid int64,
 	chmod os.FileMode, useDefaultChmod bool) error {
-	for _, src := range srcs {
-		if err := c.copySingleSource(src, dest, config, uid, gid, chmod, useDefaultChmod); err != nil {
-			return err
+	// For small number of sources, use sequential processing
+	const maxSequentialSources = 2
+	if len(srcs) <= maxSequentialSources {
+		for _, src := range srcs {
+			if err := c.copySingleSource(src, dest, config, uid, gid, chmod, useDefaultChmod); err != nil {
+				return err
+			}
 		}
+		return nil
 	}
+
+	// For larger number of sources, use parallel processing
+	return c.copySourcesParallel(srcs, dest, config, uid, gid, chmod, useDefaultChmod)
+}
+
+// copySourcesParallel copies sources in parallel for better performance
+func (c *CopyCommand) copySourcesParallel(
+	srcs []string, dest string, config *v1.Config, uid, gid int64,
+	chmod os.FileMode, useDefaultChmod bool) error {
+	// Use errgroup for parallel execution with error handling
+	var wg sync.WaitGroup
+	errChan := make(chan error, len(srcs))
+
+	// Limit concurrent copies to avoid overwhelming the filesystem
+	maxConcurrent := 4
+	if len(srcs) < maxConcurrent {
+		maxConcurrent = len(srcs)
+	}
+
+	semaphore := make(chan struct{}, maxConcurrent)
+
+	for _, src := range srcs {
+		wg.Add(1)
+		go func(source string) {
+			defer wg.Done()
+
+			// Acquire semaphore
+			semaphore <- struct{}{}
+			defer func() { <-semaphore }()
+
+			if err := c.copySingleSource(source, dest, config, uid, gid, chmod, useDefaultChmod); err != nil {
+				errChan <- errors.Wrapf(err, "failed to copy source %s", source)
+				return
+			}
+		}(src)
+	}
+
+	// Wait for all goroutines to complete
+	go func() {
+		wg.Wait()
+		close(errChan)
+	}()
+
+	// Collect any errors
+	var errs []error
+	for err := range errChan {
+		errs = append(errs, err)
+	}
+
+	if len(errs) > 0 {
+		return errs[0] // Return the first error
+	}
+
 	return nil
 }
 
@@ -384,9 +426,17 @@ type AbstractCopyCommand interface {
 	From() string
 }
 
+// CommandType represents the type of command that can be cast to AbstractCopyCommand.
+// This constraint ensures type safety when casting commands to AbstractCopyCommand.
+type CommandType interface {
+	*CopyCommand | *CachingCopyCommand
+}
+
 // CastAbstractCopyCommand tries to convert a command to an AbstractCopyCommand.
-func CastAbstractCopyCommand(cmd interface{}) (AbstractCopyCommand, bool) {
-	switch v := cmd.(type) {
+// It accepts any type that implements the CommandType constraint.
+// This generic function provides type-safe casting of copy commands.
+func CastAbstractCopyCommand[T CommandType](cmd T) (AbstractCopyCommand, bool) {
+	switch v := any(cmd).(type) {
 	case *CopyCommand:
 		return v, true
 	case *CachingCopyCommand:

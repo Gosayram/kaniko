@@ -17,16 +17,10 @@ limitations under the License.
 package commands
 
 import (
-	"fmt"
-	"strings"
-
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/moby/buildkit/frontend/dockerfile/instructions"
-	"github.com/pkg/errors"
-	"github.com/sirupsen/logrus"
 
 	"github.com/Gosayram/kaniko/pkg/dockerfile"
-	"github.com/Gosayram/kaniko/pkg/util"
 )
 
 // UserCommand implements the Dockerfile USER instruction
@@ -37,21 +31,17 @@ type UserCommand struct {
 
 // ExecuteCommand processes the USER instruction by setting the user/group for subsequent commands
 func (r *UserCommand) ExecuteCommand(config *v1.Config, buildArgs *dockerfile.BuildArgs) error {
-	logrus.Info("Cmd: USER")
-	u := r.cmd.User
-	userAndGroup := strings.Split(u, ":")
-	replacementEnvs := buildArgs.ReplacementEnvs(config.Env)
-	userStr, err := util.ResolveEnvironmentReplacement(userAndGroup[0], replacementEnvs, false)
-	if err != nil {
-		return errors.Wrap(err, fmt.Sprintf("resolving user %s", userAndGroup[0]))
-	}
+	// Use common helper for setup
+	helper := NewCommonCommandHelper()
+	helper.LogCommandExecution("USER")
 
-	if len(userAndGroup) > 1 {
-		groupStr, err := util.ResolveEnvironmentReplacement(userAndGroup[1], replacementEnvs, false)
-		if err != nil {
-			return errors.Wrap(err, fmt.Sprintf("resolving group %s", userAndGroup[1]))
-		}
-		userStr = userStr + ":" + groupStr
+	// Set the user in config first for resolution
+	config.User = r.cmd.User
+
+	// Resolve user using common helper
+	userStr, err := helper.ResolveUserFromConfig(config, buildArgs)
+	if err != nil {
+		return err
 	}
 
 	config.User = userStr

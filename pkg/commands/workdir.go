@@ -18,7 +18,6 @@ package commands
 
 import (
 	"os"
-	"path/filepath"
 
 	"github.com/pkg/errors"
 
@@ -45,42 +44,37 @@ var mkdirAllWithPermissions = util.MkdirAllWithPermissions
 // ExecuteCommand processes the WORKDIR instruction by setting the working directory
 // and creating the directory if it doesn't exist with appropriate permissions
 func (w *WorkdirCommand) ExecuteCommand(config *v1.Config, buildArgs *dockerfile.BuildArgs) error {
-	logrus.Info("Cmd: workdir")
+	// Use common helper for setup
+	helper := NewCommonCommandHelper()
+	helper.LogCommandExecution("workdir")
+
 	workdirPath := w.cmd.Path
 	replacementEnvs := buildArgs.ReplacementEnvs(config.Env)
-	resolvedWorkingDir, err := util.ResolveEnvironmentReplacement(workdirPath, replacementEnvs, true)
+
+	// Resolve working directory using common helper
+	resolvedWorkingDir, err := helper.ResolveWorkingDirectory(workdirPath, config.WorkingDir, replacementEnvs)
 	if err != nil {
 		return err
 	}
-	if filepath.IsAbs(resolvedWorkingDir) {
-		config.WorkingDir = resolvedWorkingDir
-	} else {
-		if config.WorkingDir != "" {
-			config.WorkingDir = filepath.Join(config.WorkingDir, resolvedWorkingDir)
-		} else {
-			config.WorkingDir = "/" + resolvedWorkingDir
-		}
-	}
+
+	config.WorkingDir = resolvedWorkingDir
 	logrus.Infof("Changed working directory to %s", config.WorkingDir)
 
 	// Only create and snapshot the dir if it didn't exist already
 	w.snapshotFiles = []string{}
 	if _, err := os.Stat(config.WorkingDir); os.IsNotExist(err) {
-		uid, gid := int64(-1), int64(-1)
-
-		if config.User != "" {
-			logrus.Debugf("Fetching uid and gid for USER '%s'", config.User)
-			uid, gid, err = util.GetUserGroup(config.User, replacementEnvs)
-			if err != nil {
-				return errors.Wrapf(err, "identifying uid and gid for user %s", config.User)
-			}
+		// Get user and group using common helper
+		uid, gid, err := helper.GetUserGroupFromConfig(config, replacementEnvs)
+		if err != nil {
+			return err
 		}
 
 		logrus.Infof("Creating directory %s with uid %d and gid %d", config.WorkingDir, uid, gid)
 		w.snapshotFiles = append(w.snapshotFiles, config.WorkingDir)
-		// 0o755 permissions provide read/write/execute for owner,
-		// read/execute for group and others (standard for directories)
-		if err := mkdirAllWithPermissions(config.WorkingDir, 0o755, uid, gid); err != nil { //nolint:mnd // standard dir perms
+
+		// Create directory using common helper
+		const defaultDirMode = 0o755
+		if err := helper.CreateDirectoryWithPermissions(config.WorkingDir, defaultDirMode, uid, gid); err != nil {
 			return errors.Wrapf(err, "creating workdir %s", config.WorkingDir)
 		}
 	}

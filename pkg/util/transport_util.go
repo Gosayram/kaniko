@@ -21,7 +21,6 @@ import (
 	"crypto/x509"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"net/http"
@@ -48,11 +47,11 @@ func (p *X509CertPool) value() *x509.CertPool {
 
 func (p *X509CertPool) append(path string) error {
 	// Validate the file path to prevent directory traversal
-	cleanPath := filepath.Clean(path)
-	if strings.Contains(cleanPath, "..") || strings.HasPrefix(cleanPath, "/") {
-		return fmt.Errorf("invalid certificate path: potential directory traversal detected")
+	if err := ValidateFilePath(path); err != nil {
+		return fmt.Errorf("invalid certificate path: %w", err)
 	}
-	pem, err := os.ReadFile(cleanPath)
+	// #nosec G304 - path is validated before use
+	pem, err := os.ReadFile(path)
 	if err != nil {
 		return err
 	}

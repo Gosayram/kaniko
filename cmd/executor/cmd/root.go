@@ -192,6 +192,9 @@ var RootCmd = &cobra.Command{
 
 			resolveEnvironmentBuildArgs(opts.BuildArgs, os.Getenv)
 
+			// Set CLI size limits for the util package
+			util.SetCLISizeLimits(opts.MaxFileSize, opts.MaxTarFileSize, opts.MaxTotalArchiveSize)
+
 			if !opts.NoPush && len(opts.Destinations) == 0 {
 				return errors.New("you must provide --destination, or use --no-push")
 			}
@@ -487,6 +490,14 @@ func addBuildFlags() {
 			"even the unnecessaries ones until it reaches the target stage / end of Dockerfile")
 	RootCmd.PersistentFlags().BoolVarP(&opts.RunV2, "use-new-run", "", false,
 		"Use the experimental run implementation for detecting changes without requiring file system snapshots.")
+
+	// File size limit flags for security and resource control
+	RootCmd.PersistentFlags().StringVarP(&opts.MaxFileSize, "max-file-size", "", "",
+		"Maximum size for individual files (e.g., 500MB, 1GB). Default: 500MB")
+	RootCmd.PersistentFlags().StringVarP(&opts.MaxTarFileSize, "max-tar-file-size", "", "",
+		"Maximum size for files in tar archives (e.g., 5GB, 10GB). Default: 5GB")
+	RootCmd.PersistentFlags().StringVarP(&opts.MaxTotalArchiveSize, "max-total-archive-size", "", "",
+		"Maximum total size for all files in an archive (e.g., 10GB, 20GB). Default: 10GB")
 }
 
 // addMultiPlatformFlags adds multi-platform build flags

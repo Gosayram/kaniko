@@ -1619,7 +1619,7 @@ func TestValidateFilePath(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := validateFilePath(tt.path)
+			err := ValidateFilePath(tt.path)
 
 			if tt.expectError && err == nil {
 				t.Errorf("Expected error for path '%s' but got none", tt.path)
@@ -1680,6 +1680,752 @@ func TestValidateLinkPathName(t *testing.T) {
 
 			if !tt.expectError && err != nil {
 				t.Errorf("Expected no error for path '%s' but got: %v", tt.path, err)
+			}
+		})
+	}
+}
+
+func TestValidateFileSize(t *testing.T) {
+	// Create a temporary file for testing
+	tempFile := t.TempDir() + "/test_file.txt"
+
+	// Test with small file (should pass)
+	content := "small content"
+	if err := os.WriteFile(tempFile, []byte(content), 0644); err != nil {
+		t.Fatalf("Failed to create test file: %v", err)
+	}
+
+	// Test with valid size
+	err := validateFileSize(tempFile, MaxFileSize)
+	if err != nil {
+		t.Errorf("Expected no error for small file, got: %v", err)
+	}
+
+	// Test with very small limit (should fail)
+	err = validateFileSize(tempFile, 1)
+	if err == nil {
+		t.Errorf("Expected error for file exceeding size limit, got nil")
+	}
+
+	// Test with non-existent file
+	err = validateFileSize("/non/existent/file", MaxFileSize)
+	if err == nil {
+		t.Errorf("Expected error for non-existent file, got nil")
+	}
+}
+
+func TestValidateTarFileSize(t *testing.T) {
+	tests := []struct {
+		name        string
+		size        int64
+		expectError bool
+	}{
+		{
+			name:        "Valid small size",
+			size:        1024,
+			expectError: false,
+		},
+		{
+			name:        "Valid medium size",
+			size:        100 * 1024 * 1024, // 100MB
+			expectError: false,
+		},
+		{
+			name:        "Invalid large size",
+			size:        6 * 1024 * 1024 * 1024, // 6GB (exceeds 5GB limit)
+			expectError: true,
+		},
+		{
+			name:        "Exact limit size",
+			size:        MaxTarFileSize,
+			expectError: false,
+		},
+		{
+			name:        "Just over limit size",
+			size:        MaxTarFileSize + 1,
+			expectError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateTarFileSize(tt.size)
+
+			if tt.expectError && err == nil {
+				t.Errorf("Expected error for size %d but got none", tt.size)
+			}
+
+			if !tt.expectError && err != nil {
+				t.Errorf("Expected no error for size %d but got: %v", tt.size, err)
+			}
+		})
+	}
+}
+
+func TestParseSize(t *testing.T) {
+	tests := []struct {
+		name        string
+		input       string
+		expected    int64
+		expectError bool
+	}{
+		{
+			name:        "Valid KB size",
+			input:       "1024KB",
+			expected:    1024 * 1024,
+			expectError: false,
+		},
+		{
+			name:        "Valid MB size",
+			input:       "500MB",
+			expected:    500 * 1024 * 1024,
+			expectError: false,
+		},
+		{
+			name:        "Valid GB size",
+			input:       "2GB",
+			expected:    2 * 1024 * 1024 * 1024,
+			expectError: false,
+		},
+		{
+			name:        "Valid TB size",
+			input:       "1TB",
+			expected:    1024 * 1024 * 1024 * 1024,
+			expectError: false,
+		},
+		{
+			name:        "Valid decimal size",
+			input:       "2.5GB",
+			expected:    int64(2.5 * 1024 * 1024 * 1024),
+			expectError: false,
+		},
+		{
+			name:        "Valid bytes only",
+			input:       "1024",
+			expected:    1024,
+			expectError: false,
+		},
+		{
+			name:        "Invalid format",
+			input:       "invalid",
+			expected:    0,
+			expectError: true,
+		},
+		{
+			name:        "Empty string",
+			input:       "",
+			expected:    0,
+			expectError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := parseSize(tt.input)
+
+			if tt.expectError && err == nil {
+				t.Errorf("Expected error for input %s but got none", tt.input)
+			}
+
+			if !tt.expectError && err != nil {
+				t.Errorf("Expected no error for input %s but got: %v", tt.input, err)
+			}
+
+			if !tt.expectError && result != tt.expected {
+				t.Errorf("Expected %d for input %s but got %d", tt.expected, tt.input, result)
+			}
+		})
+	}
+}
+
+func TestGetMaxFileSize(t *testing.T) {
+	// Test default value
+	result := GetMaxFileSize()
+	if result != MaxFileSize {
+		t.Errorf("Expected default MaxFileSize %d, got %d", MaxFileSize, result)
+	}
+}
+
+func TestGetMaxTarFileSize(t *testing.T) {
+	// Test default value
+	result := GetMaxTarFileSize()
+	if result != MaxTarFileSize {
+		t.Errorf("Expected default MaxTarFileSize %d, got %d", MaxTarFileSize, result)
+	}
+}
+
+func TestGetMaxTotalArchiveSize(t *testing.T) {
+	// Test default value
+	result := GetMaxTotalArchiveSize()
+	if result != MaxTotalArchiveSize {
+		t.Errorf("Expected default MaxTotalArchiveSize %d, got %d", MaxTotalArchiveSize, result)
+	}
+}
+
+func TestSetCLISizeLimits(t *testing.T) {
+	// Test setting CLI limits
+	SetCLISizeLimits("1GB", "10GB", "20GB")
+
+	if getCLIMaxFileSize() != "1GB" {
+		t.Errorf("Expected CLI max file size '1GB', got '%s'", getCLIMaxFileSize())
+	}
+
+	if getCLIMaxTarFileSize() != "10GB" {
+		t.Errorf("Expected CLI max tar file size '10GB', got '%s'", getCLIMaxTarFileSize())
+	}
+
+	if getCLIMaxTotalArchiveSize() != "20GB" {
+		t.Errorf("Expected CLI max total archive size '20GB', got '%s'", getCLIMaxTotalArchiveSize())
+	}
+}
+
+func TestGetMaxFileSizeWithCLIOverride(t *testing.T) {
+	// Save original environment
+	originalEnv := os.Getenv("KANIKO_MAX_FILE_SIZE")
+	defer func() {
+		if originalEnv != "" {
+			os.Setenv("KANIKO_MAX_FILE_SIZE", originalEnv)
+		} else {
+			os.Unsetenv("KANIKO_MAX_FILE_SIZE")
+		}
+	}()
+
+	// Clear environment variable
+	os.Unsetenv("KANIKO_MAX_FILE_SIZE")
+
+	// Test CLI override
+	SetCLISizeLimits("2GB", "", "")
+	result := GetMaxFileSize()
+	expected := int64(2 * 1024 * 1024 * 1024) // 2GB
+	if result != expected {
+		t.Errorf("Expected CLI override to return %d, got %d", expected, result)
+	}
+
+	// Test invalid CLI value falls back to default
+	SetCLISizeLimits("invalid", "", "")
+	result = GetMaxFileSize()
+	if result != MaxFileSize {
+		t.Errorf("Expected invalid CLI value to fall back to default %d, got %d", MaxFileSize, result)
+	}
+}
+
+func TestGetMaxTarFileSizeWithCLIOverride(t *testing.T) {
+	// Save original environment
+	originalEnv := os.Getenv("KANIKO_MAX_TAR_FILE_SIZE")
+	defer func() {
+		if originalEnv != "" {
+			os.Setenv("KANIKO_MAX_TAR_FILE_SIZE", originalEnv)
+		} else {
+			os.Unsetenv("KANIKO_MAX_TAR_FILE_SIZE")
+		}
+	}()
+
+	// Clear environment variable
+	os.Unsetenv("KANIKO_MAX_TAR_FILE_SIZE")
+
+	// Test CLI override
+	SetCLISizeLimits("", "15GB", "")
+	result := GetMaxTarFileSize()
+	expected := int64(15 * 1024 * 1024 * 1024) // 15GB
+	if result != expected {
+		t.Errorf("Expected CLI override to return %d, got %d", expected, result)
+	}
+}
+
+func TestGetMaxTotalArchiveSizeWithCLIOverride(t *testing.T) {
+	// Save original environment
+	originalEnv := os.Getenv("KANIKO_MAX_TOTAL_ARCHIVE_SIZE")
+	defer func() {
+		if originalEnv != "" {
+			os.Setenv("KANIKO_MAX_TOTAL_ARCHIVE_SIZE", originalEnv)
+		} else {
+			os.Unsetenv("KANIKO_MAX_TOTAL_ARCHIVE_SIZE")
+		}
+	}()
+
+	// Clear environment variable
+	os.Unsetenv("KANIKO_MAX_TOTAL_ARCHIVE_SIZE")
+
+	// Test CLI override
+	SetCLISizeLimits("", "", "25GB")
+	result := GetMaxTotalArchiveSize()
+	expected := int64(25 * 1024 * 1024 * 1024) // 25GB
+	if result != expected {
+		t.Errorf("Expected CLI override to return %d, got %d", expected, result)
+	}
+}
+
+func TestSizeLimitPriority(t *testing.T) {
+	// Test priority: CLI > Environment > Default
+
+	// Save original environment
+	originalEnv := os.Getenv("KANIKO_MAX_FILE_SIZE")
+	defer func() {
+		if originalEnv != "" {
+			os.Setenv("KANIKO_MAX_FILE_SIZE", originalEnv)
+		} else {
+			os.Unsetenv("KANIKO_MAX_FILE_SIZE")
+		}
+	}()
+
+	// Set environment variable
+	os.Setenv("KANIKO_MAX_FILE_SIZE", "1GB")
+
+	// Test that CLI overrides environment
+	SetCLISizeLimits("3GB", "", "")
+	result := GetMaxFileSize()
+	expected := int64(3 * 1024 * 1024 * 1024) // 3GB
+	if result != expected {
+		t.Errorf("Expected CLI to override environment: got %d, expected %d", result, expected)
+	}
+
+	// Test that environment is used when CLI is empty
+	SetCLISizeLimits("", "", "")
+	result = GetMaxFileSize()
+	expected = int64(1 * 1024 * 1024 * 1024) // 1GB from environment
+	if result != expected {
+		t.Errorf("Expected environment to be used when CLI is empty: got %d, expected %d", result, expected)
+	}
+
+	// Test that default is used when both CLI and environment are empty
+	os.Unsetenv("KANIKO_MAX_FILE_SIZE")
+	SetCLISizeLimits("", "", "")
+	result = GetMaxFileSize()
+	if result != MaxFileSize {
+		t.Errorf("Expected default to be used when CLI and environment are empty: got %d, expected %d", result, MaxFileSize)
+	}
+}
+
+func TestValidateSymlinkChain(t *testing.T) {
+	// Create a temporary directory for testing
+	tempDir := t.TempDir()
+
+	tests := []struct {
+		name        string
+		setup       func() string // Returns the symlink path to test
+		expectError bool
+		errorMsg    string
+	}{
+		{
+			name: "Valid single symlink",
+			setup: func() string {
+				target := filepath.Join(tempDir, "target")
+				os.WriteFile(target, []byte("test"), 0644)
+
+				symlink := filepath.Join(tempDir, "link")
+				os.Symlink(target, symlink)
+				return symlink
+			},
+			expectError: false,
+		},
+		{
+			name: "Circular symlink reference",
+			setup: func() string {
+				symlink := filepath.Join(tempDir, "circular")
+				os.Symlink("circular", symlink) // Points to itself
+				return symlink
+			},
+			expectError: true,
+			errorMsg:    "circular symlink reference detected",
+		},
+		{
+			name: "Symlink chain too deep",
+			setup: func() string {
+				// Create a chain of 12 symlinks (exceeds max depth of 10)
+				// Start with a regular file
+				target := filepath.Join(tempDir, "target")
+				os.WriteFile(target, []byte("test"), 0644)
+
+				// Create a chain: link0 -> link1 -> ... -> link11 -> target
+				// Each link points to the next one, creating a chain
+				prev := target
+				for i := 0; i < 12; i++ {
+					next := filepath.Join(tempDir, fmt.Sprintf("link%d", i))
+					// Each symlink points to the previous one
+					os.Symlink(prev, next)
+					prev = next
+				}
+				return prev // This is link11, the last in the chain
+			},
+			expectError: true,
+			errorMsg:    "symlink chain too deep",
+		},
+		{
+			name: "Non-symlink file",
+			setup: func() string {
+				file := filepath.Join(tempDir, "regular_file")
+				os.WriteFile(file, []byte("test"), 0644)
+				return file
+			},
+			expectError: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			symlinkPath := tt.setup()
+			err := validateSymlinkChain(symlinkPath, 0)
+
+			if tt.expectError {
+				if err == nil {
+					t.Errorf("Expected error but got none")
+				} else if !strings.Contains(err.Error(), tt.errorMsg) {
+					t.Errorf("Expected error message to contain '%s', got: %v", tt.errorMsg, err)
+				}
+			} else {
+				if err != nil {
+					t.Errorf("Expected no error but got: %v", err)
+				}
+			}
+		})
+	}
+}
+
+func TestValidateSymlinkTarget(t *testing.T) {
+	tempDir := t.TempDir()
+
+	tests := []struct {
+		name        string
+		target      string
+		sourcePath  string
+		expectError bool
+		errorMsg    string
+	}{
+		{
+			name:        "Valid relative target",
+			target:      "subdir/file",
+			sourcePath:  filepath.Join(tempDir, "link"),
+			expectError: false,
+		},
+		{
+			name:        "Valid relative target with subdirectory",
+			target:      "../sibling/file",
+			sourcePath:  filepath.Join(tempDir, "subdir", "link"),
+			expectError: false,
+		},
+		{
+			name:        "Traversal attempt - too many ..",
+			target:      "../../../etc/passwd",
+			sourcePath:  filepath.Join(tempDir, "subdir", "link"),
+			expectError: true,
+			errorMsg:    "would escape source directory",
+		},
+		{
+			name:        "Dangerous absolute path - /etc",
+			target:      "/etc/passwd",
+			sourcePath:  filepath.Join(tempDir, "link"),
+			expectError: true,
+			errorMsg:    "points to dangerous path",
+		},
+		{
+			name:        "Dangerous absolute path - /proc",
+			target:      "/proc/self/environ",
+			sourcePath:  filepath.Join(tempDir, "link"),
+			expectError: true,
+			errorMsg:    "points to dangerous path",
+		},
+		{
+			name:        "Valid absolute path in safe directory",
+			target:      "/tmp/safe_file",
+			sourcePath:  filepath.Join(tempDir, "link"),
+			expectError: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateSymlinkTarget(tt.target, tt.sourcePath)
+
+			if tt.expectError {
+				if err == nil {
+					t.Errorf("Expected error but got none")
+				} else if !strings.Contains(err.Error(), tt.errorMsg) {
+					t.Errorf("Expected error message to contain '%s', got: %v", tt.errorMsg, err)
+				}
+			} else {
+				if err != nil {
+					t.Errorf("Expected no error but got: %v", err)
+				}
+			}
+		})
+	}
+}
+
+func TestValidateAbsoluteSymlinkTarget(t *testing.T) {
+	tests := []struct {
+		name        string
+		target      string
+		expectError bool
+		errorMsg    string
+	}{
+		{
+			name:        "Safe absolute path",
+			target:      "/tmp/safe_file",
+			expectError: false,
+		},
+		{
+			name:        "Safe absolute path with subdirectory",
+			target:      "/usr/local/bin/command",
+			expectError: false,
+		},
+		{
+			name:        "Dangerous path - /etc",
+			target:      "/etc/passwd",
+			expectError: true,
+			errorMsg:    "points to dangerous path",
+		},
+		{
+			name:        "Dangerous path - /proc",
+			target:      "/proc/self/environ",
+			expectError: true,
+			errorMsg:    "points to dangerous path",
+		},
+		{
+			name:        "Dangerous path - /sys",
+			target:      "/sys/kernel/debug",
+			expectError: true,
+			errorMsg:    "points to dangerous path",
+		},
+		{
+			name:        "Dangerous path - /dev",
+			target:      "/dev/null",
+			expectError: true,
+			errorMsg:    "points to dangerous path",
+		},
+		{
+			name:        "Dangerous path - /root",
+			target:      "/root/.ssh/id_rsa",
+			expectError: true,
+			errorMsg:    "points to dangerous path",
+		},
+		{
+			name:        "Dangerous path - /home",
+			target:      "/home/user/.bashrc",
+			expectError: true,
+			errorMsg:    "points to dangerous path",
+		},
+		{
+			name:        "Dangerous path - /var/log",
+			target:      "/var/log/auth.log",
+			expectError: true,
+			errorMsg:    "points to dangerous path",
+		},
+		{
+			name:        "Dangerous path - /var/run",
+			target:      "/var/run/docker.sock",
+			expectError: true,
+			errorMsg:    "points to dangerous path",
+		},
+		{
+			name:        "Traversal in absolute path",
+			target:      "/tmp/../etc/passwd",
+			expectError: true,
+			errorMsg:    "contains directory traversal",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateAbsoluteSymlinkTarget(tt.target)
+
+			if tt.expectError {
+				if err == nil {
+					t.Errorf("Expected error but got none")
+				} else if !strings.Contains(err.Error(), tt.errorMsg) {
+					t.Errorf("Expected error message to contain '%s', got: %v", tt.errorMsg, err)
+				}
+			} else {
+				if err != nil {
+					t.Errorf("Expected no error but got: %v", err)
+				}
+			}
+		})
+	}
+}
+
+func TestValidateDirectoryPermissions(t *testing.T) {
+	tests := []struct {
+		name        string
+		mode        os.FileMode
+		expectError bool
+		errorMsg    string
+	}{
+		{
+			name:        "Valid directory permissions",
+			mode:        0755,
+			expectError: false,
+		},
+		{
+			name:        "Valid restrictive permissions",
+			mode:        0700,
+			expectError: false,
+		},
+		{
+			name:        "World-writable directory (warning)",
+			mode:        0777,
+			expectError: false, // Should warn but not error
+		},
+		{
+			name:        "No owner permissions",
+			mode:        0000,
+			expectError: true,
+			errorMsg:    "directory must have at least owner permissions",
+		},
+		{
+			name:        "Only group permissions",
+			mode:        0070,
+			expectError: true,
+			errorMsg:    "directory must have at least owner permissions",
+		},
+		{
+			name:        "Only world permissions",
+			mode:        0007,
+			expectError: true,
+			errorMsg:    "directory must have at least owner permissions",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateDirectoryPermissions(tt.mode)
+
+			if tt.expectError {
+				if err == nil {
+					t.Errorf("Expected error but got none")
+				} else if !strings.Contains(err.Error(), tt.errorMsg) {
+					t.Errorf("Expected error message to contain '%s', got: %v", tt.errorMsg, err)
+				}
+			} else {
+				if err != nil {
+					t.Errorf("Expected no error but got: %v", err)
+				}
+			}
+		})
+	}
+}
+
+func TestValidateUserGroupIDs(t *testing.T) {
+	tests := []struct {
+		name        string
+		uid         int64
+		gid         int64
+		expectError bool
+		errorMsg    string
+	}{
+		{
+			name:        "Valid UID/GID",
+			uid:         1000,
+			gid:         1000,
+			expectError: false,
+		},
+		{
+			name:        "Root UID/GID",
+			uid:         0,
+			gid:         0,
+			expectError: false,
+		},
+		{
+			name:        "Negative UID",
+			uid:         -1,
+			gid:         1000,
+			expectError: true,
+			errorMsg:    "UID and GID must be non-negative",
+		},
+		{
+			name:        "Negative GID",
+			uid:         1000,
+			gid:         -1,
+			expectError: true,
+			errorMsg:    "UID and GID must be non-negative",
+		},
+		{
+			name:        "High UID/GID (warning)",
+			uid:         2000000,
+			gid:         2000000,
+			expectError: false, // Should warn but not error
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateUserGroupIDs(tt.uid, tt.gid)
+
+			if tt.expectError {
+				if err == nil {
+					t.Errorf("Expected error but got none")
+				} else if !strings.Contains(err.Error(), tt.errorMsg) {
+					t.Errorf("Expected error message to contain '%s', got: %v", tt.errorMsg, err)
+				}
+			} else {
+				if err != nil {
+					t.Errorf("Expected no error but got: %v", err)
+				}
+			}
+		})
+	}
+}
+
+func TestValidateFilePermissions(t *testing.T) {
+	tests := []struct {
+		name        string
+		mode        os.FileMode
+		expectError bool
+		errorMsg    string
+	}{
+		{
+			name:        "Valid file permissions",
+			mode:        0644,
+			expectError: false,
+		},
+		{
+			name:        "Valid executable file",
+			mode:        0755,
+			expectError: false,
+		},
+		{
+			name:        "World-writable file (warning)",
+			mode:        0666,
+			expectError: false, // Should warn but not error
+		},
+		{
+			name:        "No owner permissions",
+			mode:        0000,
+			expectError: true,
+			errorMsg:    "file must have at least owner permissions",
+		},
+		{
+			name:        "Only group permissions",
+			mode:        0060,
+			expectError: true,
+			errorMsg:    "file must have at least owner permissions",
+		},
+		{
+			name:        "Only world permissions",
+			mode:        0006,
+			expectError: true,
+			errorMsg:    "file must have at least owner permissions",
+		},
+		{
+			name:        "World-readable and executable",
+			mode:        0755,
+			expectError: false, // Should warn but not error
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateFilePermissions(tt.mode)
+
+			if tt.expectError {
+				if err == nil {
+					t.Errorf("Expected error but got none")
+				} else if !strings.Contains(err.Error(), tt.errorMsg) {
+					t.Errorf("Expected error message to contain '%s', got: %v", tt.errorMsg, err)
+				}
+			} else {
+				if err != nil {
+					t.Errorf("Expected no error but got: %v", err)
+				}
 			}
 		})
 	}

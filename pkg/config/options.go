@@ -109,6 +109,11 @@ type KanikoOptions struct {
 	CosignKeyPath       string           // --cosign-key-path=/path/to/key
 	CosignKeyPassword   string           // --cosign-key-password=secret
 
+	// File size limit options for security and resource control
+	MaxFileSize         string // --max-file-size=500MB
+	MaxTarFileSize      string // --max-tar-file-size=5GB
+	MaxTotalArchiveSize string // --max-total-archive-size=10GB
+
 	// Debug options for enhanced debugging and development
 	DebugOptions
 }
