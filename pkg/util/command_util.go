@@ -446,9 +446,16 @@ func checkSingleDirectorySource(resolvedSources []string, dest string, fileConte
 	}
 	// If the single source is a directory (or explicitly ends with '/') and destination is not a directory, error.
 	if fi.IsDir() || strings.HasSuffix(resolvedSources[0], pathSeparator) {
-		if !IsDestDir(dest) {
+		// Docker allows copying a directory to a non-existent path, which creates a directory
+		// We should only error if the destination is explicitly a file (exists and is not a directory)
+		if IsDestDir(dest) {
+			return nil
+		}
+		// Check if destination exists and is a file
+		if fi, err := os.Stat(dest); err == nil && !fi.IsDir() {
 			return errors.New("when copying a directory, destination must be a directory and end in '/'")
 		}
+		// If destination doesn't exist, allow the copy (Docker behavior)
 	}
 	return nil
 }
