@@ -41,6 +41,11 @@ const (
 
 // Configure sets the logrus logging level and formatter
 func Configure(level, format string, logTimestamp bool) error {
+	// Use enhanced Kaniko logging if supported format is requested
+	if format == "kaniko" || format == "kaniko-compact" {
+		return ConfigureKanikoLogging(level, format, logTimestamp)
+	}
+
 	lvl, err := logrus.ParseLevel(level)
 	if err != nil {
 		return errors.Wrap(err, "parsing log level")
@@ -62,7 +67,8 @@ func Configure(level, format string, logTimestamp bool) error {
 	case FormatJSON:
 		formatter = &logrus.JSONFormatter{}
 	default:
-		return fmt.Errorf("not a valid log format: %q. Please specify one of (text, color, json)", format)
+		return fmt.Errorf("not a valid log format: %q. Please specify one of (text, color, json, kaniko, kaniko-compact)",
+			format)
 	}
 	logrus.SetFormatter(formatter)
 

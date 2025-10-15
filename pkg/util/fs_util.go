@@ -73,11 +73,13 @@ const (
 	// This prevents DoS attacks with many large files
 	MaxTotalArchiveSize = 10 * 1024 * 1024 * 1024
 
-	// Security configuration
 	// AutoSanitizePermissions enables automatic sanitization of overly permissive permissions
 	AutoSanitizePermissions = true
 	// StrictSecurityMode enables strict security checks that may fail builds with unsafe permissions
 	StrictSecurityMode = false
+
+	// WorldWritableBit represents the world-writable permission bit (002)
+	WorldWritableBit = 0o002
 )
 
 const (
@@ -1874,7 +1876,7 @@ func validateDirectoryPermissions(mode os.FileMode) error {
 	// Directories should not be world-writable unless explicitly needed
 	if mode&0o002 != 0 { // World-writable
 		// Allow world-writable only for specific cases like /tmp
-		logrus.Warnf("Creating world-writable directory with permissions %o", mode)
+		logrus.Debugf("Creating world-writable directory with permissions %o", mode)
 	}
 
 	// Check for dangerous permission combinations
@@ -1916,7 +1918,7 @@ func validateUserGroupIDs(uid, gid int64) error {
 func validateFilePermissions(mode os.FileMode) error {
 	// Check for overly permissive file permissions
 	if mode&0o002 != 0 { // World-writable
-		logrus.Warnf("Creating world-writable file with permissions %o", mode)
+		logrus.Debugf("Creating world-writable file with permissions %o", mode)
 	}
 
 	// Check for dangerous permission combinations
@@ -1936,9 +1938,9 @@ func validateFilePermissions(mode os.FileMode) error {
 // SanitizeFilePermissions automatically fixes overly permissive file permissions
 func SanitizeFilePermissions(mode os.FileMode) os.FileMode {
 	// Remove world-writable permissions (002)
-	if mode&0o002 != 0 {
-		logrus.Warnf("Sanitizing world-writable file permissions from %o to %o", mode, mode&^0o002)
-		mode = mode &^ 0o002
+	if mode&WorldWritableBit != 0 {
+		logrus.Debugf("Sanitizing world-writable file permissions from %o to %o", mode, mode&^WorldWritableBit)
+		mode &^= WorldWritableBit
 	}
 
 	// Ensure owner has at least read permissions
@@ -1952,9 +1954,9 @@ func SanitizeFilePermissions(mode os.FileMode) os.FileMode {
 // SanitizeDirectoryPermissions automatically fixes overly permissive directory permissions
 func SanitizeDirectoryPermissions(mode os.FileMode) os.FileMode {
 	// Remove world-writable permissions (002)
-	if mode&0o002 != 0 {
-		logrus.Warnf("Sanitizing world-writable directory permissions from %o to %o", mode, mode&^0o002)
-		mode = mode &^ 0o002
+	if mode&WorldWritableBit != 0 {
+		logrus.Debugf("Sanitizing world-writable directory permissions from %o to %o", mode, mode&^WorldWritableBit)
+		mode &^= WorldWritableBit
 	}
 
 	// Ensure owner has at least read and execute permissions

@@ -114,8 +114,8 @@ func prepareCommand(
 				continue
 			}
 			oldPath := os.Getenv("PATH")
-			// Store old path to restore later
-			oldPathValue := oldPath
+			// Store old path for debugging
+			_ = oldPath
 
 			if setErr := os.Setenv("PATH", entry[1]); setErr != nil {
 				return nil, errors.Wrap(setErr, "setting PATH")
@@ -125,10 +125,10 @@ func prepareCommand(
 				newCommand[0] = path
 			}
 
-			// Restore PATH immediately after use instead of using defer in loop
-			if setErr := os.Setenv("PATH", oldPathValue); setErr != nil {
-				logrus.Warnf("Failed to restore PATH: %v", setErr)
-			}
+			// CRITICAL FIX: Don't restore PATH immediately - keep it for the command execution
+			// The PATH will be properly set in the command environment via cmd.Env
+			// This ensures that PATH changes from previous RUN commands are preserved
+			logrus.Debugf("Using PATH from config: %s", entry[1])
 		}
 	}
 
