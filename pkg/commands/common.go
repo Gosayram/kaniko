@@ -50,9 +50,10 @@ func (h *CommonCommandHelper) SetupUserGroup(chown string, replacementEnvs []str
 }
 
 // ResolveUserFromConfig resolves user from config with common error handling
-func (h *CommonCommandHelper) ResolveUserFromConfig(config *v1.Config, buildArgs *dockerfile.BuildArgs) (userStr string, err error) {
-	replacementEnvs := buildArgs.ReplacementEnvs(config.Env)
-	u := config.User
+func (h *CommonCommandHelper) ResolveUserFromConfig(
+	cfg *v1.Config, buildArgs *dockerfile.BuildArgs) (userStr string, err error) {
+	replacementEnvs := buildArgs.ReplacementEnvs(cfg.Env)
+	u := cfg.User
 	userAndGroup := strings.Split(u, ":")
 
 	userStr, err = util.ResolveEnvironmentReplacement(userAndGroup[0], replacementEnvs, false)
@@ -72,7 +73,8 @@ func (h *CommonCommandHelper) ResolveUserFromConfig(config *v1.Config, buildArgs
 }
 
 // ResolveEnvironmentVariable resolves a single environment variable with common error handling
-func (h *CommonCommandHelper) ResolveEnvironmentVariable(value string, replacementEnvs []string, allowEmpty bool) (string, error) {
+func (h *CommonCommandHelper) ResolveEnvironmentVariable(
+	value string, replacementEnvs []string, allowEmpty bool) (string, error) {
 	return util.ResolveEnvironmentReplacement(value, replacementEnvs, allowEmpty)
 }
 
@@ -87,7 +89,8 @@ func (h *CommonCommandHelper) ValidatePath(path string) error {
 }
 
 // ResolveWorkingDirectory resolves working directory path with proper handling of absolute/relative paths
-func (h *CommonCommandHelper) ResolveWorkingDirectory(workdirPath string, currentWorkingDir string, replacementEnvs []string) (string, error) {
+func (h *CommonCommandHelper) ResolveWorkingDirectory(
+	workdirPath, currentWorkingDir string, replacementEnvs []string) (string, error) {
 	resolvedWorkingDir, err := util.ResolveEnvironmentReplacement(workdirPath, replacementEnvs, true)
 	if err != nil {
 		return "", err
@@ -105,22 +108,24 @@ func (h *CommonCommandHelper) ResolveWorkingDirectory(workdirPath string, curren
 }
 
 // GetUserGroupFromConfig gets user and group from config with common error handling
-func (h *CommonCommandHelper) GetUserGroupFromConfig(config *v1.Config, replacementEnvs []string) (uid, gid int64, err error) {
-	if config.User == "" {
+func (h *CommonCommandHelper) GetUserGroupFromConfig(
+	cfg *v1.Config, replacementEnvs []string) (uid, gid int64, err error) {
+	if cfg.User == "" {
 		return -1, -1, nil
 	}
 
-	logrus.Debugf("Fetching uid and gid for USER '%s'", config.User)
-	uid, gid, err = util.GetUserGroup(config.User, replacementEnvs)
+	logrus.Debugf("Fetching uid and gid for USER '%s'", cfg.User)
+	uid, gid, err = util.GetUserGroup(cfg.User, replacementEnvs)
 	if err != nil {
-		return 0, 0, errors.Wrapf(err, "identifying uid and gid for user %s", config.User)
+		return 0, 0, errors.Wrapf(err, "identifying uid and gid for user %s", cfg.User)
 	}
 
 	return uid, gid, nil
 }
 
 // SetupFilePermissions sets up file permissions with common error handling
-func (h *CommonCommandHelper) SetupFilePermissions(chmod string, replacementEnvs []string) (os.FileMode, bool, error) {
+func (h *CommonCommandHelper) SetupFilePermissions(
+	chmod string, replacementEnvs []string) (mode os.FileMode, useDefault bool, err error) {
 	return util.GetChmod(chmod, replacementEnvs)
 }
 
@@ -161,9 +166,8 @@ func (h *CommonCommandHelper) ValidateCommandArguments(args []string) error {
 func (h *CommonCommandHelper) ResolveSourcesAndDestination(
 	cmd *instructions.CopyCommand,
 	fileContext util.FileContext,
-	replacementEnvs []string) ([]string, string, error) {
-
-	sources, destination, err := util.ResolveEnvAndWildcards(cmd.SourcesAndDest, fileContext, replacementEnvs)
+	replacementEnvs []string) (sources []string, destination string, err error) {
+	sources, destination, err = util.ResolveEnvAndWildcards(cmd.SourcesAndDest, fileContext, replacementEnvs)
 	if err != nil {
 		return nil, "", errors.Wrap(err, "resolving src")
 	}
@@ -171,7 +175,8 @@ func (h *CommonCommandHelper) ResolveSourcesAndDestination(
 }
 
 // SetupFileContext sets up file context for commands that need it
-func (h *CommonCommandHelper) SetupFileContext(cmd *instructions.CopyCommand, fileContext util.FileContext) util.FileContext {
+func (h *CommonCommandHelper) SetupFileContext(
+	cmd *instructions.CopyCommand, fileContext util.FileContext) util.FileContext {
 	if cmd.From != "" {
 		return util.FileContext{Root: filepath.Join(config.KanikoDir, cmd.From)}
 	}

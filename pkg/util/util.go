@@ -75,6 +75,7 @@ func Hasher() func(string) (string, error) {
 			if err := ValidateFilePath(p); err != nil {
 				return "", err
 			}
+			// #nosec G304 - path is validated before use
 			f, err := os.Open(p)
 			if err != nil {
 				return "", err
@@ -119,6 +120,7 @@ func CacheHasher() func(string) (string, error) {
 			if err := ValidateFilePath(p); err != nil {
 				return "", err
 			}
+			// #nosec G304 - path is validated before use
 			f, err := os.Open(p)
 			if err != nil {
 				return "", err

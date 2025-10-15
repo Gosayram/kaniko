@@ -50,6 +50,7 @@ func (p *X509CertPool) append(path string) error {
 	if err := ValidateFilePath(path); err != nil {
 		return fmt.Errorf("invalid certificate path: %w", err)
 	}
+	// #nosec G304 - path is validated before use
 	pem, err := os.ReadFile(path)
 	if err != nil {
 		return err

@@ -85,9 +85,9 @@ func (c *CopyCommand) ExecuteCommand(config *v1.Config, buildArgs *dockerfile.Bu
 func (c *CopyCommand) copySources(
 	srcs []string, dest string, config *v1.Config, uid, gid int64,
 	chmod os.FileMode, useDefaultChmod bool) error {
-
 	// For small number of sources, use sequential processing
-	if len(srcs) <= 2 {
+	const maxSequentialSources = 2
+	if len(srcs) <= maxSequentialSources {
 		for _, src := range srcs {
 			if err := c.copySingleSource(src, dest, config, uid, gid, chmod, useDefaultChmod); err != nil {
 				return err
@@ -104,7 +104,6 @@ func (c *CopyCommand) copySources(
 func (c *CopyCommand) copySourcesParallel(
 	srcs []string, dest string, config *v1.Config, uid, gid int64,
 	chmod os.FileMode, useDefaultChmod bool) error {
-
 	// Use errgroup for parallel execution with error handling
 	var wg sync.WaitGroup
 	errChan := make(chan error, len(srcs))
@@ -140,13 +139,13 @@ func (c *CopyCommand) copySourcesParallel(
 	}()
 
 	// Collect any errors
-	var errors []error
+	var errs []error
 	for err := range errChan {
-		errors = append(errors, err)
+		errs = append(errs, err)
 	}
 
-	if len(errors) > 0 {
-		return errors[0] // Return the first error
+	if len(errs) > 0 {
+		return errs[0] // Return the first error
 	}
 
 	return nil

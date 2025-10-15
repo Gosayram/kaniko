@@ -280,6 +280,7 @@ func UnpackLocalTarArchive(path, dest string) ([]string, error) {
 		if err := ValidateFilePath(path); err != nil {
 			return nil, err
 		}
+		// #nosec G304 - path is validated by ValidateFilePath
 		file, err := os.Open(path)
 		if err != nil {
 			return nil, err
@@ -303,6 +304,7 @@ func UnpackLocalTarArchive(path, dest string) ([]string, error) {
 		if err := ValidateFilePath(path); err != nil {
 			return nil, err
 		}
+		// #nosec G304 - path is validated by ValidateFilePath
 		file, err := os.Open(path)
 		if err != nil {
 			return nil, err
@@ -361,6 +363,7 @@ func UnpackCompressedTar(path, dir string) error {
 	if err := ValidateFilePath(path); err != nil {
 		return err
 	}
+	// #nosec G304 - path is validated by ValidateFilePath
 	file, err := os.Open(path)
 	if err != nil {
 		return err

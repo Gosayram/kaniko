@@ -73,7 +73,8 @@ func (w *WorkdirCommand) ExecuteCommand(config *v1.Config, buildArgs *dockerfile
 		w.snapshotFiles = append(w.snapshotFiles, config.WorkingDir)
 
 		// Create directory using common helper
-		if err := helper.CreateDirectoryWithPermissions(config.WorkingDir, 0o755, uid, gid); err != nil {
+		const defaultDirMode = 0o755
+		if err := helper.CreateDirectoryWithPermissions(config.WorkingDir, defaultDirMode, uid, gid); err != nil {
 			return errors.Wrapf(err, "creating workdir %s", config.WorkingDir)
 		}
 	}

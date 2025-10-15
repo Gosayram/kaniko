@@ -1561,10 +1561,8 @@ func validateFileSize(path string, maxSize int64) error {
 	return nil
 }
 
-// validateFileSizeWithDefaults checks if a file size is within allowed limits using default or environment-configured limits
-func validateFileSizeWithDefaults(path string) error {
-	return validateFileSize(path, GetMaxFileSize())
-}
+// validateFileSizeWithDefaults checks if a file size is within allowed limits
+// using default or environment-configured limits
 
 // validateTarFileSize checks if a file size in tar archive is within allowed limits
 func validateTarFileSize(size int64) error {
@@ -1598,7 +1596,8 @@ func GetMaxFileSize() int64 {
 	return MaxFileSize
 }
 
-// GetMaxTarFileSize returns the maximum allowed tar file size, with CLI argument, environment variable, and default fallback
+// GetMaxTarFileSize returns the maximum allowed tar file size,
+// with CLI argument, environment variable, and default fallback
 func GetMaxTarFileSize() int64 {
 	// Check if CLI argument is set (this will be set by the config system)
 	if maxSize := getCLIMaxTarFileSize(); maxSize != "" {
@@ -1619,7 +1618,8 @@ func GetMaxTarFileSize() int64 {
 	return MaxTarFileSize
 }
 
-// GetMaxTotalArchiveSize returns the maximum allowed total archive size, with CLI argument, environment variable, and default fallback
+// GetMaxTotalArchiveSize returns the maximum allowed total archive size,
+// with CLI argument, environment variable, and default fallback
 func GetMaxTotalArchiveSize() int64 {
 	// Check if CLI argument is set (this will be set by the config system)
 	if maxSize := getCLIMaxTotalArchiveSize(); maxSize != "" {
@@ -1654,17 +1654,25 @@ func parseSize(sizeStr string) (int64, error) {
 	var size float64
 	var err error
 
-	if strings.HasSuffix(sizeStr, "kb") {
-		multiplier = 1024
+	const (
+		kbMultiplier = 1024
+		mbMultiplier = 1024 * 1024
+		gbMultiplier = 1024 * 1024 * 1024
+		tbMultiplier = 1024 * 1024 * 1024 * 1024
+	)
+
+	switch {
+	case strings.HasSuffix(sizeStr, "kb"):
+		multiplier = kbMultiplier
 		sizeStr = strings.TrimSuffix(sizeStr, "kb")
-	} else if strings.HasSuffix(sizeStr, "mb") {
-		multiplier = 1024 * 1024
+	case strings.HasSuffix(sizeStr, "mb"):
+		multiplier = mbMultiplier
 		sizeStr = strings.TrimSuffix(sizeStr, "mb")
-	} else if strings.HasSuffix(sizeStr, "gb") {
-		multiplier = 1024 * 1024 * 1024
+	case strings.HasSuffix(sizeStr, "gb"):
+		multiplier = gbMultiplier
 		sizeStr = strings.TrimSuffix(sizeStr, "gb")
-	} else if strings.HasSuffix(sizeStr, "tb") {
-		multiplier = 1024 * 1024 * 1024 * 1024
+	case strings.HasSuffix(sizeStr, "tb"):
+		multiplier = tbMultiplier
 		sizeStr = strings.TrimSuffix(sizeStr, "tb")
 	}
 
@@ -1825,18 +1833,19 @@ func validateAbsoluteSymlinkTarget(target string) error {
 func validateDirectoryPermissions(mode os.FileMode) error {
 	// Check for overly permissive directory permissions
 	// Directories should not be world-writable unless explicitly needed
-	if mode&0002 != 0 { // World-writable
+	if mode&0o002 != 0 { // World-writable
 		// Allow world-writable only for specific cases like /tmp
 		logrus.Warnf("Creating world-writable directory with permissions %o", mode)
 	}
 
 	// Check for dangerous permission combinations
-	if mode&0001 != 0 && mode&0004 != 0 { // World-executable and world-readable
-		// This is generally safe for directories
+	if mode&0o001 != 0 && mode&0o004 != 0 { // World-executable and world-readable
+		// This is generally safe for directories - no action needed
+		_ = mode // Acknowledge the check
 	}
 
 	// Check for overly restrictive permissions that might cause issues
-	if mode&0700 == 0 { // No owner permissions
+	if mode&0o700 == 0 { // No owner permissions
 		return fmt.Errorf("directory must have at least owner permissions (700)")
 	}
 
@@ -1867,18 +1876,18 @@ func validateUserGroupIDs(uid, gid int64) error {
 // validateFilePermissions validates file permissions to prevent security issues
 func validateFilePermissions(mode os.FileMode) error {
 	// Check for overly permissive file permissions
-	if mode&0002 != 0 { // World-writable
+	if mode&0o002 != 0 { // World-writable
 		logrus.Warnf("Creating world-writable file with permissions %o", mode)
 	}
 
 	// Check for dangerous permission combinations
-	if mode&0001 != 0 && mode&0004 != 0 { // World-executable and world-readable
+	if mode&0o001 != 0 && mode&0o004 != 0 { // World-executable and world-readable
 		// This might be dangerous for files containing sensitive data
 		logrus.Debugf("Creating world-readable and executable file with permissions %o", mode)
 	}
 
 	// Check for overly restrictive permissions that might cause issues
-	if mode&0700 == 0 { // No owner permissions
+	if mode&0o700 == 0 { // No owner permissions
 		return fmt.Errorf("file must have at least owner permissions (700)")
 	}
 

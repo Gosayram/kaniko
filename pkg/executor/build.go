@@ -1179,13 +1179,13 @@ func fetchExtraStagesParallel(extraStages []string, opts *config.KanikoOptions) 
 	}()
 
 	// Collect any errors
-	var errors []error
+	var errs []error
 	for err := range errChan {
-		errors = append(errors, err)
+		errs = append(errs, err)
 	}
 
-	if len(errors) > 0 {
-		return errors[0] // Return the first error
+	if len(errs) > 0 {
+		return errs[0] // Return the first error
 	}
 
 	return nil

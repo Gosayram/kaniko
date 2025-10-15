@@ -14,7 +14,8 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package util
+// Package util provides utility functions for filesystem operations and mocking
+package util // nolint:revive // util is a standard package name in this project
 
 import (
 	"os"
@@ -68,21 +69,25 @@ func NewRealFileSystem() FileSystemInterface {
 
 // Open opens a file for reading
 func (fs *RealFileSystem) Open(name string) (*os.File, error) {
+	// #nosec G304 - Real filesystem for production use, path validation handled by caller
 	return os.Open(name)
 }
 
 // Create creates a file for writing
 func (fs *RealFileSystem) Create(name string) (*os.File, error) {
+	// #nosec G304 - Real filesystem for production use, path validation handled by caller
 	return os.Create(name)
 }
 
 // OpenFile opens a file with specified flags and permissions
 func (fs *RealFileSystem) OpenFile(name string, flag int, perm os.FileMode) (*os.File, error) {
+	// #nosec G304 - Real filesystem for production use, path validation handled by caller
 	return os.OpenFile(name, flag, perm)
 }
 
 // ReadFile reads the entire file content
 func (fs *RealFileSystem) ReadFile(name string) ([]byte, error) {
+	// #nosec G304 - Real filesystem for production use, path validation handled by caller
 	return os.ReadFile(name)
 }
 
@@ -219,6 +224,7 @@ func (mfs *MockFileSystem) SetSymlink(link, target string) {
 
 // Open opens a file for reading (mock implementation)
 func (mfs *MockFileSystem) Open(name string) (*os.File, error) {
+	// #nosec G304 - Mock filesystem for testing, path is controlled
 	if err, exists := mfs.Errors["open:"+name]; exists {
 		return nil, err
 	}
@@ -230,11 +236,16 @@ func (mfs *MockFileSystem) Open(name string) (*os.File, error) {
 		}
 		_, err = tmpFile.Write(content)
 		if err != nil {
-			tmpFile.Close()
-			os.Remove(tmpFile.Name())
+			_ = tmpFile.Close()
+			_ = os.Remove(tmpFile.Name())
 			return nil, err
 		}
-		tmpFile.Seek(0, 0)
+		_, err = tmpFile.Seek(0, 0)
+		if err != nil {
+			_ = tmpFile.Close()
+			_ = os.Remove(tmpFile.Name())
+			return nil, err
+		}
 		return tmpFile, nil
 	}
 	return nil, os.ErrNotExist
@@ -242,6 +253,7 @@ func (mfs *MockFileSystem) Open(name string) (*os.File, error) {
 
 // Create creates a file for writing (mock implementation)
 func (mfs *MockFileSystem) Create(name string) (*os.File, error) {
+	// #nosec G304 - Mock filesystem for testing, path is controlled
 	if err, exists := mfs.Errors["create:"+name]; exists {
 		return nil, err
 	}
@@ -254,7 +266,8 @@ func (mfs *MockFileSystem) Create(name string) (*os.File, error) {
 }
 
 // OpenFile opens a file with specified flags and permissions (mock implementation)
-func (mfs *MockFileSystem) OpenFile(name string, flag int, perm os.FileMode) (*os.File, error) {
+func (mfs *MockFileSystem) OpenFile(name string, _ int, _ os.FileMode) (*os.File, error) {
+	// #nosec G304 - Mock filesystem for testing, path is controlled
 	if err, exists := mfs.Errors["openfile:"+name]; exists {
 		return nil, err
 	}
@@ -264,6 +277,7 @@ func (mfs *MockFileSystem) OpenFile(name string, flag int, perm os.FileMode) (*o
 
 // ReadFile reads the entire file content (mock implementation)
 func (mfs *MockFileSystem) ReadFile(name string) ([]byte, error) {
+	// #nosec G304 - Mock filesystem for testing, path is controlled
 	if err, exists := mfs.Errors["readfile:"+name]; exists {
 		return nil, err
 	}
@@ -395,7 +409,7 @@ func (mfs *MockFileSystem) Symlink(oldname, newname string) error {
 }
 
 // Walk walks a directory tree (mock implementation)
-func (mfs *MockFileSystem) Walk(root string, fn filepath.WalkFunc) error {
+func (mfs *MockFileSystem) Walk(root string, _ filepath.WalkFunc) error {
 	if err, exists := mfs.Errors["walk:"+root]; exists {
 		return err
 	}
@@ -431,7 +445,7 @@ func (mfs *MockFileSystem) Chown(name string, uid, gid int) error {
 }
 
 // Chtimes changes file access and modification times (mock implementation)
-func (mfs *MockFileSystem) Chtimes(name string, atime, mtime time.Time) error {
+func (mfs *MockFileSystem) Chtimes(name string, _, _ time.Time) error {
 	if err, exists := mfs.Errors["chtimes:"+name]; exists {
 		return err
 	}
@@ -473,7 +487,8 @@ func (mfi *mockFileInfo) Size() int64 {
 }
 
 func (mfi *mockFileInfo) Mode() os.FileMode {
-	return 0644
+	const defaultFileMode = 0o644
+	return defaultFileMode
 }
 
 func (mfi *mockFileInfo) ModTime() time.Time {

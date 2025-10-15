@@ -22,9 +22,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Gosayram/kaniko/pkg/util"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/moby/buildkit/frontend/dockerfile/instructions"
+
+	"github.com/Gosayram/kaniko/pkg/util"
 )
 
 func TestCopySourcesParallel(t *testing.T) {

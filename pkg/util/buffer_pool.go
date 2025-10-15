@@ -61,7 +61,8 @@ func NewBytesBufferPool() *BytesBufferPool {
 	return &BytesBufferPool{
 		pool: sync.Pool{
 			New: func() interface{} {
-				return bytes.NewBuffer(make([]byte, 0, 1024)) // Start with 1KB capacity
+				const initialCapacity = 1024 // 1KB
+				return bytes.NewBuffer(make([]byte, 0, initialCapacity))
 			},
 		},
 	}
@@ -84,16 +85,23 @@ func (bbp *BytesBufferPool) Put(buf *bytes.Buffer) {
 	}
 }
 
+// Buffer pool size constants
+const (
+	smallBufferSize  = 4 * 1024   // 4KB
+	mediumBufferSize = 32 * 1024  // 32KB
+	largeBufferSize  = 256 * 1024 // 256KB
+)
+
 // Global buffer pools for common operations
 var (
 	// SmallBufferPool for small operations (4KB)
-	SmallBufferPool = NewBufferPool(4 * 1024)
+	SmallBufferPool = NewBufferPool(smallBufferSize)
 
 	// MediumBufferPool for medium operations (32KB)
-	MediumBufferPool = NewBufferPool(32 * 1024)
+	MediumBufferPool = NewBufferPool(mediumBufferSize)
 
 	// LargeBufferPool for large operations (256KB)
-	LargeBufferPool = NewBufferPool(256 * 1024)
+	LargeBufferPool = NewBufferPool(largeBufferSize)
 
 	// BytesBufferPool for string operations
 	GlobalBytesBufferPool = NewBytesBufferPool()

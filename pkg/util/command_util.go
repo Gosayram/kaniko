@@ -218,6 +218,7 @@ func matchSources(srcs, files []string) ([]string, error) {
 	return matchedSources, nil
 }
 
+// IsDestDir checks if the given path is a directory
 func IsDestDir(path string) bool {
 	// try to stat the path
 	fileInfo, err := os.Stat(path)
@@ -289,162 +290,8 @@ func URLDestinationFilepath(rawurl, dest, cwd string, envs []string) (string, er
 	return destPath, nil
 }
 
-func IsSrcsValid(srcsAndDest instructions.SourcesAndDest, resolvedSources []string, fileContext FileContext) error {
-	srcs := srcsAndDest.SourcePaths
-	dest := srcsAndDest.DestPath
-
-	if !ContainsWildcards(srcs) {
-		totalSrcs := 0
-		for _, src := range srcs {
-			if fileContext.ExcludesFile(src) {
-				continue
-			}
-			totalSrcs++
-		}
-		if totalSrcs > 1 && !IsDestDir(dest) {
-			// Docker allows copying multiple sources to non-existent paths, creating a directory
-			// We should only error if the destination is explicitly a file (exists and is not a directory)
-			// But we need to check if the destination is explicitly marked as a directory with trailing slash
-			if strings.HasSuffix(dest, "/") || dest == "." {
-				// Destination is explicitly a directory, allow the copy
-			} else if fi, err := os.Stat(dest); err == nil && !fi.IsDir() {
-				// Destination exists and is a file, this is an error
-				return errors.New("when specifying multiple sources in a COPY command, destination must be a directory and end in '/'")
-			}
-			// If destination doesn't exist, allow the copy (Docker behavior)
-		}
-	}
-
-	// If there is only one source and it's a directory, docker assumes the dest is a directory
-	if len(resolvedSources) == 1 {
-		if IsSrcRemoteFileURL(resolvedSources[0]) {
-			return nil
-		}
-		path := filepath.Join(fileContext.Root, resolvedSources[0])
-		fi, err := os.Lstat(path)
-		if err != nil {
-			return errors.Wrap(err, fmt.Sprintf("failed to get fileinfo for %v", path))
-		}
-		// Don't return early for directories - let the totalFiles check handle it
-		if fi.IsDir() {
-			// Continue to totalFiles check below
-		}
-	}
-
-	totalFiles := 0
-	for _, src := range resolvedSources {
-		if IsSrcRemoteFileURL(src) {
-			totalFiles++
-			continue
-		}
-		src = filepath.Clean(src)
-		files, err := RelativeFiles(src, fileContext.Root)
-		if err != nil {
-			return errors.Wrap(err, "failed to get relative files")
-		}
-		for _, file := range files {
-			if fileContext.ExcludesFile(file) {
-				continue
-			}
-			totalFiles++
-		}
-	}
-	// ignore the case where whildcards and there are no files to copy
-	if totalFiles == 0 {
-		// using log warning instead of return errors.New("copy failed: no source files specified")
-		logrus.Warn("No files to copy")
-	}
-	// If there are wildcards, and the destination is a file, there must be exactly one file to copy over,
-	// Otherwise, return an error
-	if !IsDestDir(dest) && totalFiles > 1 {
-		// Docker allows copying multiple sources to non-existent paths, creating a directory
-		// We should only error if the destination is explicitly a file (exists and is not a directory)
-		// But we need to check if the destination is explicitly marked as a directory with trailing slash
-		if strings.HasSuffix(dest, "/") || dest == "." {
-			// Destination is explicitly a directory, allow the copy
-		} else if fi, err := os.Stat(dest); err == nil && !fi.IsDir() {
-			// Destination exists and is a file, this is an error
-			return errors.New("when specifying multiple sources in a COPY command, destination must be a directory and end in '/'")
-		}
-		// If destination doesn't exist, allow the copy (Docker behavior)
-	}
-	return nil
-}
-
-// countEffectiveSources counts unique, non-excluded, existing sources from the resolvedSources list.
-// Remote URLs are counted as sources. Files that do not exist (e.g. unmatched wildcards) are ignored.
-func countEffectiveSources(resolvedSources []string, fileContext FileContext) (int, error) {
-	counted := 0
-	for _, src := range resolvedSources {
-		if IsSrcRemoteFileURL(src) {
-			counted++
-			continue
-		}
-
-		// Normalize and strip the optional "context/" prefix because Root already points to the build context
-		cleanSrc := filepath.Clean(src)
-		cleanSrc = strings.TrimPrefix(cleanSrc, "context/")
-		var absPath string
-		if filepath.IsAbs(cleanSrc) {
-			absPath = cleanSrc
-		} else {
-			absPath = filepath.Join(fileContext.Root, cleanSrc)
-		}
-		if fileContext.ExcludesFile(absPath) {
-			continue
-		}
-
-		if _, err := os.Lstat(absPath); err != nil {
-			// Ignore non-existing entries (e.g., unmatched wildcards)
-			if os.IsNotExist(err) {
-				continue
-			}
-			return 0, errors.Wrap(err, "stat source")
-		}
-
-		counted++
-		if counted > 1 {
-			// Early exit: we only need to know if there is more than one
-			return counted, nil
-		}
-	}
-	return counted, nil
-}
-
-// countEffectiveInputSources counts existing, non-excluded sources from the input source list.
-// It ignores entries that do not exist. This is used only when no wildcards are present in inputs.
-func countEffectiveInputSources(inputSrcs []string, fileContext FileContext) (int, error) {
-	counted := 0
-	for _, src := range inputSrcs {
-		// Skip excluded
-		if fileContext.ExcludesFile(src) {
-			continue
-		}
-
-		// Determine absolute path if relative to build context
-		abs := src
-		if !filepath.IsAbs(abs) {
-			abs = filepath.Join(fileContext.Root, src)
-		}
-		if _, err := os.Lstat(abs); err != nil {
-			if os.IsNotExist(err) {
-				continue
-			}
-			return 0, errors.Wrap(err, "stat input source")
-		}
-		counted++
-		if counted > 1 {
-			return counted, nil
-		}
-	}
-	return counted, nil
-}
-
+// validateNonWildcardSources validates sources when no wildcards are present
 func validateNonWildcardSources(srcs []string, dest string, fileContext FileContext) error {
-	if ContainsWildcards(srcs) {
-		return nil
-	}
-
 	totalSrcs := 0
 	for _, src := range srcs {
 		if fileContext.ExcludesFile(src) {
@@ -452,55 +299,46 @@ func validateNonWildcardSources(srcs []string, dest string, fileContext FileCont
 		}
 		totalSrcs++
 	}
-	if totalSrcs > 1 {
-		// For multiple sources, we need to be more permissive to match Docker behavior
-		// Docker allows copying multiple sources to non-existent paths, creating a directory
-		// We should only error if the destination is explicitly a file (exists and is not a directory)
-		// But we need to check if the destination is explicitly marked as a directory with trailing slash
-		if strings.HasSuffix(dest, "/") || dest == "." {
-			// Destination is explicitly a directory, allow the copy
-		} else if fi, err := os.Stat(dest); err == nil && !fi.IsDir() {
-			// Destination exists and is a file, this is an error
-			return errors.New("when specifying multiple sources in a COPY command, " +
-				"destination must be a directory and end in '/'")
-		}
-		// If destination doesn't exist, allow the copy (Docker behavior)
+	if totalSrcs > 1 && !IsDestDir(dest) {
+		return validateMultipleSourcesDestination(dest)
 	}
 	return nil
 }
 
-func checkSingleDirectorySource(resolvedSources []string, dest string, fileContext FileContext) error {
+// validateMultipleSourcesDestination validates destination for multiple sources
+func validateMultipleSourcesDestination(dest string) error {
+	if strings.HasSuffix(dest, "/") || dest == "." {
+		// Destination is explicitly a directory, allow the copy
+		return nil
+	}
+	if fi, err := os.Stat(dest); err == nil && !fi.IsDir() {
+		// Destination exists and is a file, this is an error
+		return errors.New("when specifying multiple sources in a COPY command, " +
+			"destination must be a directory and end in '/'")
+	}
+	// If destination doesn't exist, allow the copy (Docker behavior)
+	return nil
+}
+
+// checkSingleDirectorySource checks if there's only one source and it's a directory
+func checkSingleDirectorySource(resolvedSources []string, fileContext FileContext) error {
 	if len(resolvedSources) != 1 {
 		return nil
 	}
-
 	if IsSrcRemoteFileURL(resolvedSources[0]) {
 		return nil
 	}
-
-	src := filepath.Clean(resolvedSources[0])
-	src = strings.TrimPrefix(src, "context/")
-	path := filepath.Join(fileContext.Root, src)
+	path := filepath.Join(fileContext.Root, resolvedSources[0])
 	fi, err := os.Lstat(path)
 	if err != nil {
 		return errors.Wrap(err, fmt.Sprintf("failed to get fileinfo for %v", path))
 	}
-	// If the single source is a directory (or explicitly ends with '/') and destination is not a directory, error.
-	if fi.IsDir() || strings.HasSuffix(resolvedSources[0], pathSeparator) {
-		// Docker allows copying a directory to a non-existent path, which creates a directory
-		// We should only error if the destination is explicitly a file (exists and is not a directory)
-		if IsDestDir(dest) {
-			return nil
-		}
-		// Check if destination exists and is a file
-		if fi, err := os.Stat(dest); err == nil && !fi.IsDir() {
-			return errors.New("when copying a directory, destination must be a directory and end in '/'")
-		}
-		// If destination doesn't exist, allow the copy (Docker behavior)
-	}
+	// Don't return early for directories - let the totalFiles check handle it
+	_ = fi.IsDir() // Continue to totalFiles check below
 	return nil
 }
 
+// countTotalFiles counts total files to be copied
 func countTotalFiles(resolvedSources []string, fileContext FileContext) (int, error) {
 	totalFiles := 0
 	for _, src := range resolvedSources {
@@ -509,10 +347,7 @@ func countTotalFiles(resolvedSources []string, fileContext FileContext) (int, er
 			continue
 		}
 		src = filepath.Clean(src)
-		// Strip the "context/" prefix from src if it exists, since the fileContext.Root already includes it
-		cleanSrc := strings.TrimPrefix(src, "context/")
-		logrus.Debugf("countTotalFiles: src=%s, cleanSrc=%s, fileContext.Root=%s", src, cleanSrc, fileContext.Root)
-		files, err := RelativeFiles(cleanSrc, fileContext.Root)
+		files, err := RelativeFiles(src, fileContext.Root)
 		if err != nil {
 			return 0, errors.Wrap(err, "failed to get relative files")
 		}
@@ -523,22 +358,51 @@ func countTotalFiles(resolvedSources []string, fileContext FileContext) (int, er
 			totalFiles++
 		}
 	}
-
-	// ignore the case where wildcards and there are no files to copy
-	if totalFiles == 0 {
-		logrus.Warn("No files to copy")
-	}
 	return totalFiles, nil
 }
 
+// validateDestinationForMultipleFiles validates destination when multiple files are being copied
 func validateDestinationForMultipleFiles(totalFiles int, dest string) error {
-	// If there are wildcards, and the destination is a file, there must be exactly one file to copy over,
-	// Otherwise, return an error
-	if !IsDestDir(dest) && totalFiles > 1 {
-		return errors.New("when specifying multiple sources in a COPY command, " +
-			"destination must be a directory and end in '/'")
+	if totalFiles <= 1 {
+		return nil
 	}
-	return nil
+	if IsDestDir(dest) {
+		return nil
+	}
+	return validateMultipleSourcesDestination(dest)
+}
+
+// IsSrcsValid validates source files and destination for copy operations
+func IsSrcsValid(srcsAndDest instructions.SourcesAndDest, resolvedSources []string, fileContext FileContext) error {
+	srcs := srcsAndDest.SourcePaths
+	dest := srcsAndDest.DestPath
+
+	// Validate non-wildcard sources
+	if !ContainsWildcards(srcs) {
+		if err := validateNonWildcardSources(srcs, dest, fileContext); err != nil {
+			return err
+		}
+	}
+
+	// Check single directory source
+	if err := checkSingleDirectorySource(resolvedSources, fileContext); err != nil {
+		return err
+	}
+
+	// Count total files
+	totalFiles, err := countTotalFiles(resolvedSources, fileContext)
+	if err != nil {
+		return err
+	}
+
+	// Handle case with no files to copy
+	if totalFiles == 0 {
+		logrus.Warn("No files to copy")
+		return nil
+	}
+
+	// Validate destination for multiple files
+	return validateDestinationForMultipleFiles(totalFiles, dest)
 }
 
 // IsSrcRemoteFileURL checks if the given URL represents a remote file source.

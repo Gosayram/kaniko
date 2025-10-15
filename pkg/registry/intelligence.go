@@ -682,9 +682,9 @@ func (ri *Intelligence) ValidateRegistry(ctx context.Context, registry string, r
 	return nil
 }
 
-// RegistryStatistics represents statistics about registry usage and performance.
+// Statistics represents statistics about registry usage and performance.
 // This struct provides structured data about registry operations and performance metrics.
-type RegistryStatistics struct {
+type Statistics struct {
 	KnownRegistries int    `json:"known_registries"`
 	CacheSize       int    `json:"cache_size"`
 	CacheHitRate    string `json:"cache_hit_rate"`
@@ -695,7 +695,7 @@ type RegistryStatistics struct {
 // GetRegistryStatistics returns statistics about registry usage and performance.
 // This method provides comprehensive metrics about registry operations including
 // cache performance, request counts, and registry type distribution.
-func (ri *Intelligence) GetRegistryStatistics() RegistryStatistics {
+func (ri *Intelligence) GetRegistryStatistics() Statistics {
 	ri.mu.RLock()
 	defer ri.mu.RUnlock()
 
@@ -718,7 +718,7 @@ func (ri *Intelligence) GetRegistryStatistics() RegistryStatistics {
 		}
 	}
 
-	return RegistryStatistics{
+	return Statistics{
 		KnownRegistries: len(ri.knownRegistries),
 		CacheSize:       len(ri.cache),
 		CacheHitRate:    "N/A", // Would need to implement cache hit tracking
