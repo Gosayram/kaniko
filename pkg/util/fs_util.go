@@ -477,8 +477,8 @@ func extractHardLink(dest, path string, hdr *tar.Header) error {
 	}
 
 	// Validate linkname to prevent directory traversal before joining paths
-	if err := validateLinkPathName(hdr.Linkname); err != nil {
-		return err
+	if linkNameErr := validateLinkPathName(hdr.Linkname); linkNameErr != nil {
+		return linkNameErr
 	}
 
 	// Construct the link path safely
@@ -929,9 +929,10 @@ func CopyFile(src, dest string, context FileContext, uid, gid int64,
 
 	// Allow absolute paths, they are not inherently malicious
 	// The path validation should focus on ".." components which could indicate directory traversal
-	srcFile, err := os.Open(src)
-	if err != nil {
-		return false, err
+	var srcFile *os.File
+	srcFile, openErr := os.Open(src) // #nosec G304 -- path is validated by validateFilePath above
+	if openErr != nil {
+		return false, openErr
 	}
 	defer srcFile.Close()
 	uid, gid = DetermineTargetFileOwnership(fi, uid, gid)
@@ -1069,8 +1070,8 @@ func setFilePermissions(path string, mode os.FileMode, uid, gid int) error {
 	if fi, err := os.Lstat(path); err == nil {
 		if stat, ok := fi.Sys().(*syscall.Stat_t); ok {
 			if int(stat.Uid) != uid || int(stat.Gid) != gid {
-				if err := os.Chown(path, uid, gid); err != nil {
-					return err
+				if chownErr := os.Chown(path, uid, gid); chownErr != nil {
+					return chownErr
 				}
 			}
 		}

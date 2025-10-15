@@ -148,6 +148,7 @@ func ResolveSources(srcs []string, root string) ([]string, error) {
 }
 
 // matchSources returns a list of sources that match wildcards
+// nolint:gocyclo // Matching logic requires multiple branches to cover path variants
 func matchSources(srcs, files []string) ([]string, error) {
 	var matchedSources []string
 	for _, src := range srcs {
@@ -199,7 +200,7 @@ func matchSources(srcs, files []string) ([]string, error) {
 
 			// Also try matching with absolute path for absolute sources
 			if filepath.IsAbs(src) {
-				absoluteTestFile := filepath.Join("/", file)
+				absoluteTestFile := string(filepath.Separator) + file
 				matched, err := filepath.Match(src, absoluteTestFile)
 				if err != nil {
 					return nil, err
@@ -315,19 +316,20 @@ func IsSrcsValid(srcsAndDest instructions.SourcesAndDest, resolvedSources []stri
 		return err
 	}
 	if inputsCount > 1 && !IsDestDir(dest) {
-		return errors.New("when specifying multiple sources in a COPY command, destination must be a directory and end in '/'")
+		return errors.New("when specifying multiple sources in a COPY command, " +
+			"destination must be a directory and end in '/'")
 	}
 
 	// 2) If a single source is a directory, destination must be a directory
 	if inputsCount == 1 {
-		if err := checkSingleDirectorySource(resolvedSources, dest, fileContext); err != nil {
-			return err
+		if checkErr := checkSingleDirectorySource(resolvedSources, dest, fileContext); checkErr != nil {
+			return checkErr
 		}
 	}
 
 	// 3) Validate non-wildcard semantics for good measure
-	if err := validateNonWildcardSources(srcs, dest, fileContext); err != nil {
-		return err
+	if validateErr := validateNonWildcardSources(srcs, dest, fileContext); validateErr != nil {
+		return validateErr
 	}
 
 	// 4) Final sanity using expanded file count
@@ -350,9 +352,7 @@ func countEffectiveSources(resolvedSources []string, fileContext FileContext) (i
 
 		// Normalize and strip the optional "context/" prefix because Root already points to the build context
 		cleanSrc := filepath.Clean(src)
-		if strings.HasPrefix(cleanSrc, "context/") {
-			cleanSrc = strings.TrimPrefix(cleanSrc, "context/")
-		}
+		cleanSrc = strings.TrimPrefix(cleanSrc, "context/")
 		var absPath string
 		if filepath.IsAbs(cleanSrc) {
 			absPath = cleanSrc
@@ -438,9 +438,7 @@ func checkSingleDirectorySource(resolvedSources []string, dest string, fileConte
 	}
 
 	src := filepath.Clean(resolvedSources[0])
-	if strings.HasPrefix(src, "context/") {
-		src = strings.TrimPrefix(src, "context/")
-	}
+	src = strings.TrimPrefix(src, "context/")
 	path := filepath.Join(fileContext.Root, src)
 	fi, err := os.Lstat(path)
 	if err != nil {
@@ -464,10 +462,7 @@ func countTotalFiles(resolvedSources []string, fileContext FileContext) (int, er
 		}
 		src = filepath.Clean(src)
 		// Strip the "context/" prefix from src if it exists, since the fileContext.Root already includes it
-		cleanSrc := src
-		if strings.HasPrefix(src, "context/") {
-			cleanSrc = strings.TrimPrefix(src, "context/")
-		}
+		cleanSrc := strings.TrimPrefix(src, "context/")
 		logrus.Debugf("countTotalFiles: src=%s, cleanSrc=%s, fileContext.Root=%s", src, cleanSrc, fileContext.Root)
 		files, err := RelativeFiles(cleanSrc, fileContext.Root)
 		if err != nil {

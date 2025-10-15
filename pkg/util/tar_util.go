@@ -175,7 +175,7 @@ func (t *Tar) handleHardlinks(p string, i os.FileInfo, hdr *tar.Header) {
 }
 
 func (t *Tar) writeFileContent(p string) error {
-	r, err := os.Open(p)
+	r, err := os.Open(p) // #nosec G304 -- path comes from controlled walk and Lstat above
 	if err != nil {
 		return err
 	}
@@ -323,7 +323,7 @@ func IsFileLocalTarArchive(src string) bool {
 }
 
 func fileIsCompressedTar(src string) (isCompressed bool, compressionType int) {
-	r, err := os.Open(src)
+	r, err := os.Open(src) // #nosec G304 -- validated/cleaned earlier in UnpackLocalTarArchive
 	if err != nil {
 		return false, -1
 	}
@@ -337,7 +337,7 @@ func fileIsCompressedTar(src string) (isCompressed bool, compressionType int) {
 }
 
 func fileIsUncompressedTar(src string) bool {
-	r, err := os.Open(src)
+	r, err := os.Open(src) // #nosec G304 -- validated/cleaned earlier in UnpackLocalTarArchive
 	if err != nil {
 		return false
 	}
