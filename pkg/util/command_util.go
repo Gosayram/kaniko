@@ -316,8 +316,12 @@ func IsSrcsValid(srcsAndDest instructions.SourcesAndDest, resolvedSources []stri
 		return err
 	}
 	if inputsCount > 1 && !IsDestDir(dest) {
-		return errors.New("when specifying multiple sources in a COPY command, " +
-			"destination must be a directory and end in '/'")
+		// Check if destination exists and is a file
+		if fi, err := os.Stat(dest); err == nil && !fi.IsDir() {
+			return errors.New("when specifying multiple sources in a COPY command, " +
+				"destination must be a directory and end in '/'")
+		}
+		// If destination doesn't exist, allow the copy (Docker behavior)
 	}
 
 	// 2) If a single source is a directory, destination must be a directory
@@ -422,8 +426,12 @@ func validateNonWildcardSources(srcs []string, dest string, fileContext FileCont
 		totalSrcs++
 	}
 	if totalSrcs > 1 && !IsDestDir(dest) {
-		return errors.New("when specifying multiple sources in a COPY command, " +
-			"destination must be a directory and end in '/'")
+		// Check if destination exists and is a file
+		if fi, err := os.Stat(dest); err == nil && !fi.IsDir() {
+			return errors.New("when specifying multiple sources in a COPY command, " +
+				"destination must be a directory and end in '/'")
+		}
+		// If destination doesn't exist, allow the copy (Docker behavior)
 	}
 	return nil
 }
