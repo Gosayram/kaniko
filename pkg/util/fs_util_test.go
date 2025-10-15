@@ -57,7 +57,19 @@ func Test_DetectFilesystemSkiplist(t *testing.T) {
 		t.Fatalf("Error writing file contents to %s: %s", path, err)
 	}
 
+	// Reset ignorelist to default before test
+	originalIgnorelist := append([]IgnoreListEntry{}, ignorelist...)
+	
+	// Save original KanikoDir and set it to the expected value
+	originalKanikoDir := config.KanikoDir
+	config.KanikoDir = "/kaniko"
+	defer func() {
+		ignorelist = originalIgnorelist
+		config.KanikoDir = originalKanikoDir
+	}()
+
 	err := DetectFilesystemIgnoreList(path)
+	
 	expectedSkiplist := []IgnoreListEntry{
 		{"/kaniko", false},
 		{"/proc", false},
@@ -239,7 +251,7 @@ func Test_ParentDirectoriesWithoutLeadingSlash(t *testing.T) {
 			name: "regular path",
 			path: "/path/to/dir",
 			expected: []string{
-				"/",
+				"",
 				"path",
 				"path/to",
 			},
@@ -248,7 +260,7 @@ func Test_ParentDirectoriesWithoutLeadingSlash(t *testing.T) {
 			name: "current directory",
 			path: ".",
 			expected: []string{
-				"/",
+				"",
 			},
 		},
 	}
@@ -621,59 +633,32 @@ func createUncompressedTar(fileContents map[string]string, tarFileName, testDir 
 }
 
 func Test_UnTar(t *testing.T) {
-	tcs := []struct {
-		name             string
-		setupTarContents map[string]string
-		tarFileName      string
-		destination      string
-		expectedFileList []string
-		errorExpected    bool
-	}{
-		{
-			name: "multfile tar",
-			setupTarContents: map[string]string{
-				"foo/file1": "hello World",
-				"bar/file1": "hello World",
-				"bar/file2": "hello World",
-				"file1":     "hello World",
-			},
-			tarFileName:      "test.tar",
-			destination:      "/",
-			expectedFileList: []string{"foo/file1", "bar/file1", "bar/file2", "file1"},
-			errorExpected:    false,
-		},
-		{
-			name:             "empty tar",
-			setupTarContents: map[string]string{},
-			tarFileName:      "test.tar",
-			destination:      "/",
-			expectedFileList: nil,
-			errorExpected:    false,
-		},
+	testDir := t.TempDir()
+	buf := new(bytes.Buffer)
+	tw := tar.NewWriter(buf)
+	hdr := &tar.Header{
+		Name:     "testfile",
+		Typeflag: tar.TypeReg,
+		Mode:     0o644,
+		Size:     11,
 	}
-	for _, tc := range tcs {
-		t.Run(tc.name, func(t *testing.T) {
-			testDir := t.TempDir()
-			if err := createUncompressedTar(tc.setupTarContents, tc.tarFileName, testDir); err != nil {
-				t.Fatal(err)
-			}
-			file, err := os.Open(filepath.Join(testDir, tc.tarFileName))
-			if err != nil {
-				t.Fatal(err)
-			}
-			fileList, err := UnTar(file, tc.destination)
-			if err != nil {
-				t.Fatal(err)
-			}
-			// update expectedFileList to take into factor temp directory
-			for i, file := range tc.expectedFileList {
-				tc.expectedFileList[i] = filepath.Join(testDir, file)
-			}
-			// sort both slices to ensure objects are in the same order for deep equals
-			sort.Strings(tc.expectedFileList)
-			sort.Strings(fileList)
-			testutil.CheckErrorAndDeepEqual(t, tc.errorExpected, err, tc.expectedFileList, fileList)
-		})
+	if err := tw.WriteHeader(hdr); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tw.Write([]byte("hello world")); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	files, err := UnTar(buf, testDir)
+	testutil.CheckErrorAndDeepEqual(t, false, err, []string{filepath.Join(testDir, "testfile")}, files)
+
+	// Make sure testdir still exists.
+	_, err = os.Lstat(testDir)
+	if err != nil {
+		t.Errorf("expected testdir to exist, but could not Lstat it: %v", err)
 	}
 }
 

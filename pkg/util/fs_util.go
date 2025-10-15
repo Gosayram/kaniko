@@ -235,11 +235,20 @@ func extractTarEntries(root string, r io.ReadCloser, cfg *FSConfig) ([]string, e
 		cleanedName := filepath.Clean(hdr.Name)
 		path := filepath.Join(root, cleanedName)
 
-		if err := processTarEntry(root, hdr, cleanedName, tr, cfg); err != nil {
+        // For whiteout entries, process them and only include in results when includeWhiteout is enabled
+        base := filepath.Base(path)
+        isWhiteout := strings.HasPrefix(base, archive.WhiteoutPrefix)
+        if err := processTarEntry(root, hdr, cleanedName, tr, cfg); err != nil {
 			return nil, err
 		}
+        if isWhiteout {
+            if cfg.includeWhiteout {
+                extractedFiles = append(extractedFiles, path)
+            }
+            continue
+        }
 
-		extractedFiles = append(extractedFiles, path)
+        extractedFiles = append(extractedFiles, path)
 	}
 
 	return extractedFiles, nil
@@ -489,7 +498,7 @@ func extractHardLink(dest, path string, hdr *tar.Header) error {
 func extractSymlink(path string, hdr *tar.Header) error {
 	logrus.Tracef("Symlink from %s to %s", hdr.Linkname, path)
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, DefaultDirPerm); err != nil {
+    if err := os.MkdirAll(dir, TarExtractPerm); err != nil {
 		return err
 	}
 
@@ -613,12 +622,15 @@ func DetectFilesystemIgnoreList(path string) error {
 			}
 			continue
 		}
-		if lineArr[4] != config.RootDir {
+		// Skip adding the root directory to the ignore list
+		if lineArr[4] != "/" && lineArr[4] != config.RootDir {
 			logrus.Tracef("Adding ignore list entry %s from line: %s", lineArr[4], line)
 			AddToIgnoreList(IgnoreListEntry{
 				Path:            lineArr[4],
 				PrefixMatchOnly: false,
 			})
+		} else {
+			logrus.Tracef("Skipping root directory mount: %s", lineArr[4])
 		}
 		if err == io.EOF {
 			logrus.Tracef("Reached end of file %s", path)
@@ -633,7 +645,7 @@ func RelativeFiles(fp, root string) ([]string, error) {
 	var files []string
 	fullPath := filepath.Join(root, fp)
 	cleanedRoot := filepath.Clean(root)
-	logrus.Debugf("Getting files and contents at root %s for %s", root, fullPath)
+	logrus.Debugf("RelativeFiles: fp=%s, root=%s, fullPath=%s", fp, root, fullPath)
 	err := filepath.Walk(fullPath, func(path string, _ os.FileInfo, err error) error {
 		if err != nil {
 			return err
@@ -1047,9 +1059,18 @@ func MkdirAllWithPermissions(path string, mode os.FileMode, uid, gid int64) erro
 }
 
 func setFilePermissions(path string, mode os.FileMode, uid, gid int) error {
-	if err := os.Chown(path, uid, gid); err != nil {
-		return err
-	}
+    // Only change ownership if it differs to avoid requiring elevated privileges unnecessarily
+    if fi, err := os.Lstat(path); err == nil {
+        if stat, ok := fi.Sys().(*syscall.Stat_t); ok {
+            if int(stat.Uid) != uid || int(stat.Gid) != gid {
+                if err := os.Chown(path, uid, gid); err != nil {
+                    return err
+                }
+            }
+        }
+    } else {
+        return err
+    }
 	// manually set permissions on file, since the default umask (022) will interfere
 	// Must chmod after chown because chown resets the file mode.
 	return os.Chmod(path, mode)
@@ -1410,24 +1431,41 @@ func isSame(fi1, fi2 os.FileInfo) bool {
 }
 
 // validateFilePath validates a file path to prevent directory traversal attacks
-// It allows legitimate relative paths (like ".kaniko/Dockerfile") but blocks
+// It allows legitimate relative paths (like ".kaniko/Dockerfile", ".dockerignore") but blocks
 // actual directory traversal attempts (like "../file" or "dir/../file")
 func validateFilePath(path string) error {
-	// Clean the path to normalize it
-	cleanPath := filepath.Clean(path)
+    // Clean the path to normalize it
+    cleanPath := filepath.Clean(path)
 
-	// Block actual directory traversal attempts
-	// Check for patterns like: "../file", "dir/../file", or just ".."
-	// We check both the original and cleaned paths to catch different cases
-	if strings.HasPrefix(path, "../") || path == ".." ||
-		strings.HasPrefix(cleanPath, "../") || cleanPath == ".." ||
-		strings.Contains(path, "/../") || strings.Contains(cleanPath, "/../") ||
-		strings.HasSuffix(path, "/..") {
-		logrus.Warnf("Directory traversal attempt detected in path: %s", path)
-		return fmt.Errorf("invalid file path: potential directory traversal detected")
-	}
+    // If the path is relative, allow ".." as long as the absolute result stays within the current working directory
+    if !filepath.IsAbs(path) {
+        absTarget, err := filepath.Abs(cleanPath)
+        if err != nil {
+            return err
+        }
+        cwd, err := os.Getwd()
+        if err != nil {
+            return err
+        }
+        absCwd, err := filepath.Abs(cwd)
+        if err != nil {
+            return err
+        }
+        if strings.HasPrefix(absTarget+string(filepath.Separator), absCwd+string(filepath.Separator)) || absTarget == absCwd {
+            return nil
+        }
+    }
 
-	return nil
+    // For absolute or unsafe relative paths, block known traversal patterns
+    if strings.HasPrefix(path, "../") || path == ".." ||
+        strings.HasPrefix(cleanPath, "../") || cleanPath == ".." ||
+        strings.Contains(path, "/../") || strings.Contains(cleanPath, "/../") ||
+        strings.HasSuffix(path, "/..") {
+        logrus.Warnf("Directory traversal attempt detected in path: %s", path)
+        return fmt.Errorf("invalid file path: potential directory traversal detected")
+    }
+
+    return nil
 }
 
 // validateLinkPathName validates a link path name to prevent directory traversal attacks
