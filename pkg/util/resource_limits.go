@@ -23,6 +23,16 @@ import (
 	"time"
 )
 
+// Constants for resource limits
+const (
+	ResourceMaxMemoryUsage   = 2 * 1024 * 1024 * 1024  // 2GB
+	ResourceMaxFileSize      = 500 * 1024 * 1024       // 500MB
+	ResourceMaxTotalFileSize = 10 * 1024 * 1024 * 1024 // 10GB
+	ResourceMaxExecutionTime = 30 * time.Minute        // 30 minutes
+	ResourceMaxConcurrency   = 10                      // 10 concurrent operations
+	ResourceCheckInterval    = 5 * time.Second         // Check every 5 seconds
+)
+
 // ResourceLimits provides global resource management
 type ResourceLimits struct {
 	MaxMemoryUsage   int64         // Maximum memory usage in bytes
@@ -57,12 +67,12 @@ type ResourceStats struct {
 // NewResourceLimits creates a new resource limits manager
 func NewResourceLimits() *ResourceLimits {
 	limits := &ResourceLimits{
-		MaxMemoryUsage:   2 * 1024 * 1024 * 1024,  // 2GB default
-		MaxFileSize:      500 * 1024 * 1024,       // 500MB default
-		MaxTotalFileSize: 10 * 1024 * 1024 * 1024, // 10GB default
-		MaxExecutionTime: 30 * time.Minute,        // 30 minutes default
-		MaxConcurrency:   10,                      // 10 concurrent operations default
-		CheckInterval:    5 * time.Second,         // Check every 5 seconds
+		MaxMemoryUsage:   ResourceMaxMemoryUsage,   // 2GB default
+		MaxFileSize:      ResourceMaxFileSize,      // 500MB default
+		MaxTotalFileSize: ResourceMaxTotalFileSize, // 10GB default
+		MaxExecutionTime: ResourceMaxExecutionTime, // 30 minutes default
+		MaxConcurrency:   ResourceMaxConcurrency,   // 10 concurrent operations default
+		CheckInterval:    ResourceCheckInterval,    // Check every 5 seconds
 		startTime:        time.Now(),
 		stopChan:         make(chan struct{}),
 	}
@@ -74,7 +84,11 @@ func NewResourceLimits() *ResourceLimits {
 }
 
 // SetLimits sets resource limits
-func (rl *ResourceLimits) SetLimits(memory, fileSize, totalFileSize int64, executionTime time.Duration, concurrency int) {
+func (rl *ResourceLimits) SetLimits(
+	memory, fileSize, totalFileSize int64,
+	executionTime time.Duration,
+	concurrency int,
+) {
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
 
@@ -94,7 +108,7 @@ func (rl *ResourceLimits) CheckMemoryUsage() error {
 	limit := rl.MaxMemoryUsage
 	rl.mu.RUnlock()
 
-	if m.Alloc > uint64(limit) {
+	if limit > 0 && m.Alloc > uint64(limit) {
 		return fmt.Errorf("memory limit exceeded: %d bytes (limit: %d bytes)", m.Alloc, limit)
 	}
 
@@ -244,6 +258,7 @@ func (rl *ResourceLimits) monitorResources() {
 		// Log warning but don't fail - this is just monitoring
 		// In a real implementation, you might want to take action
 		// like triggering garbage collection or reducing concurrency
+		_ = err // Suppress unused variable warning
 	}
 
 	// Force garbage collection if memory usage is high
@@ -254,7 +269,7 @@ func (rl *ResourceLimits) monitorResources() {
 	memoryLimit := rl.MaxMemoryUsage
 	rl.mu.RUnlock()
 
-	if m.Alloc > uint64(memoryLimit)*3/4 { // If using more than 75% of limit
+	if memoryLimit > 0 && m.Alloc > uint64(memoryLimit)*3/4 { // If using more than 75% of limit
 		runtime.GC()
 	}
 }

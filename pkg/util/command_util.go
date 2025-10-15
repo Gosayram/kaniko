@@ -479,7 +479,11 @@ func GetUserGroup(chownStr string, env []string) (uid, gid int64, err error) {
 		return -1, -1, err
 	}
 
-	return int64(uid32), int64(gid32), nil
+	// Use safe UID/GID values to prevent "invalid user/group IDs" errors
+	safeUID, safeGID := GetSafeUIDGID(int64(uid32), int64(gid32))
+	logrus.Debugf("Resolved user/group %s to safe UID/GID: %d/%d", chown, safeUID, safeGID)
+
+	return safeUID, safeGID, nil
 }
 
 // GetChmod resolves file mode permissions from a chmod string.

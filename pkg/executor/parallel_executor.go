@@ -22,15 +22,22 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Gosayram/kaniko/pkg/commands"
 	"github.com/sirupsen/logrus"
+
+	"github.com/Gosayram/kaniko/pkg/commands"
+)
+
+// Constants for parallel execution
+const (
+	DefaultTimeout    = 30 * time.Minute
+	DefaultBufferSize = 100
 )
 
 // ParallelExecutor handles parallel execution of Docker commands
 type ParallelExecutor struct {
 	maxWorkers    int
 	timeout       time.Duration
-	errorHandler  func(error) error
+	_             func(error) error // errorHandler - reserved for future use
 	progressChan  chan ProgressUpdate
 	mu            sync.RWMutex
 	executionPlan []ExecutionGroup
@@ -65,13 +72,13 @@ func NewParallelExecutor(maxWorkers int, timeout time.Duration) *ParallelExecuto
 		maxWorkers = 4 // Default to 4 workers
 	}
 	if timeout <= 0 {
-		timeout = 30 * time.Minute // Default timeout
+		timeout = DefaultTimeout // Default timeout
 	}
 
 	return &ParallelExecutor{
 		maxWorkers:   maxWorkers,
 		timeout:      timeout,
-		progressChan: make(chan ProgressUpdate, 100),
+		progressChan: make(chan ProgressUpdate, DefaultBufferSize),
 	}
 }
 
@@ -86,10 +93,7 @@ func (pe *ParallelExecutor) ExecuteCommandsParallel(
 	defer cancel()
 
 	// Analyze command dependencies
-	dependencies, err := pe.analyzeDependencies(cmds)
-	if err != nil {
-		return fmt.Errorf("failed to analyze dependencies: %w", err)
-	}
+	dependencies := pe.analyzeDependencies(cmds)
 
 	// Create execution plan
 	executionPlan, err := pe.createExecutionPlan(cmds, dependencies)
@@ -106,7 +110,7 @@ func (pe *ParallelExecutor) ExecuteCommandsParallel(
 }
 
 // analyzeDependencies analyzes dependencies between commands
-func (pe *ParallelExecutor) analyzeDependencies(cmds []commands.DockerCommand) ([]CommandDependency, error) {
+func (pe *ParallelExecutor) analyzeDependencies(cmds []commands.DockerCommand) []CommandDependency {
 	var dependencies []CommandDependency
 
 	for i, cmd := range cmds {
@@ -127,11 +131,15 @@ func (pe *ParallelExecutor) analyzeDependencies(cmds []commands.DockerCommand) (
 		dependencies = append(dependencies, stageDeps...)
 	}
 
-	return dependencies, nil
+	return dependencies
 }
 
 // analyzeFileDependencies analyzes file-based dependencies
-func (pe *ParallelExecutor) analyzeFileDependencies(cmd commands.DockerCommand, index int, allCmds []commands.DockerCommand) []CommandDependency {
+func (pe *ParallelExecutor) analyzeFileDependencies(
+	cmd commands.DockerCommand,
+	index int,
+	allCmds []commands.DockerCommand,
+) []CommandDependency {
 	var deps []CommandDependency
 
 	// Check if command reads from files created by previous commands
@@ -154,7 +162,11 @@ func (pe *ParallelExecutor) analyzeFileDependencies(cmd commands.DockerCommand, 
 }
 
 // analyzeEnvironmentDependencies analyzes environment variable dependencies
-func (pe *ParallelExecutor) analyzeEnvironmentDependencies(cmd commands.DockerCommand, index int, allCmds []commands.DockerCommand) []CommandDependency {
+func (pe *ParallelExecutor) analyzeEnvironmentDependencies(
+	cmd commands.DockerCommand,
+	index int,
+	allCmds []commands.DockerCommand,
+) []CommandDependency {
 	var deps []CommandDependency
 
 	// Check if command uses environment variables set by previous commands
@@ -177,7 +189,11 @@ func (pe *ParallelExecutor) analyzeEnvironmentDependencies(cmd commands.DockerCo
 }
 
 // analyzeStageDependencies analyzes cross-stage dependencies
-func (pe *ParallelExecutor) analyzeStageDependencies(cmd commands.DockerCommand, index int, allCmds []commands.DockerCommand) []CommandDependency {
+func (pe *ParallelExecutor) analyzeStageDependencies(
+	cmd commands.DockerCommand,
+	index int,
+	allCmds []commands.DockerCommand,
+) []CommandDependency {
 	var deps []CommandDependency
 
 	// Check if command depends on previous stage
@@ -200,7 +216,7 @@ func (pe *ParallelExecutor) analyzeStageDependencies(cmd commands.DockerCommand,
 }
 
 // commandsHaveFileDependency checks if two commands have file dependencies
-func (pe *ParallelExecutor) commandsHaveFileDependency(prevCmd, currCmd commands.DockerCommand) bool {
+func (pe *ParallelExecutor) commandsHaveFileDependency(_, _ commands.DockerCommand) bool {
 	// This is a simplified check - in reality, you'd need more sophisticated analysis
 	// of what files each command creates and what files each command reads
 
@@ -210,7 +226,7 @@ func (pe *ParallelExecutor) commandsHaveFileDependency(prevCmd, currCmd commands
 }
 
 // commandsHaveEnvironmentDependency checks if two commands have environment dependencies
-func (pe *ParallelExecutor) commandsHaveEnvironmentDependency(prevCmd, currCmd commands.DockerCommand) bool {
+func (pe *ParallelExecutor) commandsHaveEnvironmentDependency(_, currCmd commands.DockerCommand) bool {
 	// This is a simplified check - in reality, you'd need to analyze
 	// environment variable usage in command strings
 
@@ -222,7 +238,7 @@ func (pe *ParallelExecutor) commandsHaveEnvironmentDependency(prevCmd, currCmd c
 }
 
 // isStageDependency checks if a command depends on a previous stage
-func (pe *ParallelExecutor) isStageDependency(prevCmd, currCmd commands.DockerCommand) bool {
+func (pe *ParallelExecutor) isStageDependency(_, currCmd commands.DockerCommand) bool {
 	// Check if current command is a COPY --from command
 	if copyCmd, ok := currCmd.(*commands.CopyCommand); ok && copyCmd.From() != "" {
 		// This is a simplified check - in reality, you'd need to match
@@ -233,7 +249,10 @@ func (pe *ParallelExecutor) isStageDependency(prevCmd, currCmd commands.DockerCo
 }
 
 // createExecutionPlan creates a plan for parallel execution
-func (pe *ParallelExecutor) createExecutionPlan(cmds []commands.DockerCommand, dependencies []CommandDependency) ([]ExecutionGroup, error) {
+func (pe *ParallelExecutor) createExecutionPlan(
+	cmds []commands.DockerCommand,
+	dependencies []CommandDependency,
+) ([]ExecutionGroup, error) {
 	var plan []ExecutionGroup
 	executed := make(map[int]bool)
 	groupIndex := 0
@@ -280,7 +299,11 @@ func (pe *ParallelExecutor) createExecutionPlan(cmds []commands.DockerCommand, d
 }
 
 // allDependenciesSatisfied checks if all dependencies for a command are satisfied
-func (pe *ParallelExecutor) allDependenciesSatisfied(cmdIndex int, dependencies []CommandDependency, executed map[int]bool) bool {
+func (pe *ParallelExecutor) allDependenciesSatisfied(
+	cmdIndex int,
+	dependencies []CommandDependency,
+	executed map[int]bool,
+) bool {
 	for _, dep := range dependencies {
 		if dep.To == cmdIndex {
 			if !executed[dep.From] {
@@ -336,7 +359,11 @@ func (pe *ParallelExecutor) executeGroup(
 		go func() {
 			defer wg.Done()
 			for cmdIndex := range workerChan {
-				if err := pe.executeCommand(ctx, cmdIndex, group.Commands[cmdIndex], compositeKey, initSnapshotTaken, stageBuilder); err != nil {
+				cmd := group.Commands[cmdIndex]
+				if err := pe.executeCommand(
+					ctx, cmdIndex, cmd, compositeKey,
+					initSnapshotTaken, stageBuilder,
+				); err != nil {
 					mu.Lock()
 					errors = append(errors, fmt.Errorf("command %d failed: %w", cmdIndex, err))
 					mu.Unlock()
@@ -368,7 +395,7 @@ func (pe *ParallelExecutor) executeGroup(
 
 // executeCommand executes a single command
 func (pe *ParallelExecutor) executeCommand(
-	ctx context.Context,
+	_ context.Context,
 	cmdIndex int,
 	cmd commands.DockerCommand,
 	compositeKey *CompositeCache,

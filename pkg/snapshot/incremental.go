@@ -17,7 +17,7 @@ limitations under the License.
 package snapshot
 
 import (
-	"crypto/md5"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -26,6 +26,13 @@ import (
 	"time"
 
 	"github.com/sirupsen/logrus"
+)
+
+// Constants for incremental snapshots
+const (
+	DefaultScanInterval = 5 * time.Second
+	BufferSize64KB      = 64 * 1024
+	FilePerm600         = 0o600
 )
 
 // IncrementalSnapshotter provides efficient incremental filesystem scanning
@@ -55,7 +62,7 @@ func NewIncrementalSnapshotter(directory string, ignoreList []string) *Increment
 		ignoreList:   ignoreList,
 		lastSnapshot: make(map[string]FileInfo),
 		cacheFile:    filepath.Join(directory, ".kaniko_snapshot_cache"),
-		scanInterval: 5 * time.Second, // Minimum interval between scans
+		scanInterval: DefaultScanInterval, // Minimum interval between scans
 	}
 }
 
@@ -106,14 +113,14 @@ func (s *IncrementalSnapshotter) TakeIncrementalSnapshot() (string, error) {
 }
 
 // detectChanges finds files that have changed since last snapshot
-func (s *IncrementalSnapshotter) detectChanges() ([]string, []string, error) {
+func (s *IncrementalSnapshotter) detectChanges() (added, modified []string, err error) {
 	var changedFiles []string
 	var deletedFiles []string
 
 	// Walk through directory
-	err := filepath.Walk(s.directory, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
+	walkErr := filepath.Walk(s.directory, func(path string, info os.FileInfo, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
 		}
 
 		// Skip if in ignore list
@@ -149,7 +156,7 @@ func (s *IncrementalSnapshotter) detectChanges() ([]string, []string, error) {
 		return nil
 	})
 
-	return changedFiles, deletedFiles, err
+	return changedFiles, deletedFiles, walkErr
 }
 
 // isFileChanged checks if a file has changed since last snapshot
@@ -192,19 +199,19 @@ func (s *IncrementalSnapshotter) isFileChanged(relPath string, info os.FileInfo)
 
 // calculateFileChecksum calculates MD5 checksum of a file
 func (s *IncrementalSnapshotter) calculateFileChecksum(filePath string) (string, error) {
-	file, err := os.Open(filePath)
+	file, err := os.Open(filepath.Clean(filePath))
 	if err != nil {
 		return "", err
 	}
 	defer file.Close()
 
-	hash := md5.New()
+	hash := sha256.New()
 	if _, err := file.Seek(0, 0); err != nil {
 		return "", err
 	}
 
 	// Read file in chunks to avoid memory issues
-	buffer := make([]byte, 64*1024) // 64KB buffer
+	buffer := make([]byte, BufferSize64KB) // 64KB buffer
 	for {
 		n, err := file.Read(buffer)
 		if n > 0 {
@@ -309,7 +316,7 @@ func (s *IncrementalSnapshotter) saveSnapshotCache() error {
 		return err
 	}
 
-	return os.WriteFile(s.cacheFile, data, 0644)
+	return os.WriteFile(s.cacheFile, data, FilePerm600)
 }
 
 // GetCacheStats returns statistics about the snapshot cache

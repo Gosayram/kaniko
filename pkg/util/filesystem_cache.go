@@ -23,6 +23,13 @@ import (
 	"time"
 )
 
+// Constants for filesystem cache
+const (
+	DefaultCacheSize = 1000
+	DefaultTTL       = 5 * time.Minute
+	CleanupDivisor   = 2
+)
+
 // FileSystemCache provides caching for filesystem operations
 type FileSystemCache struct {
 	statCache     map[string]CachedFileInfo
@@ -47,7 +54,7 @@ func NewFileSystemCache(maxSize int, ttl time.Duration) *FileSystemCache {
 		maxSize = 1000 // Default cache size
 	}
 	if ttl <= 0 {
-		ttl = 5 * time.Minute // Default TTL
+		ttl = DefaultTTL // Default TTL
 	}
 
 	cache := &FileSystemCache{
@@ -64,8 +71,11 @@ func NewFileSystemCache(maxSize int, ttl time.Duration) *FileSystemCache {
 	return cache
 }
 
-// CachedStat returns cached file information
-func (fsc *FileSystemCache) CachedStat(path string) (os.FileInfo, error) {
+// getCachedFileInfo is a helper function to get cached file information
+func (fsc *FileSystemCache) getCachedFileInfo(
+	path string,
+	statFunc func(string) (os.FileInfo, error),
+) (os.FileInfo, error) {
 	fsc.mutex.RLock()
 	if cached, exists := fsc.statCache[path]; exists {
 		// Check if cache entry is still valid
@@ -79,7 +89,7 @@ func (fsc *FileSystemCache) CachedStat(path string) (os.FileInfo, error) {
 	fsc.mutex.RUnlock()
 
 	// Cache miss, get fresh info
-	info, err := os.Stat(path)
+	info, err := statFunc(path)
 	if err != nil {
 		return nil, err
 	}
@@ -102,42 +112,14 @@ func (fsc *FileSystemCache) CachedStat(path string) (os.FileInfo, error) {
 	return info, nil
 }
 
+// CachedStat returns cached file information
+func (fsc *FileSystemCache) CachedStat(path string) (os.FileInfo, error) {
+	return fsc.getCachedFileInfo(path, os.Stat)
+}
+
 // CachedLstat returns cached file information (for symlinks)
 func (fsc *FileSystemCache) CachedLstat(path string) (os.FileInfo, error) {
-	fsc.mutex.RLock()
-	if cached, exists := fsc.statCache[path]; exists {
-		// Check if cache entry is still valid
-		if time.Since(cached.Timestamp) < cached.TTL {
-			fsc.mutex.RUnlock()
-			return cached.Info, nil
-		}
-		// Cache entry expired, remove it
-		delete(fsc.statCache, path)
-	}
-	fsc.mutex.RUnlock()
-
-	// Cache miss, get fresh info
-	info, err := os.Lstat(path)
-	if err != nil {
-		return nil, err
-	}
-
-	// Store in cache
-	fsc.mutex.Lock()
-	defer fsc.mutex.Unlock()
-
-	// Check cache size limit
-	if len(fsc.statCache) >= fsc.maxSize {
-		fsc.evictOldest()
-	}
-
-	fsc.statCache[path] = CachedFileInfo{
-		Info:      info,
-		Timestamp: time.Now(),
-		TTL:       fsc.ttl,
-	}
-
-	return info, nil
+	return fsc.getCachedFileInfo(path, os.Lstat)
 }
 
 // CachedJoin returns cached path joining result
@@ -164,8 +146,8 @@ func (fsc *FileSystemCache) CachedJoin(elem ...string) string {
 	return path
 }
 
-// CachedAbs returns cached absolute path
-func (fsc *FileSystemCache) CachedAbs(path string) (string, error) {
+// getCachedPath is a helper function to get cached path information
+func (fsc *FileSystemCache) getCachedPath(path string, pathFunc func(string) (string, error)) (string, error) {
 	fsc.mutex.RLock()
 	if cached, exists := fsc.pathCache[path]; exists {
 		fsc.mutex.RUnlock()
@@ -174,7 +156,7 @@ func (fsc *FileSystemCache) CachedAbs(path string) (string, error) {
 	fsc.mutex.RUnlock()
 
 	// Cache miss, get fresh result
-	absPath, err := filepath.Abs(path)
+	result, err := pathFunc(path)
 	if err != nil {
 		return "", err
 	}
@@ -188,36 +170,18 @@ func (fsc *FileSystemCache) CachedAbs(path string) (string, error) {
 		fsc.evictOldestPath()
 	}
 
-	fsc.pathCache[path] = absPath
-	return absPath, nil
+	fsc.pathCache[path] = result
+	return result, nil
+}
+
+// CachedAbs returns cached absolute path
+func (fsc *FileSystemCache) CachedAbs(path string) (string, error) {
+	return fsc.getCachedPath(path, filepath.Abs)
 }
 
 // CachedEvalSymlinks returns cached symlink evaluation
 func (fsc *FileSystemCache) CachedEvalSymlinks(path string) (string, error) {
-	fsc.mutex.RLock()
-	if cached, exists := fsc.pathCache[path]; exists {
-		fsc.mutex.RUnlock()
-		return cached, nil
-	}
-	fsc.mutex.RUnlock()
-
-	// Cache miss, get fresh result
-	resolvedPath, err := filepath.EvalSymlinks(path)
-	if err != nil {
-		return "", err
-	}
-
-	// Store in cache
-	fsc.mutex.Lock()
-	defer fsc.mutex.Unlock()
-
-	// Check cache size limit
-	if len(fsc.pathCache) >= fsc.maxSize {
-		fsc.evictOldestPath()
-	}
-
-	fsc.pathCache[path] = resolvedPath
-	return resolvedPath, nil
+	return fsc.getCachedPath(path, filepath.EvalSymlinks)
 }
 
 // evictOldest removes the oldest cache entry
@@ -249,7 +213,7 @@ func (fsc *FileSystemCache) evictOldestPath() {
 
 // startCleanup starts the cleanup goroutine
 func (fsc *FileSystemCache) startCleanup() {
-	fsc.cleanupTicker = time.NewTicker(fsc.ttl / 2) // Cleanup every half TTL
+	fsc.cleanupTicker = time.NewTicker(fsc.ttl / CleanupDivisor) // Cleanup every half TTL
 
 	go func() {
 		for {
@@ -315,7 +279,7 @@ var (
 // GetGlobalFileSystemCache returns the global filesystem cache
 func GetGlobalFileSystemCache() *FileSystemCache {
 	fsCacheOnce.Do(func() {
-		globalFSCache = NewFileSystemCache(1000, 5*time.Minute)
+		globalFSCache = NewFileSystemCache(DefaultCacheSize, DefaultTTL)
 	})
 	return globalFSCache
 }

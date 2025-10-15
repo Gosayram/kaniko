@@ -26,6 +26,14 @@ import (
 	"time"
 )
 
+// Constants for optimized copy
+const (
+	OptimizedMaxFileSize    = 500 * 1024 * 1024 // 500MB
+	OptimizedMaxMemoryUsage = 100 * 1024 * 1024 // 100MB
+	OptimizedBufferSize     = 64 * 1024         // 64KB
+	OptimizedDirPerm        = 0o750
+)
+
 // OptimizedFileCopy provides memory-efficient file copying with resource limits
 type OptimizedFileCopy struct {
 	MaxFileSize      int64       // Maximum file size to copy
@@ -40,9 +48,9 @@ type OptimizedFileCopy struct {
 // NewOptimizedFileCopy creates a new optimized file copy instance
 func NewOptimizedFileCopy() *OptimizedFileCopy {
 	return &OptimizedFileCopy{
-		MaxFileSize:    500 * 1024 * 1024, // 500MB default
-		MaxMemoryUsage: 100 * 1024 * 1024, // 100MB default
-		BufferSize:     64 * 1024,         // 64KB default
+		MaxFileSize:    OptimizedMaxFileSize,    // 500MB default
+		MaxMemoryUsage: OptimizedMaxMemoryUsage, // 100MB default
+		BufferSize:     OptimizedBufferSize,     // 64KB default
 		startTime:      time.Now(),
 	}
 }
@@ -61,12 +69,12 @@ func (ofc *OptimizedFileCopy) CopyFileWithOptimization(src, dst string) error {
 	}
 
 	// Check memory usage before starting
-	if err := ofc.checkMemoryUsage(); err != nil {
-		return err
+	if memErr := ofc.checkMemoryUsage(); memErr != nil {
+		return memErr
 	}
 
 	// Open source file
-	srcFile, err := os.Open(src)
+	srcFile, err := os.Open(filepath.Clean(src))
 	if err != nil {
 		return fmt.Errorf("failed to open source file %s: %w", src, err)
 	}
@@ -74,12 +82,12 @@ func (ofc *OptimizedFileCopy) CopyFileWithOptimization(src, dst string) error {
 
 	// Create destination directory if needed
 	dstDir := filepath.Dir(dst)
-	if err := os.MkdirAll(dstDir, 0755); err != nil {
-		return fmt.Errorf("failed to create destination directory %s: %w", dstDir, err)
+	if mkdirErr := os.MkdirAll(dstDir, OptimizedDirPerm); mkdirErr != nil {
+		return fmt.Errorf("failed to create destination directory %s: %w", dstDir, mkdirErr)
 	}
 
 	// Create destination file
-	dstFile, err := os.Create(dst)
+	dstFile, err := os.Create(filepath.Clean(dst))
 	if err != nil {
 		return fmt.Errorf("failed to create destination file %s: %w", dst, err)
 	}
@@ -167,7 +175,7 @@ func (ofc *OptimizedFileCopy) checkMemoryUsage() error {
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
 
-	if m.Alloc > uint64(ofc.MaxMemoryUsage) {
+	if ofc.MaxMemoryUsage > 0 && m.Alloc > uint64(ofc.MaxMemoryUsage) {
 		return fmt.Errorf("memory usage exceeded: %d bytes (max: %d)", m.Alloc, ofc.MaxMemoryUsage)
 	}
 
@@ -195,7 +203,7 @@ func (ofc *OptimizedFileCopy) GetCopyStatistics() map[string]interface{} {
 }
 
 // CopyFileOrSymlinkOptimized is an optimized version of CopyFileOrSymlink
-func CopyFileOrSymlinkOptimized(src, dst, root string) error {
+func CopyFileOrSymlinkOptimized(src, dst, _ string) error {
 	// Check if source is a symlink
 	srcInfo, err := os.Lstat(src)
 	if err != nil {
@@ -211,7 +219,7 @@ func CopyFileOrSymlinkOptimized(src, dst, root string) error {
 
 		// Create destination directory
 		dstDir := filepath.Dir(dst)
-		if err := os.MkdirAll(dstDir, 0755); err != nil {
+		if err := os.MkdirAll(dstDir, OptimizedDirPerm); err != nil {
 			return fmt.Errorf("failed to create destination directory: %w", err)
 		}
 

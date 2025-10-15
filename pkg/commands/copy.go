@@ -407,7 +407,7 @@ func copyCmdFilesUsedFromContext(
 	// So we just return the paths as-is without validation
 	if cmd.From != "" {
 		files := []string{}
-		for _, src := range cmd.SourcesAndDest.SourcePaths {
+		for _, src := range cmd.SourcePaths {
 			resolved, err := util.ResolveEnvironmentReplacement(src, replacementEnvs, true)
 			if err != nil {
 				return nil, err

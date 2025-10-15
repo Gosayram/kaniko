@@ -14,6 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// Package benchmark provides performance benchmarks for Kaniko components.
 package benchmark
 
 import (
@@ -29,8 +30,21 @@ import (
 	"github.com/Gosayram/kaniko/pkg/util"
 )
 
-// BenchmarkSnapshotPerformance benchmarks snapshot performance
-func BenchmarkSnapshotPerformance(b *testing.B) {
+// Constants for benchmark tests
+const (
+	MB1          = 1024 * 1024
+	KB1          = 1024
+	KB64         = 64 * 1024
+	MaxCacheSize = 1000
+	MaxFiles     = 100
+	ByteMod256   = 256
+	DefaultTTL   = 5 * time.Minute
+	FilePerm750  = 0o750
+	FilePerm600  = 0o600
+)
+
+// SnapshotPerformance benchmarks snapshot performance
+func SnapshotPerformance(b *testing.B) {
 	// Create test directory
 	testDir := createTestDirectory(b)
 	defer os.RemoveAll(testDir)
@@ -47,8 +61,8 @@ func BenchmarkSnapshotPerformance(b *testing.B) {
 	}
 }
 
-// BenchmarkIncrementalSnapshot benchmarks incremental snapshot performance
-func BenchmarkIncrementalSnapshot(b *testing.B) {
+// IncrementalSnapshot benchmarks incremental snapshot performance
+func IncrementalSnapshot(b *testing.B) {
 	// Create test directory
 	testDir := createTestDirectory(b)
 	defer os.RemoveAll(testDir)
@@ -65,10 +79,10 @@ func BenchmarkIncrementalSnapshot(b *testing.B) {
 	}
 }
 
-// BenchmarkFileCopy benchmarks file copying performance
-func BenchmarkFileCopy(b *testing.B) {
+// FileCopy benchmarks file copying performance
+func FileCopy(b *testing.B) {
 	// Create test file
-	src := createTestFile(b, 1024*1024) // 1MB file
+	src := createTestFile(b, MB1) // 1MB file
 	defer os.Remove(src)
 
 	b.ResetTimer()
@@ -78,14 +92,14 @@ func BenchmarkFileCopy(b *testing.B) {
 		if err != nil {
 			b.Fatal(err)
 		}
-		os.Remove(dst)
+		_ = os.Remove(dst)
 	}
 }
 
-// BenchmarkOptimizedFileCopy benchmarks optimized file copying
-func BenchmarkOptimizedFileCopy(b *testing.B) {
+// OptimizedFileCopy benchmarks optimized file copying
+func OptimizedFileCopy(b *testing.B) {
 	// Create test file
-	src := createTestFile(b, 1024*1024) // 1MB file
+	src := createTestFile(b, MB1) // 1MB file
 	defer os.Remove(src)
 
 	// Create optimized file copy instance
@@ -98,29 +112,29 @@ func BenchmarkOptimizedFileCopy(b *testing.B) {
 		if err != nil {
 			b.Fatal(err)
 		}
-		os.Remove(dst)
+		_ = os.Remove(dst)
 	}
 }
 
-// BenchmarkFileSystemCache benchmarks filesystem cache performance
-func BenchmarkFileSystemCache(b *testing.B) {
+// FileSystemCache benchmarks filesystem cache performance
+func FileSystemCache(b *testing.B) {
 	// Create test directory
 	testDir := createTestDirectory(b)
 	defer os.RemoveAll(testDir)
 
 	// Create filesystem cache
-	fsCache := util.NewFileSystemCache(1000, 5*time.Minute)
+	fsCache := util.NewFileSystemCache(MaxCacheSize, DefaultTTL)
 	defer fsCache.Close()
 
 	// Create test files
 	for i := 0; i < 100; i++ {
 		filePath := filepath.Join(testDir, fmt.Sprintf("file_%d.txt", i))
-		createTestFileAtPath(b, filePath, 1024) // 1KB files
+		createTestFileAtPath(b, filePath, KB1) // 1KB files
 	}
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		filePath := filepath.Join(testDir, fmt.Sprintf("file_%d.txt", i%100))
+		filePath := filepath.Join(testDir, fmt.Sprintf("file_%d.txt", i%MaxFiles))
 		_, err := fsCache.CachedStat(filePath)
 		if err != nil {
 			b.Fatal(err)
@@ -128,18 +142,18 @@ func BenchmarkFileSystemCache(b *testing.B) {
 	}
 }
 
-// BenchmarkBufferPool benchmarks buffer pool performance
-func BenchmarkBufferPool(b *testing.B) {
+// BufferPool benchmarks buffer pool performance
+func BufferPool(b *testing.B) {
 	// Create test data
-	data := make([]byte, 64*1024) // 64KB
+	data := make([]byte, KB64) // 64KB
 	for i := range data {
-		data[i] = byte(i % 256)
+		data[i] = byte(i % ByteMod256)
 	}
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		// Get buffer from pool
-		buf := util.GetBuffer(64 * 1024)
+		buf := util.GetBuffer(KB64)
 
 		// Use buffer
 		copy(*buf, data)
@@ -149,8 +163,8 @@ func BenchmarkBufferPool(b *testing.B) {
 	}
 }
 
-// BenchmarkResourceLimits benchmarks resource limits checking
-func BenchmarkResourceLimits(b *testing.B) {
+// ResourceLimits benchmarks resource limits checking
+func ResourceLimits(b *testing.B) {
 	// Create resource limits
 	limits := util.NewResourceLimits()
 	defer limits.Close()
@@ -164,12 +178,12 @@ func BenchmarkResourceLimits(b *testing.B) {
 	}
 }
 
-// BenchmarkMemoryUsage benchmarks memory usage patterns
-func BenchmarkMemoryUsage(b *testing.B) {
+// MemoryUsage benchmarks memory usage patterns
+func MemoryUsage(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		// Allocate memory
-		data := make([]byte, 1024*1024) // 1MB
+		data := make([]byte, MB1) // 1MB
 
 		// Use memory
 		for j := range data {
@@ -183,8 +197,8 @@ func BenchmarkMemoryUsage(b *testing.B) {
 	}
 }
 
-// BenchmarkConcurrentOperations benchmarks concurrent operations
-func BenchmarkConcurrentOperations(b *testing.B) {
+// ConcurrentOperations benchmarks concurrent operations
+func ConcurrentOperations(b *testing.B) {
 	// Create test directory
 	testDir := createTestDirectory(b)
 	defer os.RemoveAll(testDir)
@@ -192,14 +206,14 @@ func BenchmarkConcurrentOperations(b *testing.B) {
 	// Create test files
 	for i := 0; i < 100; i++ {
 		filePath := filepath.Join(testDir, fmt.Sprintf("file_%d.txt", i))
-		createTestFileAtPath(b, filePath, 1024)
+		createTestFileAtPath(b, filePath, KB1)
 	}
 
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
 			// Simulate concurrent file operations
-			filePath := filepath.Join(testDir, fmt.Sprintf("file_%d.txt", runtime.NumGoroutine()%100))
+			filePath := filepath.Join(testDir, fmt.Sprintf("file_%d.txt", runtime.NumGoroutine()%MaxFiles))
 			_, err := os.Stat(filePath)
 			if err != nil {
 				b.Fatal(err)
@@ -208,8 +222,8 @@ func BenchmarkConcurrentOperations(b *testing.B) {
 	})
 }
 
-// BenchmarkPathOperations benchmarks path operations
-func BenchmarkPathOperations(b *testing.B) {
+// PathOperations benchmarks path operations
+func PathOperations(b *testing.B) {
 	paths := []string{
 		"/tmp/test/file1.txt",
 		"/tmp/test/file2.txt",
@@ -229,8 +243,8 @@ func BenchmarkPathOperations(b *testing.B) {
 	}
 }
 
-// BenchmarkStringOperations benchmarks string operations
-func BenchmarkStringOperations(b *testing.B) {
+// StringOperations benchmarks string operations
+func StringOperations(b *testing.B) {
 	strings := []string{
 		"hello world",
 		"test string",
@@ -261,13 +275,13 @@ func createTestDirectory(b *testing.B) string {
 	// Create subdirectories and files
 	for i := 0; i < 10; i++ {
 		subdir := filepath.Join(dir, fmt.Sprintf("subdir_%d", i))
-		if err := os.Mkdir(subdir, 0755); err != nil {
+		if err := os.Mkdir(subdir, FilePerm750); err != nil {
 			b.Fatal(err)
 		}
 
 		for j := 0; j < 10; j++ {
 			filePath := filepath.Join(subdir, fmt.Sprintf("file_%d.txt", j))
-			createTestFileAtPath(b, filePath, 1024) // 1KB files
+			createTestFileAtPath(b, filePath, KB1) // 1KB files
 		}
 	}
 
@@ -285,7 +299,7 @@ func createTestFile(b *testing.B, size int64) string {
 	// Write test data
 	data := make([]byte, size)
 	for i := range data {
-		data[i] = byte(i % 256)
+		data[i] = byte(i % ByteMod256)
 	}
 
 	if _, err := file.Write(data); err != nil {
@@ -297,7 +311,7 @@ func createTestFile(b *testing.B, size int64) string {
 
 // createTestFileAtPath creates a test file at specified path
 func createTestFileAtPath(b *testing.B, path string, size int64) {
-	file, err := os.Create(path)
+	file, err := os.Create(filepath.Clean(path))
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -306,7 +320,7 @@ func createTestFileAtPath(b *testing.B, path string, size int64) {
 	// Write test data
 	data := make([]byte, size)
 	for i := range data {
-		data[i] = byte(i % 256)
+		data[i] = byte(i % ByteMod256)
 	}
 
 	if _, err := file.Write(data); err != nil {
@@ -314,8 +328,8 @@ func createTestFileAtPath(b *testing.B, path string, size int64) {
 	}
 }
 
-// BenchmarkMemoryAllocation benchmarks memory allocation patterns
-func BenchmarkMemoryAllocation(b *testing.B) {
+// MemoryAllocation benchmarks memory allocation patterns
+func MemoryAllocation(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		// Allocate different sizes
@@ -337,8 +351,8 @@ func BenchmarkMemoryAllocation(b *testing.B) {
 	}
 }
 
-// BenchmarkGoroutineCreation benchmarks goroutine creation
-func BenchmarkGoroutineCreation(b *testing.B) {
+// GoroutineCreation benchmarks goroutine creation
+func GoroutineCreation(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		done := make(chan struct{})
@@ -351,8 +365,8 @@ func BenchmarkGoroutineCreation(b *testing.B) {
 	}
 }
 
-// BenchmarkChannelOperations benchmarks channel operations
-func BenchmarkChannelOperations(b *testing.B) {
+// ChannelOperations benchmarks channel operations
+func ChannelOperations(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		ch := make(chan int, 1)
@@ -364,8 +378,8 @@ func BenchmarkChannelOperations(b *testing.B) {
 	}
 }
 
-// BenchmarkMutexOperations benchmarks mutex operations
-func BenchmarkMutexOperations(b *testing.B) {
+// MutexOperations benchmarks mutex operations
+func MutexOperations(b *testing.B) {
 	var mu sync.Mutex
 	var counter int
 
@@ -377,8 +391,8 @@ func BenchmarkMutexOperations(b *testing.B) {
 	}
 }
 
-// BenchmarkRWMutexOperations benchmarks read-write mutex operations
-func BenchmarkRWMutexOperations(b *testing.B) {
+// RWMutexOperations benchmarks read-write mutex operations
+func RWMutexOperations(b *testing.B) {
 	var mu sync.RWMutex
 	var counter int
 

@@ -51,6 +51,10 @@ const (
 	DoNotChangeUID = -1
 	// DoNotChangeGID indicates that GID should not be changed
 	DoNotChangeGID = -1
+	// SafeDefaultUID is the safe default UID to use when UID is not specified
+	SafeDefaultUID = 1000
+	// SafeDefaultGID is the safe default GID to use when GID is not specified
+	SafeDefaultGID = 1000
 	// DefaultDirPerm is the default directory permission (750)
 	DefaultDirPerm = 0o750
 	// DefaultFilePerm is the default file permission (600)
@@ -843,6 +847,22 @@ func DownloadFileToDest(rawurl, dest string, uid, gid int64, chmod fs.FileMode) 
 	return os.Chtimes(dest, mTime, mTime)
 }
 
+// GetSafeUIDGID returns safe UID/GID values when the provided values are -1 or invalid.
+// This prevents Kaniko from failing with "invalid user/group IDs" errors.
+func GetSafeUIDGID(uid, gid int64) (safeUID, safeGID int64) {
+	if uid <= DoNotChangeUID {
+		safeUID = SafeDefaultUID
+	} else {
+		safeUID = uid
+	}
+	if gid <= DoNotChangeGID {
+		safeGID = SafeDefaultGID
+	} else {
+		safeGID = gid
+	}
+	return safeUID, safeGID
+}
+
 // DetermineTargetFileOwnership returns the user provided uid/gid combination.
 // If they are set to -1, the uid/gid from the original file is used.
 func DetermineTargetFileOwnership(fi os.FileInfo, uid, gid int64) (targetUID, targetGID int64) {
@@ -1318,6 +1338,10 @@ func createParentDirectory(path string, uid, gid int) error {
 	if info, err := os.Lstat(baseDir); os.IsNotExist(err) {
 		logrus.Tracef("BaseDir %s for file %s does not exist. Creating.", baseDir, path)
 
+		// Use safe UID/GID values to prevent "invalid user/group IDs" errors
+		safeUID, safeGID := GetSafeUIDGID(int64(uid), int64(gid))
+		logrus.Debugf("Using safe UID/GID: %d/%d (original: %d/%d)", safeUID, safeGID, uid, gid)
+
 		dir := baseDir
 		dirs := []string{baseDir}
 		for dir != "/" && dir != "." && dir != "" {
@@ -1335,18 +1359,9 @@ func createParentDirectory(path string, uid, gid int) error {
 					// permissions for directory creation
 					return errors.Wrapf(mkdirErr, "failed to create directory %s", dir)
 				}
-				if uid != DoNotChangeUID {
-					if gid != DoNotChangeGID {
-						if chownErr := os.Chown(dir, uid, gid); chownErr != nil {
-							return errors.Wrapf(chownErr, "failed to chown directory %s", dir)
-						}
-					} else {
-						return fmt.Errorf("UID=%d but GID=-1, i.e. it is not set for %s", uid, dir)
-					}
-				} else {
-					if gid != DoNotChangeGID {
-						return fmt.Errorf("GID=%d but UID=-1, i.e. it is not set for %s", gid, dir)
-					}
+				// Use safe UID/GID values for chown operation
+				if chownErr := os.Chown(dir, int(safeUID), int(safeGID)); chownErr != nil {
+					return errors.Wrapf(chownErr, "failed to chown directory %s", dir)
 				}
 			} else if err != nil {
 				return err

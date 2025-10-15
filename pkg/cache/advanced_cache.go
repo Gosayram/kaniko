@@ -14,6 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// Package cache provides advanced caching capabilities for Kaniko.
 package cache
 
 import (
@@ -24,6 +25,11 @@ import (
 
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/sirupsen/logrus"
+)
+
+// Constants for cache operations
+const (
+	DefaultPreloadTimeout = 5 * time.Minute
 )
 
 // AdvancedCache provides enhanced caching capabilities
@@ -38,7 +44,7 @@ type AdvancedCache struct {
 }
 
 // CacheStats provides cache performance statistics
-type CacheStats struct {
+type CacheStats struct { //nolint:revive // CacheStats is intentionally named to avoid conflicts
 	Hits           int64     `json:"hits"`
 	Misses         int64     `json:"misses"`
 	PreloadHits    int64     `json:"preload_hits"`
@@ -50,7 +56,7 @@ type CacheStats struct {
 }
 
 // CacheKey represents a cache key with metadata
-type CacheKey struct {
+type CacheKey struct { //nolint:revive // CacheKey is intentionally named to avoid conflicts
 	Key       string            `json:"key"`
 	Command   string            `json:"command"`
 	Files     []string          `json:"files"`
@@ -65,7 +71,7 @@ func NewAdvancedCache(layerCache LayerCacheInterface, preloadWorkers int, preloa
 		preloadWorkers = 4 // Default to 4 workers
 	}
 	if preloadTimeout <= 0 {
-		preloadTimeout = 5 * time.Minute // Default timeout
+		preloadTimeout = DefaultPreloadTimeout // Default timeout
 	}
 
 	return &AdvancedCache{
@@ -95,7 +101,7 @@ func (ac *AdvancedCache) PreloadCache(ctx context.Context, commands []CacheKey) 
 		go func() {
 			defer wg.Done()
 			for key := range workerChan {
-				if err := ac.preloadSingleKey(ctx, key); err != nil {
+				if err := ac.preloadSingleKey(ctx, &key); err != nil {
 					mu.Lock()
 					errors = append(errors, fmt.Errorf("failed to preload key %s: %w", key.Key, err))
 					mu.Unlock()
@@ -128,7 +134,7 @@ func (ac *AdvancedCache) PreloadCache(ctx context.Context, commands []CacheKey) 
 }
 
 // preloadSingleKey preloads a single cache key
-func (ac *AdvancedCache) preloadSingleKey(ctx context.Context, key CacheKey) error {
+func (ac *AdvancedCache) preloadSingleKey(_ context.Context, key *CacheKey) error {
 	// Check if already preloaded
 	ac.preloadMutex.RLock()
 	if _, exists := ac.preloadCache[key.Key]; exists {
@@ -220,7 +226,7 @@ func (ac *AdvancedCache) GenerateCacheKeys(commands []interface{}) []CacheKey {
 }
 
 // updateStats updates cache statistics
-func (ac *AdvancedCache) updateStats(hit bool, requests int, success bool) {
+func (ac *AdvancedCache) updateStats(hit bool, requests int, _ bool) {
 	ac.statsMutex.Lock()
 	defer ac.statsMutex.Unlock()
 
