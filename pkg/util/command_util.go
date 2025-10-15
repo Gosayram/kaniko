@@ -302,7 +302,16 @@ func IsSrcsValid(srcsAndDest instructions.SourcesAndDest, resolvedSources []stri
 			totalSrcs++
 		}
 		if totalSrcs > 1 && !IsDestDir(dest) {
-			return errors.New("when specifying multiple sources in a COPY command, destination must be a directory and end in '/'")
+			// Docker allows copying multiple sources to non-existent paths, creating a directory
+			// We should only error if the destination is explicitly a file (exists and is not a directory)
+			// But we need to check if the destination is explicitly marked as a directory with trailing slash
+			if strings.HasSuffix(dest, "/") || dest == "." {
+				// Destination is explicitly a directory, allow the copy
+			} else if fi, err := os.Stat(dest); err == nil && !fi.IsDir() {
+				// Destination exists and is a file, this is an error
+				return errors.New("when specifying multiple sources in a COPY command, destination must be a directory and end in '/'")
+			}
+			// If destination doesn't exist, allow the copy (Docker behavior)
 		}
 	}
 
@@ -348,7 +357,16 @@ func IsSrcsValid(srcsAndDest instructions.SourcesAndDest, resolvedSources []stri
 	// If there are wildcards, and the destination is a file, there must be exactly one file to copy over,
 	// Otherwise, return an error
 	if !IsDestDir(dest) && totalFiles > 1 {
-		return errors.New("when specifying multiple sources in a COPY command, destination must be a directory and end in '/'")
+		// Docker allows copying multiple sources to non-existent paths, creating a directory
+		// We should only error if the destination is explicitly a file (exists and is not a directory)
+		// But we need to check if the destination is explicitly marked as a directory with trailing slash
+		if strings.HasSuffix(dest, "/") || dest == "." {
+			// Destination is explicitly a directory, allow the copy
+		} else if fi, err := os.Stat(dest); err == nil && !fi.IsDir() {
+			// Destination exists and is a file, this is an error
+			return errors.New("when specifying multiple sources in a COPY command, destination must be a directory and end in '/'")
+		}
+		// If destination doesn't exist, allow the copy (Docker behavior)
 	}
 	return nil
 }
