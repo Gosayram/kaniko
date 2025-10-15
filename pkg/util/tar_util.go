@@ -277,11 +277,10 @@ func UnpackLocalTarArchive(path, dest string) ([]string, error) {
 	// First, we need to check if the path is a local tar archive
 	if compressed, compressionLevel := fileIsCompressedTar(path); compressed {
 		// Validate the file path to prevent directory traversal
-		cleanPath := filepath.Clean(path)
-		if strings.Contains(cleanPath, "..") || strings.HasPrefix(cleanPath, "/") {
-			return nil, fmt.Errorf("invalid file path: potential directory traversal detected")
+		if err := ValidateFilePath(path); err != nil {
+			return nil, err
 		}
-		file, err := os.Open(cleanPath)
+		file, err := os.Open(path)
 		if err != nil {
 			return nil, err
 		}
@@ -301,11 +300,10 @@ func UnpackLocalTarArchive(path, dest string) ([]string, error) {
 	}
 	if fileIsUncompressedTar(path) {
 		// Validate the file path to prevent directory traversal
-		cleanPath := filepath.Clean(path)
-		if strings.Contains(cleanPath, "..") || strings.HasPrefix(cleanPath, "/") {
-			return nil, fmt.Errorf("invalid file path: potential directory traversal detected")
+		if err := ValidateFilePath(path); err != nil {
+			return nil, err
 		}
-		file, err := os.Open(cleanPath)
+		file, err := os.Open(path)
 		if err != nil {
 			return nil, err
 		}
@@ -360,11 +358,10 @@ func fileIsUncompressedTar(src string) bool {
 // UnpackCompressedTar unpacks the compressed tar at path to dir
 func UnpackCompressedTar(path, dir string) error {
 	// Validate the file path to prevent directory traversal
-	cleanPath := filepath.Clean(path)
-	if strings.Contains(cleanPath, "..") || strings.HasPrefix(cleanPath, "/") {
-		return fmt.Errorf("invalid file path: potential directory traversal detected")
+	if err := ValidateFilePath(path); err != nil {
+		return err
 	}
-	file, err := os.Open(cleanPath)
+	file, err := os.Open(path)
 	if err != nil {
 		return err
 	}

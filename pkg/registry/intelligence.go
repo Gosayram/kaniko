@@ -682,15 +682,22 @@ func (ri *Intelligence) ValidateRegistry(ctx context.Context, registry string, r
 	return nil
 }
 
-// GetRegistryStatistics returns statistics about registry usage and performance
-func (ri *Intelligence) GetRegistryStatistics() map[string]interface{} {
+// RegistryStatistics represents statistics about registry usage and performance.
+// This struct provides structured data about registry operations and performance metrics.
+type RegistryStatistics struct {
+	KnownRegistries int    `json:"known_registries"`
+	CacheSize       int    `json:"cache_size"`
+	CacheHitRate    string `json:"cache_hit_rate"`
+	TotalRequests   int    `json:"total_requests"`
+	FailedRequests  int    `json:"failed_requests"`
+}
+
+// GetRegistryStatistics returns statistics about registry usage and performance.
+// This method provides comprehensive metrics about registry operations including
+// cache performance, request counts, and registry type distribution.
+func (ri *Intelligence) GetRegistryStatistics() RegistryStatistics {
 	ri.mu.RLock()
 	defer ri.mu.RUnlock()
-
-	stats := make(map[string]interface{})
-	stats["known_registries"] = len(ri.knownRegistries)
-	stats["cache_size"] = len(ri.cache)
-	stats["cache_hit_rate"] = "N/A" // Would need to implement cache hit tracking
 
 	// Count registries by type
 	registryTypes := make(map[string]int)
@@ -710,9 +717,14 @@ func (ri *Intelligence) GetRegistryStatistics() map[string]interface{} {
 			registryTypes["other"]++
 		}
 	}
-	stats["registry_types"] = registryTypes
 
-	return stats
+	return RegistryStatistics{
+		KnownRegistries: len(ri.knownRegistries),
+		CacheSize:       len(ri.cache),
+		CacheHitRate:    "N/A", // Would need to implement cache hit tracking
+		TotalRequests:   0,     // Would need to implement request tracking
+		FailedRequests:  0,     // Would need to implement failure tracking
+	}
 }
 
 // Cleanup cleans up the registry intelligence cache

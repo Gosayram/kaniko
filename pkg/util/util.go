@@ -24,9 +24,7 @@ import (
 	"io"
 	"math"
 	"os"
-	"path/filepath"
 	"strconv"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -74,11 +72,10 @@ func Hasher() func(string) (string, error) {
 				h.Write(capability)
 			}
 			// Validate the file path to prevent directory traversal
-			cleanPath := filepath.Clean(p)
-			if strings.Contains(cleanPath, "..") || strings.HasPrefix(cleanPath, "/") {
-				return "", fmt.Errorf("invalid file path: potential directory traversal detected")
+			if err := ValidateFilePath(p); err != nil {
+				return "", err
 			}
-			f, err := os.Open(cleanPath)
+			f, err := os.Open(p)
 			if err != nil {
 				return "", err
 			}
@@ -119,11 +116,10 @@ func CacheHasher() func(string) (string, error) {
 
 		if fi.Mode().IsRegular() {
 			// Validate the file path to prevent directory traversal
-			cleanPath := filepath.Clean(p)
-			if strings.Contains(cleanPath, "..") || strings.HasPrefix(cleanPath, "/") {
-				return "", fmt.Errorf("invalid file path: potential directory traversal detected")
+			if err := ValidateFilePath(p); err != nil {
+				return "", err
 			}
-			f, err := os.Open(cleanPath)
+			f, err := os.Open(p)
 			if err != nil {
 				return "", err
 			}

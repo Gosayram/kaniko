@@ -24,6 +24,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/go-containerregistry/pkg/name"
@@ -679,6 +680,12 @@ func (s *stageBuilder) saveLayerToImage(layer v1.Layer, createdBy string) error 
 	return err
 }
 
+// CommandType represents the type of command that can be processed for dependencies.
+// This constraint ensures type safety when processing Dockerfile commands.
+type CommandType interface {
+	*instructions.CopyCommand | *instructions.EnvCommand | *instructions.ArgCommand
+}
+
 func processCommandForDependencies(
 	c interface{},
 	ba *dockerfile.BuildArgs,
@@ -1078,7 +1085,9 @@ func fetchExtraStages(stages []config.KanikoStage, opts *config.KanikoOptions) e
 	defer timing.DefaultRun.Stop(t)
 
 	var names []string
+	var extraStages []string
 
+	// First pass: collect all extra stages that need to be fetched
 	for stageIndex := range stages {
 		s := &stages[stageIndex]
 		for _, cmd := range s.Commands {
@@ -1099,24 +1108,86 @@ func fetchExtraStages(stages []config.KanikoStage, opts *config.KanikoOptions) e
 				continue
 			}
 
-			// This must be an image name, fetch it.
-			logrus.Debugf("Found extra base image stage %s", c.From)
-			sourceImage, err := remote.RetrieveRemoteImage(c.From, &opts.RegistryOptions, opts.CustomPlatform)
-			if err != nil {
-				return err
-			}
-			if err := saveStageAsTarball(c.From, sourceImage); err != nil {
-				return err
-			}
-			if err := extractImageToDependencyDir(c.From, sourceImage); err != nil {
-				return err
-			}
+			// This must be an image name, collect it for parallel fetching
+			extraStages = append(extraStages, c.From)
 		}
 		// Store the name of the current stage in the list with names, if applicable.
 		if s.Name != "" {
 			names = append(names, s.Name)
 		}
 	}
+
+	// Parallel fetch of extra stages
+	if len(extraStages) > 0 {
+		return fetchExtraStagesParallel(extraStages, opts)
+	}
+	return nil
+}
+
+// fetchExtraStagesParallel fetches multiple extra stages in parallel
+func fetchExtraStagesParallel(extraStages []string, opts *config.KanikoOptions) error {
+	// Use errgroup for parallel execution with error handling
+	var wg sync.WaitGroup
+	errChan := make(chan error, len(extraStages))
+
+	// Limit concurrent fetches to avoid overwhelming the registry
+	maxConcurrent := 3
+	if len(extraStages) < maxConcurrent {
+		maxConcurrent = len(extraStages)
+	}
+
+	semaphore := make(chan struct{}, maxConcurrent)
+
+	for _, stageName := range extraStages {
+		wg.Add(1)
+		go func(name string) {
+			defer wg.Done()
+
+			// Acquire semaphore
+			semaphore <- struct{}{}
+			defer func() { <-semaphore }()
+
+			logrus.Debugf("Fetching extra base image stage %s", name)
+
+			// Fetch the image
+			sourceImage, err := remote.RetrieveRemoteImage(name, &opts.RegistryOptions, opts.CustomPlatform)
+			if err != nil {
+				errChan <- errors.Wrapf(err, "failed to retrieve remote image %s", name)
+				return
+			}
+
+			// Save as tarball
+			if err := saveStageAsTarball(name, sourceImage); err != nil {
+				errChan <- errors.Wrapf(err, "failed to save stage as tarball %s", name)
+				return
+			}
+
+			// Extract to dependency directory
+			if err := extractImageToDependencyDir(name, sourceImage); err != nil {
+				errChan <- errors.Wrapf(err, "failed to extract image to dependency dir %s", name)
+				return
+			}
+
+			logrus.Debugf("Successfully fetched extra stage %s", name)
+		}(stageName)
+	}
+
+	// Wait for all goroutines to complete
+	go func() {
+		wg.Wait()
+		close(errChan)
+	}()
+
+	// Collect any errors
+	var errors []error
+	for err := range errChan {
+		errors = append(errors, err)
+	}
+
+	if len(errors) > 0 {
+		return errors[0] // Return the first error
+	}
+
 	return nil
 }
 
