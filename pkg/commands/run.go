@@ -75,6 +75,39 @@ func runCommandInExec(config *v1.Config, buildArgs *dockerfile.BuildArgs, cmdRun
 		return err
 	}
 
+	// CRITICAL FIX: Ensure all environment variables are properly set in the command environment
+	// This ensures that PATH and other variables from previous RUN commands are preserved
+	replacementEnvs := buildArgs.ReplacementEnvs(config.Env)
+
+	// Create a map of existing environment variables for quick lookup
+	existingEnvs := make(map[string]string)
+	for _, env := range cmd.Env {
+		if parts := strings.SplitN(env, "=", 2); len(parts) == 2 {
+			existingEnvs[parts[0]] = parts[1]
+		}
+	}
+
+	// Add all replacement environment variables to command environment
+	for _, env := range replacementEnvs {
+		if parts := strings.SplitN(env, "=", 2); len(parts) == 2 {
+			key := parts[0]
+
+			// Only add if not already present or if it's a PATH variable (which we want to ensure is set)
+			if _, exists := existingEnvs[key]; !exists || key == "PATH" {
+				// Remove existing entry if it exists
+				for i, cmdEnv := range cmd.Env {
+					if strings.HasPrefix(cmdEnv, key+"=") {
+						cmd.Env = append(cmd.Env[:i], cmd.Env[i+1:]...)
+						break
+					}
+				}
+				// Add the new environment variable
+				cmd.Env = append(cmd.Env, env)
+				logrus.Debugf("Added environment variable to command: %s", env)
+			}
+		}
+	}
+
 	return executeAndCleanupCommand(cmd)
 }
 
@@ -93,6 +126,8 @@ func prepareCommand(
 	config *v1.Config, buildArgs *dockerfile.BuildArgs,
 	cmdRun *instructions.RunCommand) ([]string, error) {
 	var newCommand []string
+	replacementEnvs := buildArgs.ReplacementEnvs(config.Env)
+
 	if cmdRun.PrependShell {
 		// This is the default shell on Linux
 		var shell []string
@@ -102,12 +137,30 @@ func prepareCommand(
 			shell = append(shell, "/bin/sh", "-c")
 		}
 
-		shell = append(shell, strings.Join(cmdRun.CmdLine, " "))
+		// CRITICAL FIX: Resolve environment variables in command line before passing to shell
+		resolvedCmdLine := make([]string, len(cmdRun.CmdLine))
+		for i, cmd := range cmdRun.CmdLine {
+			resolved, err := util.ResolveEnvironmentReplacement(cmd, replacementEnvs, false)
+			if err != nil {
+				return nil, errors.Wrapf(err, "resolving environment variables in command: %s", cmd)
+			}
+			resolvedCmdLine[i] = resolved
+		}
+
+		shell = append(shell, strings.Join(resolvedCmdLine, " "))
 		newCommand = shell
 	} else {
-		newCommand = cmdRun.CmdLine
+		// CRITICAL FIX: Resolve environment variables in command line for direct execution
+		newCommand = make([]string, len(cmdRun.CmdLine))
+		for i, cmd := range cmdRun.CmdLine {
+			resolved, err := util.ResolveEnvironmentReplacement(cmd, replacementEnvs, false)
+			if err != nil {
+				return nil, errors.Wrapf(err, "resolving environment variables in command: %s", cmd)
+			}
+			newCommand[i] = resolved
+		}
+
 		// Find and set absolute path of executable by setting PATH temporary
-		replacementEnvs := buildArgs.ReplacementEnvs(config.Env)
 		for _, v := range replacementEnvs {
 			entry := strings.SplitN(v, "=", 2) //nolint:mnd // 2 is the expected number of parts for env var
 			if entry[0] != "PATH" {
@@ -125,9 +178,11 @@ func prepareCommand(
 				newCommand[0] = path
 			}
 
-			// CRITICAL FIX: Don't restore PATH immediately - keep it for the command execution
-			// The PATH will be properly set in the command environment via cmd.Env
-			// This ensures that PATH changes from previous RUN commands are preserved
+			// Restore PATH immediately after use to avoid interfering with environment variable resolution
+			// The PATH will be properly set in the command environment via cmd.Env in createExecCommand
+			if setErr := os.Setenv("PATH", oldPath); setErr != nil {
+				logrus.Warnf("Failed to restore PATH: %v", setErr)
+			}
 			logrus.Debugf("Using PATH from config: %s", entry[1])
 		}
 	}
