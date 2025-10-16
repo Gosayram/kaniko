@@ -415,6 +415,12 @@ func createExecCommand(config *v1.Config, buildArgs *dockerfile.BuildArgs, newCo
 
 // createCommand creates the appropriate command type (shell or direct)
 func createCommand(config *v1.Config, buildArgs *dockerfile.BuildArgs, newCommand []string) (*exec.Cmd, error) {
+	// Check if the command is already a shell command (starts with shell path)
+	if len(newCommand) >= 2 && (newCommand[0] == "/bin/sh" || newCommand[0] == "/bin/bash" || strings.HasSuffix(newCommand[0], "/sh") || strings.HasSuffix(newCommand[0], "/bash")) {
+		// This is already a shell command, execute it directly
+		return createDirectCommand(newCommand)
+	}
+
 	commandStr := strings.Join(newCommand, " ")
 	hasShellOps := hasShellOperators(commandStr)
 

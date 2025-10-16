@@ -316,3 +316,63 @@ func TestSetWorkDirIfExists(t *testing.T) {
 	testutil.CheckDeepEqual(t, testDir, setWorkDirIfExists(testDir))
 	testutil.CheckDeepEqual(t, "", setWorkDirIfExists("doesnot-exists"))
 }
+
+func TestCreateCommand_ShellDuplication(t *testing.T) {
+	tests := []struct {
+		name        string
+		newCommand  []string
+		expectShell bool
+	}{
+		{
+			name:        "already shell command should not be wrapped again",
+			newCommand:  []string{"/bin/sh", "-c", "apk add --no-cache openssh-client git bash rsync && mkdir -p ~/.ssh && chmod 700 ~/.ssh"},
+			expectShell: false, // Should use createDirectCommand, not createShellCommand
+		},
+		{
+			name:        "regular command with shell operators should be wrapped",
+			newCommand:  []string{"apk", "add", "--no-cache", "openssh-client", "git", "bash", "rsync", "&&", "mkdir", "-p", "~/.ssh", "&&", "chmod", "700", "~/.ssh"},
+			expectShell: true, // Should use createShellCommand
+		},
+		{
+			name:        "regular command without shell operators should not be wrapped",
+			newCommand:  []string{"apk", "add", "--no-cache", "openssh-client"},
+			expectShell: false, // Should use createDirectCommand
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			config := &v1.Config{}
+			buildArgs := &dockerfile.BuildArgs{}
+
+			// Test the createCommand function
+			cmd, err := createCommand(config, buildArgs, test.newCommand)
+			if err != nil {
+				t.Errorf("createCommand failed: %v", err)
+				return
+			}
+
+			// Check if the command is properly structured
+			if test.expectShell {
+				// Should have shell in Path and Args should start with shell
+				if cmd.Path == "" {
+					t.Error("Expected shell command to have Path set")
+				}
+				if len(cmd.Args) < 2 || cmd.Args[0] != "-c" {
+					t.Errorf("Expected shell command Args to start with '-c', got: %v", cmd.Args)
+				}
+			} else {
+				// Should be direct command
+				if len(test.newCommand) > 0 {
+					expectedPath := test.newCommand[0]
+					if cmd.Path != expectedPath {
+						t.Errorf("Expected direct command Path to be %s, got %s", expectedPath, cmd.Path)
+					}
+					if len(cmd.Args) != len(test.newCommand) {
+						t.Errorf("Expected Args length %d, got %d", len(test.newCommand), len(cmd.Args))
+					}
+				}
+			}
+		})
+	}
+}
