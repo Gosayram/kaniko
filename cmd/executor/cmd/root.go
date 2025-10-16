@@ -640,8 +640,9 @@ func resolveEnvironmentBuildArgs(arguments []string, resolver func(string) strin
 	for _, argument := range arguments {
 		if argument != "" {
 			// Parse the argument to extract key and value
-			parts := strings.SplitN(argument, "=", 2)
-			if len(parts) == 2 {
+			const keyValueParts = 2
+			parts := strings.SplitN(argument, "=", keyValueParts)
+			if len(parts) == keyValueParts {
 				key := parts[0]
 				value := parts[1]
 				// Set the environment variable in the current process

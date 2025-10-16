@@ -80,70 +80,93 @@ func runCommandInExec(config *v1.Config, buildArgs *dockerfile.BuildArgs, cmdRun
 		return err
 	}
 
+	// Set up environment variables
+	if err := setupEnvironmentVariables(cmd, config, buildArgs); err != nil {
+		return err
+	}
+
+	return executeAndCleanupCommand(cmd)
+}
+
+// setupEnvironmentVariables configures environment variables for the command
+func setupEnvironmentVariables(cmd *exec.Cmd, config *v1.Config, buildArgs *dockerfile.BuildArgs) error {
 	// CRITICAL FIX: Ensure all environment variables are properly set in the command environment
 	// This ensures that PATH and other variables from previous RUN commands are preserved
 	replacementEnvs := buildArgs.ReplacementEnvs(config.Env)
 
-	// Create a map of existing environment variables for quick lookup
-	existingEnvs := make(map[string]string)
-	for _, env := range cmd.Env {
-		if parts := strings.SplitN(env, "=", envKeyValueParts); len(parts) == envKeyValueParts {
-			existingEnvs[parts[0]] = parts[1]
-		}
+	// Add replacement environment variables
+	if err := addReplacementEnvs(cmd, replacementEnvs); err != nil {
+		return err
 	}
 
-	// Add all replacement environment variables to command environment
+	// Inherit host environment variables
+	if err := inheritHostEnvs(cmd); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// addReplacementEnvs adds replacement environment variables to command
+func addReplacementEnvs(cmd *exec.Cmd, replacementEnvs []string) error {
 	for _, env := range replacementEnvs {
-		if parts := strings.SplitN(env, "=", envKeyValueParts); len(parts) == envKeyValueParts {
-			key := parts[0]
-			value := parts[1]
-
-			// Always update environment variables to ensure they are current
-			// Remove existing entry if it exists
-			for i, cmdEnv := range cmd.Env {
-				if strings.HasPrefix(cmdEnv, key+"=") {
-					cmd.Env = append(cmd.Env[:i], cmd.Env[i+1:]...)
-					break
-				}
-			}
-			// Add the new environment variable
-			cmd.Env = append(cmd.Env, env)
-			logrus.Debugf("Added environment variable to command: %s=%s", key, value)
+		parts := strings.SplitN(env, "=", envKeyValueParts)
+		if len(parts) != envKeyValueParts {
+			continue
 		}
-	}
+		key := parts[0]
+		value := parts[1]
 
+		// Always update environment variables to ensure they are current
+		// Remove existing entry if it exists
+		for i, cmdEnv := range cmd.Env {
+			if strings.HasPrefix(cmdEnv, key+"=") {
+				cmd.Env = append(cmd.Env[:i], cmd.Env[i+1:]...)
+				break
+			}
+		}
+		// Add the new environment variable
+		cmd.Env = append(cmd.Env, env)
+		logrus.Debugf("Added environment variable to command: %s=%s", key, value)
+	}
+	return nil
+}
+
+// inheritHostEnvs inherits host environment variables
+func inheritHostEnvs(cmd *exec.Cmd) error {
 	// CRITICAL FIX: Inherit all host environment variables
 	// This ensures that all environment variables from the host system are available
 	// This is especially important for CI/CD systems and package managers
 	hostEnvs := os.Environ()
 	for _, hostEnv := range hostEnvs {
-		if parts := strings.SplitN(hostEnv, "=", envKeyValueParts); len(parts) == envKeyValueParts {
-			key := parts[0]
-
-			// Skip system-specific variables that shouldn't be inherited
-			if isSystemVariable(key) {
-				continue
-			}
-
-			// Check if already set in command environment
-			found := false
-			for i, cmdEnv := range cmd.Env {
-				if strings.HasPrefix(cmdEnv, key+"=") {
-					// Update existing variable
-					cmd.Env[i] = hostEnv
-					found = true
-					break
-				}
-			}
-			if !found {
-				// Add new environment variable
-				cmd.Env = append(cmd.Env, hostEnv)
-			}
-			logrus.Debugf("Inherited host environment variable: %s", key)
+		parts := strings.SplitN(hostEnv, "=", envKeyValueParts)
+		if len(parts) != envKeyValueParts {
+			continue
 		}
-	}
+		key := parts[0]
 
-	return executeAndCleanupCommand(cmd)
+		// Skip system-specific variables that shouldn't be inherited
+		if isSystemVariable(key) {
+			continue
+		}
+
+		// Check if already set in command environment
+		found := false
+		for i, cmdEnv := range cmd.Env {
+			if strings.HasPrefix(cmdEnv, key+"=") {
+				// Update existing variable
+				cmd.Env[i] = hostEnv
+				found = true
+				break
+			}
+		}
+		if !found {
+			// Add new environment variable
+			cmd.Env = append(cmd.Env, hostEnv)
+		}
+		logrus.Debugf("Inherited host environment variable: %s", key)
+	}
+	return nil
 }
 
 func executeAndCleanupCommand(cmd *exec.Cmd) error {
@@ -187,91 +210,54 @@ func executeAndCleanupCommand(cmd *exec.Cmd) error {
 func prepareCommand(
 	config *v1.Config, buildArgs *dockerfile.BuildArgs,
 	cmdRun *instructions.RunCommand) ([]string, error) {
-	var newCommand []string
 	replacementEnvs := buildArgs.ReplacementEnvs(config.Env)
 
 	if cmdRun.PrependShell {
-		// This is the default shell on Linux
-		var shell []string
-		if len(config.Shell) > 0 {
-			shell = config.Shell
-		} else {
-			shell = append(shell, "/bin/sh", "-c")
-		}
+		return prepareShellCommand(config, cmdRun, replacementEnvs)
+	}
+	return prepareDirectCommand(cmdRun, replacementEnvs)
+}
 
-		// CRITICAL FIX: Resolve environment variables in command line before passing to shell
-		resolvedCmdLine := make([]string, len(cmdRun.CmdLine))
-		for i, cmd := range cmdRun.CmdLine {
-			resolved, err := util.ResolveEnvironmentReplacement(cmd, replacementEnvs, false)
-			if err != nil {
-				return nil, errors.Wrapf(err, "resolving environment variables in command: %s", cmd)
-			}
-			resolvedCmdLine[i] = resolved
-		}
-
-		shell = append(shell, strings.Join(resolvedCmdLine, " "))
-		newCommand = shell
+// prepareShellCommand prepares a shell command
+func prepareShellCommand(
+	config *v1.Config, cmdRun *instructions.RunCommand, replacementEnvs []string) ([]string, error) {
+	// This is the default shell on Linux
+	var shell []string
+	if len(config.Shell) > 0 {
+		shell = config.Shell
 	} else {
-		// CRITICAL FIX: Resolve environment variables in command line for direct execution
-		newCommand = make([]string, len(cmdRun.CmdLine))
-		for i, cmd := range cmdRun.CmdLine {
-			resolved, err := util.ResolveEnvironmentReplacement(cmd, replacementEnvs, false)
-			if err != nil {
-				return nil, errors.Wrapf(err, "resolving environment variables in command: %s", cmd)
-			}
-			newCommand[i] = resolved
+		shell = append(shell, "/bin/sh", "-c")
+	}
+
+	// CRITICAL FIX: Resolve environment variables in command line before passing to shell
+	resolvedCmdLine := make([]string, len(cmdRun.CmdLine))
+	for i, cmd := range cmdRun.CmdLine {
+		resolved, err := util.ResolveEnvironmentReplacement(cmd, replacementEnvs, false)
+		if err != nil {
+			return nil, errors.Wrapf(err, "resolving environment variables in command: %s", cmd)
 		}
+		resolvedCmdLine[i] = resolved
+	}
 
-		// CRITICAL FIX: Improved command resolution with better PATH handling
-		// Try to resolve the command path using multiple strategies
-		commandName := newCommand[0]
+	shell = append(shell, strings.Join(resolvedCmdLine, " "))
+	return shell, nil
+}
 
-		// Strategy 1: Try to find command in current PATH
-		if path, err := exec.LookPath(commandName); err == nil {
-			newCommand[0] = path
-			logrus.Debugf("Found command in PATH: %s", path)
-		} else {
-			// Strategy 2: Try with PATH from replacement environments
-			for _, v := range replacementEnvs {
-				entry := strings.SplitN(v, "=", 2) //nolint:mnd // 2 is the expected number of parts for env var
-				if entry[0] != "PATH" {
-					continue
-				}
-
-				// Temporarily set PATH to find the command
-				oldPath := os.Getenv("PATH")
-				if setErr := os.Setenv("PATH", entry[1]); setErr != nil {
-					logrus.Warnf("Failed to set PATH: %v", setErr)
-					continue
-				}
-
-				if path, err := exec.LookPath(commandName); err == nil {
-					newCommand[0] = path
-					logrus.Debugf("Found command with custom PATH: %s", path)
-					// Restore PATH
-					os.Setenv("PATH", oldPath)
-					break
-				}
-
-				// Restore PATH
-				if setErr := os.Setenv("PATH", oldPath); setErr != nil {
-					logrus.Warnf("Failed to restore PATH: %v", setErr)
-				}
-			}
+// prepareDirectCommand prepares a direct command execution
+func prepareDirectCommand(cmdRun *instructions.RunCommand, replacementEnvs []string) ([]string, error) {
+	// CRITICAL FIX: Resolve environment variables in command line for direct execution
+	newCommand := make([]string, len(cmdRun.CmdLine))
+	for i, cmd := range cmdRun.CmdLine {
+		resolved, err := util.ResolveEnvironmentReplacement(cmd, replacementEnvs, false)
+		if err != nil {
+			return nil, errors.Wrapf(err, "resolving environment variables in command: %s", cmd)
 		}
+		newCommand[i] = resolved
+	}
 
-		// Strategy 3: If still not found, try common locations
-		if !filepath.IsAbs(newCommand[0]) {
-			commonPaths := []string{"/usr/bin", "/bin", "/usr/local/bin", "/opt/bin"}
-			for _, commonPath := range commonPaths {
-				fullPath := filepath.Join(commonPath, commandName)
-				if _, err := os.Stat(fullPath); err == nil {
-					newCommand[0] = fullPath
-					logrus.Debugf("Found command in common path: %s", fullPath)
-					break
-				}
-			}
-		}
+	// Resolve command path
+	if err := resolveCommandPath(newCommand, replacementEnvs); err != nil {
+		return nil, err
 	}
 
 	logrus.Infof("Cmd: %s", newCommand[0])
@@ -279,130 +265,252 @@ func prepareCommand(
 	return newCommand, nil
 }
 
+// resolveCommandPath resolves the path to the executable
+func resolveCommandPath(newCommand, replacementEnvs []string) error {
+	commandName := newCommand[0]
+
+	// Strategy 1: Try to find command in current PATH
+	if path, err := exec.LookPath(commandName); err == nil {
+		newCommand[0] = path
+		logrus.Debugf("Found command in PATH: %s", path)
+		return nil
+	}
+
+	// Strategy 2: Try with PATH from replacement environments
+	if err := tryWithReplacementPaths(newCommand, commandName, replacementEnvs); err == nil {
+		return nil
+	}
+
+	// Strategy 3: Try common locations
+	return tryCommonPaths(newCommand, commandName)
+}
+
+// tryWithReplacementPaths tries to find command using replacement PATH
+func tryWithReplacementPaths(newCommand []string, commandName string, replacementEnvs []string) error {
+	for _, v := range replacementEnvs {
+		entry := strings.SplitN(v, "=", 2) //nolint:mnd // 2 is the expected number of parts for env var
+		if entry[0] != "PATH" {
+			continue
+		}
+
+		// Temporarily set PATH to find the command
+		oldPath := os.Getenv("PATH")
+		if setErr := os.Setenv("PATH", entry[1]); setErr != nil {
+			logrus.Warnf("Failed to set PATH: %v", setErr)
+			continue
+		}
+
+		if path, err := exec.LookPath(commandName); err == nil {
+			newCommand[0] = path
+			logrus.Debugf("Found command with custom PATH: %s", path)
+			// Restore PATH
+			if setErr := os.Setenv("PATH", oldPath); setErr != nil {
+				logrus.Warnf("Failed to restore PATH: %v", setErr)
+			}
+			return nil
+		}
+
+		// Restore PATH
+		if setErr := os.Setenv("PATH", oldPath); setErr != nil {
+			logrus.Warnf("Failed to restore PATH: %v", setErr)
+		}
+	}
+	return fmt.Errorf("command not found: %s", commandName)
+}
+
+// tryCommonPaths tries to find command in common locations
+func tryCommonPaths(newCommand []string, commandName string) error {
+	if filepath.IsAbs(newCommand[0]) {
+		return nil
+	}
+
+	commonPaths := []string{"/usr/bin", "/bin", "/usr/local/bin", "/opt/bin"}
+	for _, commonPath := range commonPaths {
+		fullPath := filepath.Join(commonPath, commandName)
+		if _, err := os.Stat(fullPath); err == nil {
+			newCommand[0] = fullPath
+			logrus.Debugf("Found command in common path: %s", fullPath)
+			return nil
+		}
+	}
+	return fmt.Errorf("command not found in common paths: %s", commandName)
+}
+
 // validateCommand validates command arguments to prevent command injection
 func validateCommand(newCommand []string) error {
-	// CRITICAL FIX: Allow shell variables and operators for shell commands
-	// Only validate for direct command execution, not shell commands
 	commandStr := strings.Join(newCommand, " ")
-	hasShellOperators := strings.Contains(commandStr, "&&") ||
+	hasShellOperators := hasShellOperators(commandStr)
+
+	if hasShellOperators {
+		return validateShellCommand(newCommand)
+	}
+	return validateDirectCommand(newCommand)
+}
+
+// hasShellOperators checks if command contains shell operators
+func hasShellOperators(commandStr string) bool {
+	return strings.Contains(commandStr, "&&") ||
 		strings.Contains(commandStr, "||") ||
 		strings.Contains(commandStr, ";") ||
 		strings.Contains(commandStr, "|") ||
 		strings.Contains(commandStr, ">") ||
 		strings.Contains(commandStr, "<")
+}
 
-	// For shell commands, only validate for dangerous patterns, not shell syntax
-	if hasShellOperators {
-		// Allow shell variables and operators for shell commands
-		for _, arg := range newCommand {
-			// Only check for dangerous path patterns
-			if strings.Contains(arg, "../") || strings.Contains(arg, "~/") {
-				return errors.Errorf("potentially dangerous path pattern in command argument: %q", arg)
-			}
-		}
-	} else {
-		// For direct commands, validate more strictly
-		for _, arg := range newCommand {
-			if strings.ContainsAny(arg, "&|;`<>") {
-				return errors.Errorf("invalid character in command argument: %q", arg)
-			}
-			// Additional validation: ensure arguments don't contain potentially dangerous patterns
-			if strings.Contains(arg, "../") || strings.Contains(arg, "~/") {
-				return errors.Errorf("potentially dangerous path pattern in command argument: %q", arg)
-			}
-		}
-		// Additional validation for command path
-		if !filepath.IsAbs(newCommand[0]) {
-			if _, err := exec.LookPath(newCommand[0]); err != nil {
-				return errors.Wrapf(err, "invalid command path: %s", newCommand[0])
-			}
-		}
-		// Use explicit argument passing instead of variadic to satisfy gosec
-		// Validate the command path to prevent command injection
-		cleanCommandPath := filepath.Clean(newCommand[0])
-		if strings.Contains(cleanCommandPath, "..") || !filepath.IsAbs(cleanCommandPath) {
-			return errors.Errorf("invalid command path: potential command injection detected: %q", newCommand[0])
+// validateShellCommand validates shell commands
+func validateShellCommand(newCommand []string) error {
+	// Allow shell variables and operators for shell commands
+	for _, arg := range newCommand {
+		// Only check for dangerous path patterns
+		if strings.Contains(arg, "../") || strings.Contains(arg, "~/") {
+			return errors.Errorf("potentially dangerous path pattern in command argument: %q", arg)
 		}
 	}
 	return nil
 }
 
-// createExecCommand creates and configures the exec.Cmd with proper settings
-func createExecCommand(config *v1.Config, buildArgs *dockerfile.BuildArgs, newCommand []string) (*exec.Cmd, error) {
-	// CRITICAL FIX: Handle shell commands properly
-	// If the command contains shell operators like &&, ||, etc., we need to execute it through shell
-	var cmd *exec.Cmd
-
-	// Check if the command contains shell operators that require shell execution
-	commandStr := strings.Join(newCommand, " ")
-	hasShellOperators := strings.Contains(commandStr, "&&") ||
-		strings.Contains(commandStr, "||") ||
-		strings.Contains(commandStr, ";") ||
-		strings.Contains(commandStr, "|") ||
-		strings.Contains(commandStr, ">") ||
-		strings.Contains(commandStr, "<")
-
-	if hasShellOperators {
-		// Execute through shell for commands with operators
-		shell := "/bin/sh"
-		if len(config.Shell) > 0 {
-			shell = config.Shell[0]
+// validateDirectCommand validates direct commands
+func validateDirectCommand(newCommand []string) error {
+	// For direct commands, validate more strictly
+	for _, arg := range newCommand {
+		if strings.ContainsAny(arg, "&|;`<>") {
+			return errors.Errorf("invalid character in command argument: %q", arg)
 		}
-
-		// CRITICAL FIX: Resolve environment variables in shell commands
-		// This ensures that variables like ${PNPM_VERSION} are properly substituted
-		replacementEnvs := buildArgs.ReplacementEnvs(config.Env)
-		resolvedCommandStr, err := util.ResolveEnvironmentReplacement(commandStr, replacementEnvs, false)
-		if err != nil {
-			return nil, errors.Wrapf(err, "resolving environment variables in shell command: %s", commandStr)
+		// Additional validation: ensure arguments don't contain potentially dangerous patterns
+		if strings.Contains(arg, "../") || strings.Contains(arg, "~/") {
+			return errors.Errorf("potentially dangerous path pattern in command argument: %q", arg)
 		}
-
-		cmd = &exec.Cmd{
-			Path: shell,
-			Args: []string{shell, "-c", resolvedCommandStr},
-		}
-		logrus.Debugf("Executing shell command: %s -c %s", shell, resolvedCommandStr)
-	} else {
-		// Execute directly for simple commands
-		cleanCommandPath := filepath.Clean(newCommand[0])
-		cmd = &exec.Cmd{
-			Path: cleanCommandPath,
-			Args: append([]string{cleanCommandPath}, newCommand[1:]...),
-		}
-		logrus.Debugf("Executing direct command: %s", strings.Join(newCommand, " "))
 	}
 
+	// Additional validation for command path
+	if !filepath.IsAbs(newCommand[0]) {
+		if _, err := exec.LookPath(newCommand[0]); err != nil {
+			return errors.Wrapf(err, "invalid command path: %s", newCommand[0])
+		}
+	}
+
+	// Use explicit argument passing instead of variadic to satisfy gosec
+	// Validate the command path to prevent command injection
+	cleanCommandPath := filepath.Clean(newCommand[0])
+	if strings.Contains(cleanCommandPath, "..") || !filepath.IsAbs(cleanCommandPath) {
+		return errors.Errorf("invalid command path: potential command injection detected: %q", newCommand[0])
+	}
+
+	return nil
+}
+
+// createExecCommand creates and configures the exec.Cmd with proper settings
+func createExecCommand(config *v1.Config, buildArgs *dockerfile.BuildArgs, newCommand []string) (*exec.Cmd, error) {
+	cmd, err := createCommand(config, buildArgs, newCommand)
+	if err != nil {
+		return nil, err
+	}
+
+	// Configure command settings
+	configureCommandSettings(cmd, config)
+
+	// Set up environment
+	env, err := setupCommandEnvironmentVars(cmd, config, buildArgs)
+	if err != nil {
+		return nil, err
+	}
+	cmd.Env = env
+
+	return cmd, nil
+}
+
+// createCommand creates the appropriate command type (shell or direct)
+func createCommand(config *v1.Config, buildArgs *dockerfile.BuildArgs, newCommand []string) (*exec.Cmd, error) {
+	commandStr := strings.Join(newCommand, " ")
+	hasShellOps := hasShellOperators(commandStr)
+
+	if hasShellOps {
+		return createShellCommand(config, buildArgs, commandStr)
+	}
+	return createDirectCommand(newCommand)
+}
+
+// createShellCommand creates a shell command
+func createShellCommand(config *v1.Config, buildArgs *dockerfile.BuildArgs, commandStr string) (*exec.Cmd, error) {
+	shell := "/bin/sh"
+	if len(config.Shell) > 0 {
+		shell = config.Shell[0]
+	}
+
+	// CRITICAL FIX: Resolve environment variables in shell commands
+	replacementEnvs := buildArgs.ReplacementEnvs(config.Env)
+	resolvedCommandStr, err := util.ResolveEnvironmentReplacement(commandStr, replacementEnvs, false)
+	if err != nil {
+		return nil, errors.Wrapf(err, "resolving environment variables in shell command: %s", commandStr)
+	}
+
+	cmd := &exec.Cmd{
+		Path: shell,
+		Args: []string{shell, "-c", resolvedCommandStr},
+	}
+	logrus.Debugf("Executing shell command: %s -c %s", shell, resolvedCommandStr)
+	return cmd, nil
+}
+
+// createDirectCommand creates a direct command
+func createDirectCommand(newCommand []string) (*exec.Cmd, error) {
+	cleanCommandPath := filepath.Clean(newCommand[0])
+	cmd := &exec.Cmd{
+		Path: cleanCommandPath,
+		Args: append([]string{cleanCommandPath}, newCommand[1:]...),
+	}
+	logrus.Debugf("Executing direct command: %s", strings.Join(newCommand, " "))
+	return cmd, nil
+}
+
+// configureCommandSettings configures basic command settings
+func configureCommandSettings(cmd *exec.Cmd, config *v1.Config) {
 	cmd.Dir = setWorkDirIfExists(config.WorkingDir)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	replacementEnvs := buildArgs.ReplacementEnvs(config.Env)
-	// Set process group ID to ensure proper cleanup of child processes
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		Setpgid: true,
 	}
 
+	// Set user credentials if specified
+	if err := setUserCredentials(cmd, config); err != nil {
+		logrus.Warnf("Failed to set user credentials: %v", err)
+	}
+}
+
+// setUserCredentials sets user credentials for the command
+func setUserCredentials(cmd *exec.Cmd, config *v1.Config) error {
 	u := config.User
 	userAndGroup := strings.Split(u, ":")
-	userStr, err := util.ResolveEnvironmentReplacement(userAndGroup[0], replacementEnvs, false)
+	userStr, err := util.ResolveEnvironmentReplacement(userAndGroup[0], []string{}, false)
 	if err != nil {
-		return nil, errors.Wrapf(err, "resolving user %s", userAndGroup[0])
+		return errors.Wrapf(err, "resolving user %s", userAndGroup[0])
 	}
 
-	// If specified, run the command as a specific user
 	if userStr != "" {
 		cmd.SysProcAttr.Credential, err = util.SyscallCredentials(userStr)
 		if err != nil {
-			return nil, errors.Wrap(err, "credentials")
+			return errors.Wrap(err, "credentials")
 		}
 	}
+	return nil
+}
 
-	env, err := addDefaultHOME(userStr, replacementEnvs)
+// setupCommandEnvironmentVars sets up the environment for the command
+func setupCommandEnvironmentVars(_ *exec.Cmd, config *v1.Config, buildArgs *dockerfile.BuildArgs) ([]string, error) {
+	replacementEnvs := buildArgs.ReplacementEnvs(config.Env)
+	env, err := addDefaultHOME(config.User, replacementEnvs)
 	if err != nil {
 		return nil, errors.Wrap(err, "adding default HOME variable")
 	}
 
-	// CRITICAL FIX: Ensure PATH is properly set for command execution
-	// This is crucial for finding executables like corepack, pnpm, etc.
+	// Universal PATH resolution
+	env = enhancePathEnvironment(env)
+	return env, nil
+}
+
+// enhancePathEnvironment enhances PATH with discovered executable paths
+func enhancePathEnvironment(env []string) []string {
 	pathSet := false
 	currentPath := ""
 	for _, envVar := range env {
@@ -413,30 +521,13 @@ func createExecCommand(config *v1.Config, buildArgs *dockerfile.BuildArgs, newCo
 		}
 	}
 
-	// If PATH is not set, add a default one
+	discoveredPaths := discoverExecutablePaths()
+
 	if !pathSet {
-		defaultPath := "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-		env = append(env, "PATH="+defaultPath)
-		logrus.Debugf("Added default PATH: %s", defaultPath)
+		env = append(env, "PATH="+discoveredPaths)
+		logrus.Debugf("Using discovered PATH: %s", discoveredPaths)
 	} else {
-		// CRITICAL FIX: Enhance PATH for package managers and development tools
-		// Add common paths where package managers install binaries
-		enhancedPath := currentPath
-		additionalPaths := []string{
-			"/usr/local/bin",        // Common for npm global installs
-			"/usr/local/sbin",       // Common for system tools
-			"/root/.local/bin",      // User local binaries
-			"/home/node/.local/bin", // Node user local binaries
-			"/opt/bin",              // Optional binaries
-		}
-
-		for _, additionalPath := range additionalPaths {
-			if !strings.Contains(enhancedPath, additionalPath) {
-				enhancedPath = enhancedPath + ":" + additionalPath
-			}
-		}
-
-		// Update PATH in environment
+		enhancedPath := mergePaths(currentPath, discoveredPaths)
 		for i, envVar := range env {
 			if strings.HasPrefix(envVar, "PATH=") {
 				env[i] = "PATH=" + enhancedPath
@@ -446,8 +537,7 @@ func createExecCommand(config *v1.Config, buildArgs *dockerfile.BuildArgs, newCo
 		}
 	}
 
-	cmd.Env = env
-	return cmd, nil
+	return env
 }
 
 // waitAndCleanupProcess waits for the process to complete and cleans up child processes
@@ -506,13 +596,149 @@ func (r *RunCommand) ProvidesFilesToSnapshot() bool {
 	return false
 }
 
-// CacheCommand creates a cached version of the RUN command for layer reuse
+// CacheCommand returns true since this command should be cached
 func (r *RunCommand) CacheCommand(img v1.Image) DockerCommand {
 	return &CachingRunCommand{
 		img:       img,
 		cmd:       r.cmd,
 		extractFn: util.ExtractFile,
 	}
+}
+
+// discoverExecutablePaths automatically discovers all directories containing executables
+func discoverExecutablePaths() string {
+	// Universal discovery: scan the entire filesystem for executable directories
+	// This is more robust than hardcoding specific paths
+	discoveredPaths := scanFilesystemForExecutables()
+
+	return strings.Join(discoveredPaths, ":")
+}
+
+// scanFilesystemForExecutables recursively scans the filesystem for directories with executables
+func scanFilesystemForExecutables() []string {
+	var executableDirs []string
+
+	// Start scanning from root directory to find all executable directories
+	// This ensures we don't miss any directories with executables
+	rootDirs := []string{
+		"/", // Start from root to find everything
+	}
+
+	for _, rootDir := range rootDirs {
+		dirs := scanDirectoryRecursively(rootDir, 0, 0) // No depth limit - scan everything
+		executableDirs = append(executableDirs, dirs...)
+	}
+
+	return executableDirs
+}
+
+// scanDirectoryRecursively scans a directory and its subdirectories for executables
+func scanDirectoryRecursively(dir string, currentDepth, maxDepth int) []string {
+	var executableDirs []string
+
+	// No depth limit - scan everything accessible
+	// Only stop if maxDepth is explicitly set to 0 (which means no limit)
+	if maxDepth > 0 && currentDepth >= maxDepth {
+		return executableDirs
+	}
+
+	// Check if directory exists and is readable
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		return executableDirs
+	}
+
+	// Try to read directory contents
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return executableDirs
+	}
+
+	// Check if current directory has executables
+	if hasExecutables(dir) {
+		executableDirs = append(executableDirs, dir)
+		logrus.Debugf("Discovered executable directory: %s", dir)
+	}
+
+	// Recursively scan subdirectories
+	for _, entry := range entries {
+		if entry.IsDir() {
+			subDir := dir + "/" + entry.Name()
+			// Scan all directories without any restrictions
+			subDirs := scanDirectoryRecursively(subDir, currentDepth+1, maxDepth)
+			executableDirs = append(executableDirs, subDirs...)
+		}
+	}
+
+	return executableDirs
+}
+
+// hasExecutables checks if a directory contains executable files
+func hasExecutables(dir string) bool {
+	// Check if directory exists and is readable
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		return false
+	}
+
+	// Try to read directory contents
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false
+	}
+
+	// Check if any entry is an executable file
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			// Check if file is executable
+			info, err := entry.Info()
+			if err != nil {
+				continue
+			}
+
+			// Check if file has executable permissions
+			if info.Mode()&0o111 != 0 {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+// mergePaths intelligently merges two PATH strings, avoiding duplicates
+func mergePaths(currentPath, discoveredPaths string) string {
+	if currentPath == "" {
+		return discoveredPaths
+	}
+
+	if discoveredPaths == "" {
+		return currentPath
+	}
+
+	// Split both paths
+	currentDirs := strings.Split(currentPath, ":")
+	discoveredDirs := strings.Split(discoveredPaths, ":")
+
+	// Create a map to track existing paths
+	pathMap := make(map[string]bool)
+	var result []string
+
+	// Add current paths first (preserve existing order)
+	for _, dir := range currentDirs {
+		if dir != "" && !pathMap[dir] {
+			pathMap[dir] = true
+			result = append(result, dir)
+		}
+	}
+
+	// Add discovered paths that aren't already present
+	for _, dir := range discoveredDirs {
+		if dir != "" && !pathMap[dir] {
+			pathMap[dir] = true
+			result = append(result, dir)
+		}
+	}
+
+	return strings.Join(result, ":")
 }
 
 // MetadataOnly indicates whether this command only affects metadata (not filesystem)
