@@ -35,6 +35,11 @@ import (
 	"github.com/Gosayram/kaniko/pkg/util"
 )
 
+const (
+	// envKeyValueParts is the expected number of parts when splitting environment variable key=value
+	envKeyValueParts = 2
+)
+
 // RunCommand implements the Dockerfile RUN instruction
 // It handles executing shell commands during the build process
 type RunCommand struct {
@@ -82,14 +87,14 @@ func runCommandInExec(config *v1.Config, buildArgs *dockerfile.BuildArgs, cmdRun
 	// Create a map of existing environment variables for quick lookup
 	existingEnvs := make(map[string]string)
 	for _, env := range cmd.Env {
-		if parts := strings.SplitN(env, "=", 2); len(parts) == 2 {
+		if parts := strings.SplitN(env, "=", envKeyValueParts); len(parts) == envKeyValueParts {
 			existingEnvs[parts[0]] = parts[1]
 		}
 	}
 
 	// Add all replacement environment variables to command environment
 	for _, env := range replacementEnvs {
-		if parts := strings.SplitN(env, "=", 2); len(parts) == 2 {
+		if parts := strings.SplitN(env, "=", envKeyValueParts); len(parts) == envKeyValueParts {
 			key := parts[0]
 
 			// Only add if not already present or if it's a PATH variable (which we want to ensure is set)

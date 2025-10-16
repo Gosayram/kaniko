@@ -59,9 +59,8 @@ func ParseArg(key string, val *string, env []string,
 		}
 		resolvedValue = &value
 	} else {
-		if value, ok := ba.GetAllAllowed()[resolvedKey]; ok {
-			resolvedValue = &value
-		} else if value, ok := ba.GetAllMeta()[resolvedKey]; ok {
+		// Check if the argument is available in allowed args
+		if value, ok := ba.GetAllowed(resolvedKey); ok {
 			resolvedValue = &value
 		}
 	}

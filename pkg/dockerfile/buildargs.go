@@ -81,8 +81,13 @@ func (b *BuildArgs) ReplacementEnvs(envs []string) []string {
 	resultEnv := make([]string, len(envs))
 	copy(resultEnv, envs)
 	filtered := b.FilterAllowed(envs)
+
+	// CRITICAL FIX: Include build args in replacement environment variables
+	// This ensures that build arguments like PNPM_VERSION are available for substitution
+	buildArgs := b.GetAllAllowed()
+
 	// Disable makezero linter, since the previous make is paired with a same sized copy
-	return append(resultEnv, filtered...) //nolint:makezero
+	return append(resultEnv, append(filtered, buildArgs...)...) //nolint:makezero
 }
 
 // AddMetaArgs adds the supplied args map to b's allowedMetaArgs
@@ -110,4 +115,40 @@ func (b *BuildArgs) FilterAllowed(envs []string) []string {
 
 func (b *BuildArgs) AddMetaArg(key string, value *string) {
 	b.allowedMetaArgs[key] = value
+}
+
+// GetAllAllowed returns all allowed build arguments as environment variables
+func (b *BuildArgs) GetAllAllowed() []string {
+	var result []string
+
+	// Add allowed args
+	for key, value := range b.allowedArgs {
+		if value != nil {
+			result = append(result, key+"="+*value)
+		}
+	}
+
+	// Add allowed meta args
+	for key, value := range b.allowedMetaArgs {
+		if value != nil {
+			result = append(result, key+"="+*value)
+		}
+	}
+
+	return result
+}
+
+// GetAllowed returns a specific allowed argument value
+func (b *BuildArgs) GetAllowed(key string) (string, bool) {
+	// Check allowed args first
+	if value, ok := b.allowedArgs[key]; ok && value != nil {
+		return *value, true
+	}
+
+	// Check allowed meta args
+	if value, ok := b.allowedMetaArgs[key]; ok && value != nil {
+		return *value, true
+	}
+
+	return "", false
 }

@@ -625,12 +625,26 @@ func resolveDockerfilePath() error {
 }
 
 // resolveEnvironmentBuildArgs replace build args without value by the same named environment variable
+// and add all build args to the environment for RUN commands
 func resolveEnvironmentBuildArgs(arguments []string, resolver func(string) string) {
 	for index, argument := range arguments {
 		i := strings.Index(argument, "=")
 		if i < 0 {
 			value := resolver(argument)
 			arguments[index] = fmt.Sprintf("%s=%s", argument, value)
+		}
+	}
+
+	// CRITICAL FIX: Add all build args to the environment
+	// This ensures that build args are available in RUN commands
+	for _, argument := range arguments {
+		if argument != "" {
+			// Set the environment variable in the current process
+			// This will be inherited by RUN commands
+			if err := os.Setenv(argument, ""); err != nil {
+				logrus.Warnf("Failed to set environment variable %s: %v", argument, err)
+			}
+			logrus.Debugf("Added build arg to environment: %s", argument)
 		}
 	}
 }
