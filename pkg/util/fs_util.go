@@ -1844,21 +1844,83 @@ func validateAbsoluteSymlinkTarget(target string) error {
 	// Clean the path
 	cleanTarget := filepath.Clean(target)
 
-	// Check for dangerous paths
+	// Check for dangerous paths - more specific to avoid blocking legitimate system binaries
 	dangerousPaths := []string{
-		"/proc",
-		"/sys",
-		"/dev",
-		"/etc",
-		"/root",
-		"/home",
-		"/var/log",
-		"/var/run",
+		"/proc/",
+		"/sys/",
+		"/dev/",
+		"/etc/passwd",
+		"/etc/shadow",
+		"/etc/group",
+		"/etc/gshadow",
+		"/root/",
+		"/home/",
+		"/var/log/",
+		"/var/run/",
 	}
 
 	for _, dangerous := range dangerousPaths {
 		if strings.HasPrefix(cleanTarget, dangerous) {
 			return fmt.Errorf("symlink target points to dangerous path: %s", cleanTarget)
+		}
+	}
+
+	// Allow system binaries and libraries
+	allowedPaths := []string{
+		"/usr/bin/",
+		"/usr/lib/",
+		"/usr/lib64/",
+		"/usr/sbin/",
+		"/bin/",
+		"/sbin/",
+		"/lib/",
+		"/lib64/",
+		"/etc/alternatives/",
+		"/etc/ssl/",
+		"/etc/nginx/",
+		"/etc/apache2/",
+		"/etc/php/",
+		"/etc/python/",
+		"/etc/perl/",
+		// Allow hidden directories with binaries
+		"/usr/lib/.",
+		"/usr/lib64/.",
+		"/usr/bin/.",
+		"/usr/sbin/.",
+		"/bin/.",
+		"/sbin/.",
+		"/lib/.",
+		"/lib64/.",
+		"/etc/.",
+		"/opt/",
+		"/usr/local/bin/",
+		"/usr/local/lib/",
+		"/usr/local/sbin/",
+		"/usr/local/lib64/",
+		"/usr/share/",
+		"/usr/include/",
+		"/var/lib/",
+		"/var/cache/",
+		"/tmp/",
+		"/var/tmp/",
+		// Node.js and pnpm paths
+		"/usr/local/lib/node_modules/",
+		"/usr/lib/node_modules/",
+		"/opt/node/",
+		"/opt/npm/",
+		"/opt/pnpm/",
+		"/root/.local/share/",
+		"/root/.npm/",
+		"/root/.pnpm/",
+		"/home/",
+		"/usr/local/share/",
+		"/usr/share/node/",
+	}
+
+	// Check if target is in allowed system paths
+	for _, allowed := range allowedPaths {
+		if strings.HasPrefix(cleanTarget, allowed) {
+			return nil // Allow system binaries and libraries
 		}
 	}
 
