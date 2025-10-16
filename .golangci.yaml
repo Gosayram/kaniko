@@ -94,6 +94,10 @@ linters:
       - path: ^cmd/
         linters:
           - gochecknoinits
+      - path: pkg/util/
+        linters:
+          - revive
+        text: "avoid meaningless package names"
       - path: (.+)\.go$
         text: "Error return value of .((os\\.)?std(out|err)\\..*|.*Close|.*Flush|os\\.Remove(All)?|.*printf?|os\\.(Un)?Setenv). is not checked"
     paths:

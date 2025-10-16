@@ -574,6 +574,56 @@ func validateLinkPath(link, dest string) error {
 	if err != nil {
 		return fmt.Errorf("failed to get absolute path for destination: %w", err)
 	}
+
+	// Check if link is in allowed system paths first
+	allowedSystemPaths := []string{
+		"/usr/bin/",
+		"/usr/lib/",
+		"/usr/lib64/",
+		"/usr/sbin/",
+		"/bin/",
+		"/sbin/",
+		"/lib/",
+		"/lib64/",
+		"/etc/alternatives/",
+		"/etc/ssl/",
+		"/etc/nginx/",
+		"/etc/apache2/",
+		"/etc/php/",
+		"/etc/python/",
+		"/etc/perl/",
+		"/usr/local/bin/",
+		"/usr/local/lib/",
+		"/usr/local/sbin/",
+		"/usr/local/lib64/",
+		"/usr/share/",
+		"/usr/include/",
+		"/var/lib/",
+		"/var/cache/",
+		"/tmp/",
+		"/var/tmp/",
+		"/opt/",
+		"/usr/local/lib/node_modules/",
+		"/usr/lib/node_modules/",
+		"/opt/node/",
+		"/opt/npm/",
+		"/opt/pnpm/",
+		"/root/.local/share/",
+		"/root/.npm/",
+		"/root/.pnpm/",
+		"/home/",
+		"/usr/local/share/",
+		"/usr/share/node/",
+	}
+
+	// Check if link is in allowed system paths
+	for _, allowed := range allowedSystemPaths {
+		if strings.HasPrefix(absLink, allowed) {
+			return nil // Allow system binaries and libraries
+		}
+	}
+
+	// Original check: link must be within destination directory
 	if !strings.HasPrefix(absLink+string(filepath.Separator), absDest+string(filepath.Separator)) {
 		return fmt.Errorf("potential directory traversal attempt - link path %s not within destination %s", link, dest)
 	}
