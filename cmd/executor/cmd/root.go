@@ -639,12 +639,21 @@ func resolveEnvironmentBuildArgs(arguments []string, resolver func(string) strin
 	// This ensures that build args are available in RUN commands
 	for _, argument := range arguments {
 		if argument != "" {
-			// Set the environment variable in the current process
-			// This will be inherited by RUN commands
-			if err := os.Setenv(argument, ""); err != nil {
-				logrus.Warnf("Failed to set environment variable %s: %v", argument, err)
+			// Parse the argument to extract key and value
+			parts := strings.SplitN(argument, "=", 2)
+			if len(parts) == 2 {
+				key := parts[0]
+				value := parts[1]
+				// Set the environment variable in the current process
+				// This will be inherited by RUN commands
+				if err := os.Setenv(key, value); err != nil {
+					logrus.Warnf("Failed to set environment variable %s: %v", argument, err)
+				} else {
+					logrus.Debugf("Added build arg to environment: %s=%s", key, value)
+				}
+			} else {
+				logrus.Warnf("Invalid build arg format: %s (expected key=value)", argument)
 			}
-			logrus.Debugf("Added build arg to environment: %s", argument)
 		}
 	}
 }
