@@ -146,9 +146,12 @@ func CheckPushPermissions(opts *config.KanikoOptions) error {
 			return errors.Wrapf(err, "making transport for registry %q", registryName)
 		}
 		tr := newRetry(rt)
+		logrus.Infof("Checking push permissions for registry %s", registryName)
 		if pushErr := checkRemotePushPermission(destRef, creds.GetKeychain(), tr); pushErr != nil {
+			logrus.Errorf("Push permission check failed for registry %s: %v", registryName, pushErr)
 			return errors.Wrapf(pushErr, "checking push permission for %q", destRef)
 		}
+		logrus.Infof("Successfully authenticated with registry %s", registryName)
 		checked[destRef.Context().String()] = true
 	}
 	return nil
@@ -331,10 +334,13 @@ func pushToDestinations(image v1.Image, opts *config.KanikoOptions, destRefs []n
 			destRef.Registry = newReg
 		}
 
+		logrus.Infof("Attempting to resolve authentication for registry %s", registryName)
 		pushAuth, err := creds.GetKeychain().Resolve(destRef.Context().Registry)
 		if err != nil {
+			logrus.Errorf("Failed to resolve authentication for registry %s: %v", registryName, err)
 			return errors.Wrap(err, "resolving pushAuth")
 		}
+		logrus.Infof("Successfully resolved authentication for registry %s", registryName)
 
 		localRt, err := util.MakeTransport(&opts.RegistryOptions, registryName)
 		if err != nil {
@@ -344,6 +350,7 @@ func pushToDestinations(image v1.Image, opts *config.KanikoOptions, destRefs []n
 		rt := &withUserAgent{t: tr}
 
 		logrus.Infof("Pushing image to %s", destRef.String())
+		logrus.Infof("Using authentication for registry %s", registryName)
 
 		retryFunc := func() error {
 			dig, err := image.Digest()
