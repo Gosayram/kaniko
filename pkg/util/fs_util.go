@@ -575,59 +575,69 @@ func validateLinkPath(link, dest string) error {
 		return fmt.Errorf("failed to get absolute path for destination: %w", err)
 	}
 
-	// Check if link is in allowed system paths first
-	allowedSystemPaths := []string{
-		"/usr/bin/",
-		"/usr/lib/",
-		"/usr/lib64/",
-		"/usr/sbin/",
-		"/bin/",
-		"/sbin/",
-		"/lib/",
-		"/lib64/",
-		"/etc/alternatives/",
-		"/etc/ssl/",
-		"/etc/nginx/",
-		"/etc/apache2/",
-		"/etc/php/",
-		"/etc/python/",
-		"/etc/perl/",
-		"/usr/local/bin/",
-		"/usr/local/lib/",
-		"/usr/local/sbin/",
-		"/usr/local/lib64/",
-		"/usr/share/",
-		"/usr/include/",
-		"/var/lib/",
-		"/var/cache/",
-		"/tmp/",
-		"/var/tmp/",
-		"/opt/",
-		"/usr/local/lib/node_modules/",
-		"/usr/lib/node_modules/",
-		"/opt/node/",
-		"/opt/npm/",
-		"/opt/pnpm/",
-		"/root/.local/share/",
-		"/root/.npm/",
-		"/root/.pnpm/",
-		"/home/",
-		"/usr/local/share/",
-		"/usr/share/node/",
+	// Check for dangerous paths
+	if err := checkDangerousPaths(absLink); err != nil {
+		return err
 	}
 
-	// Check if link is in allowed system paths
+	// Check for directory traversal
+	if err := checkDirectoryTraversal(absLink); err != nil {
+		return err
+	}
+
+	// Check if link is within destination or in allowed system paths
+	return checkLinkDestination(absLink, absDest, link, dest)
+}
+
+// checkDangerousPaths checks if the path points to dangerous system locations
+func checkDangerousPaths(absLink string) error {
+	dangerousPaths := []string{
+		"/proc/",
+		"/sys/",
+		"/dev/",
+		"/etc/passwd",
+		"/etc/shadow",
+		"/etc/group",
+		"/etc/gshadow",
+	}
+
+	for _, dangerous := range dangerousPaths {
+		if strings.HasPrefix(absLink, dangerous) {
+			return fmt.Errorf("link points to dangerous path: %s", absLink)
+		}
+	}
+	return nil
+}
+
+// checkDirectoryTraversal checks for actual directory traversal attempts
+func checkDirectoryTraversal(absLink string) error {
+	if strings.Contains(absLink, "..") {
+		if strings.Contains(absLink, "/../") || strings.HasSuffix(absLink, "/..") {
+			return fmt.Errorf("potential directory traversal attempt: %s", absLink)
+		}
+	}
+	return nil
+}
+
+// checkLinkDestination checks if link is within destination or in allowed system paths
+func checkLinkDestination(absLink, absDest, link, dest string) error {
+	// Check if link is within destination directory
+	if strings.HasPrefix(absLink+string(filepath.Separator), absDest+string(filepath.Separator)) {
+		return nil
+	}
+
+	// Allow system binaries and common paths
+	allowedSystemPaths := []string{
+		"/usr/", "/bin/", "/sbin/", "/lib/", "/opt/", "/var/", "/tmp/", "/etc/",
+	}
+
 	for _, allowed := range allowedSystemPaths {
 		if strings.HasPrefix(absLink, allowed) {
-			return nil // Allow system binaries and libraries
+			return nil // Allow system paths
 		}
 	}
 
-	// Original check: link must be within destination directory
-	if !strings.HasPrefix(absLink+string(filepath.Separator), absDest+string(filepath.Separator)) {
-		return fmt.Errorf("potential directory traversal attempt - link path %s not within destination %s", link, dest)
-	}
-	return nil
+	return fmt.Errorf("potential directory traversal attempt - link path %s not within destination %s", link, dest)
 }
 
 // IsInProvidedIgnoreList checks if a path matches any entry in the provided ignore list
@@ -1894,7 +1904,7 @@ func validateAbsoluteSymlinkTarget(target string) error {
 	// Clean the path
 	cleanTarget := filepath.Clean(target)
 
-	// Check for dangerous paths - more specific to avoid blocking legitimate system binaries
+	// Only block truly dangerous paths
 	dangerousPaths := []string{
 		"/proc/",
 		"/sys/",
@@ -1903,10 +1913,6 @@ func validateAbsoluteSymlinkTarget(target string) error {
 		"/etc/shadow",
 		"/etc/group",
 		"/etc/gshadow",
-		"/root/",
-		"/home/",
-		"/var/log/",
-		"/var/run/",
 	}
 
 	for _, dangerous := range dangerousPaths {
@@ -1915,91 +1921,32 @@ func validateAbsoluteSymlinkTarget(target string) error {
 		}
 	}
 
-	// Allow system binaries and libraries
-	allowedPaths := []string{
-		"/usr/bin/",
-		"/usr/lib/",
-		"/usr/lib64/",
-		"/usr/sbin/",
-		"/bin/",
-		"/sbin/",
-		"/lib/",
-		"/lib64/",
-		"/etc/alternatives/",
-		"/etc/ssl/",
-		"/etc/nginx/",
-		"/etc/apache2/",
-		"/etc/php/",
-		"/etc/python/",
-		"/etc/perl/",
-		// Allow hidden directories with binaries
-		"/usr/lib/.",
-		"/usr/lib64/.",
-		"/usr/bin/.",
-		"/usr/sbin/.",
-		"/bin/.",
-		"/sbin/.",
-		"/lib/.",
-		"/lib64/.",
-		"/etc/.",
-		"/opt/",
-		"/usr/local/bin/",
-		"/usr/local/lib/",
-		"/usr/local/sbin/",
-		"/usr/local/lib64/",
-		"/usr/share/",
-		"/usr/include/",
-		"/var/lib/",
-		"/var/cache/",
-		"/tmp/",
-		"/var/tmp/",
-		// Node.js and pnpm paths
-		"/usr/local/lib/node_modules/",
-		"/usr/lib/node_modules/",
-		"/opt/node/",
-		"/opt/npm/",
-		"/opt/pnpm/",
-		"/root/.local/share/",
-		"/root/.npm/",
-		"/root/.pnpm/",
-		"/home/",
-		"/usr/local/share/",
-		"/usr/share/node/",
-	}
-
-	// Check if target is in allowed system paths
-	for _, allowed := range allowedPaths {
-		if strings.HasPrefix(cleanTarget, allowed) {
-			return nil // Allow system binaries and libraries
+	// Allow most system paths - be very permissive
+	// Only block actual directory traversal attempts
+	if strings.Contains(cleanTarget, "..") {
+		// Check if this is a real traversal attempt
+		if strings.Contains(cleanTarget, "/../") || strings.HasSuffix(cleanTarget, "/..") {
+			return fmt.Errorf("symlink target contains directory traversal: %s", cleanTarget)
 		}
 	}
 
-	// Check for traversal attempts
-	if strings.Contains(cleanTarget, "..") {
-		return fmt.Errorf("symlink target contains directory traversal: %s", cleanTarget)
-	}
-
+	// Allow all other paths - be permissive for system binaries
 	return nil
 }
 
 // validateDirectoryPermissions validates directory permissions to prevent security issues
 func validateDirectoryPermissions(mode os.FileMode) error {
-	// Check for overly permissive directory permissions
-	// Directories should not be world-writable unless explicitly needed
+	// Be very permissive - only block truly dangerous permissions
+	// Allow most common permission patterns used in containers
+
+	// Only block if absolutely no permissions are set
+	if mode&0o777 == 0 {
+		return fmt.Errorf("directory must have some permissions set")
+	}
+
+	// Log but allow world-writable directories (common in containers)
 	if mode&0o002 != 0 { // World-writable
-		// Allow world-writable only for specific cases like /tmp
 		logrus.Debugf("Creating world-writable directory with permissions %o", mode)
-	}
-
-	// Check for dangerous permission combinations
-	if mode&0o001 != 0 && mode&0o004 != 0 { // World-executable and world-readable
-		// This is generally safe for directories - no action needed
-		_ = mode // Acknowledge the check
-	}
-
-	// Check for overly restrictive permissions that might cause issues
-	if mode&0o700 == 0 { // No owner permissions
-		return fmt.Errorf("directory must have at least owner permissions (700)")
 	}
 
 	return nil
@@ -2007,20 +1954,18 @@ func validateDirectoryPermissions(mode os.FileMode) error {
 
 // validateUserGroupIDs validates UID/GID to prevent privilege escalation
 func validateUserGroupIDs(uid, gid int64) error {
-	// Check for negative IDs
+	// Be permissive - only block truly invalid IDs
+	// Allow most common UID/GID patterns used in containers
+
+	// Only block negative IDs (which are invalid)
 	if uid < 0 || gid < 0 {
 		return fmt.Errorf("UID and GID must be non-negative: uid=%d, gid=%d", uid, gid)
 	}
 
-	// Check for system reserved IDs (0 is root, which is allowed)
-	if uid == 0 && gid == 0 {
-		// Root ownership is allowed but should be logged
-		logrus.Debugf("Creating directory with root ownership (uid=%d, gid=%d)", uid, gid)
-	}
-
-	// Check for extremely high IDs that might indicate errors
+	// Allow all other IDs - containers often use various UID/GID values
+	// Log high values but don't block them
 	if uid > 1000000 || gid > 1000000 {
-		logrus.Warnf("Using high UID/GID values: uid=%d, gid=%d", uid, gid)
+		logrus.Debugf("Using high UID/GID values: uid=%d, gid=%d", uid, gid)
 	}
 
 	return nil
@@ -2028,20 +1973,17 @@ func validateUserGroupIDs(uid, gid int64) error {
 
 // validateFilePermissions validates file permissions to prevent security issues
 func validateFilePermissions(mode os.FileMode) error {
-	// Check for overly permissive file permissions
+	// Be very permissive - only block truly dangerous permissions
+	// Allow most common permission patterns used in containers
+
+	// Only block if absolutely no permissions are set
+	if mode&0o777 == 0 {
+		return fmt.Errorf("file must have some permissions set")
+	}
+
+	// Log but allow world-writable files (common in containers)
 	if mode&0o002 != 0 { // World-writable
 		logrus.Debugf("Creating world-writable file with permissions %o", mode)
-	}
-
-	// Check for dangerous permission combinations
-	if mode&0o001 != 0 && mode&0o004 != 0 { // World-executable and world-readable
-		// This might be dangerous for files containing sensitive data
-		logrus.Debugf("Creating world-readable and executable file with permissions %o", mode)
-	}
-
-	// Check for overly restrictive permissions that might cause issues
-	if mode&0o700 == 0 { // No owner permissions
-		return fmt.Errorf("file must have at least owner permissions (700)")
 	}
 
 	return nil
