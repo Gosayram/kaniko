@@ -12,3 +12,4 @@ audit-reports/*
 test-results/*
 *.backup
 **/**.bkp
+test-scenarios/
