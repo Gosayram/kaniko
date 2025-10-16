@@ -324,7 +324,8 @@ func tryCommonPaths(newCommand []string, commandName string) error {
 		return nil
 	}
 
-	commonPaths := []string{"/usr/bin", "/bin", "/usr/local/bin", "/opt/bin"}
+	// Get common paths from configuration instead of hardcoding
+	commonPaths := getCommonExecutablePaths()
 	for _, commonPath := range commonPaths {
 		fullPath := filepath.Join(commonPath, commandName)
 		if _, err := os.Stat(fullPath); err == nil {
@@ -432,10 +433,8 @@ func createCommand(config *v1.Config, buildArgs *dockerfile.BuildArgs, newComman
 
 // createShellCommand creates a shell command
 func createShellCommand(config *v1.Config, buildArgs *dockerfile.BuildArgs, commandStr string) (*exec.Cmd, error) {
-	shell := "/bin/sh"
-	if len(config.Shell) > 0 {
-		shell = config.Shell[0]
-	}
+	// Get shell path from configuration instead of hardcoding
+	shell := getShellPath(config)
 
 	// CRITICAL FIX: Resolve environment variables in shell commands
 	replacementEnvs := buildArgs.ReplacementEnvs(config.Env)
@@ -618,11 +617,8 @@ func discoverExecutablePaths() string {
 func scanFilesystemForExecutables() []string {
 	var executableDirs []string
 
-	// Start scanning from root directory to find all executable directories
-	// This ensures we don't miss any directories with executables
-	rootDirs := []string{
-		"/", // Start from root to find everything
-	}
+	// Get root directories from configuration instead of hardcoding
+	rootDirs := getRootDirectories()
 
 	for _, rootDir := range rootDirs {
 		dirs := scanDirectoryRecursively(rootDir, 0, 0) // No depth limit - scan everything
@@ -855,4 +851,73 @@ func getPathDirectories() []string {
 		return []string{}
 	}
 	return strings.Split(path, ":")
+}
+
+// getCommonExecutablePaths returns common executable paths from configuration
+func getCommonExecutablePaths() []string {
+	// Try to get paths from environment variable first
+	if customPaths := os.Getenv("KANIKO_COMMON_PATHS"); customPaths != "" {
+		return strings.Split(customPaths, ":")
+	}
+
+	// Try to get paths from kaniko configuration
+	if kConfig.KanikoDir != "" {
+		// Use kaniko directory as base for common paths
+		kanikoBase := kConfig.KanikoDir
+		return []string{
+			filepath.Join(kanikoBase, "bin"),
+			filepath.Join(kanikoBase, "usr", "bin"),
+			filepath.Join(kanikoBase, "usr", "local", "bin"),
+			filepath.Join(kanikoBase, "opt", "bin"),
+		}
+	}
+
+	// Fallback to system paths if no configuration available
+	return []string{"/usr/bin", "/bin", "/usr/local/bin", "/opt/bin"}
+}
+
+// getShellPath returns the shell path from configuration
+func getShellPath(config *v1.Config) string {
+	if len(config.Shell) > 0 {
+		return config.Shell[0]
+	}
+
+	// Try to get shell from environment
+	if shell := os.Getenv("KANIKO_SHELL"); shell != "" {
+		return shell
+	}
+
+	// Try to get shell from kaniko configuration
+	if kConfig.KanikoDir != "" {
+		// Look for shell in kaniko directory structure
+		possibleShells := []string{
+			filepath.Join(kConfig.KanikoDir, "bin", "sh"),
+			filepath.Join(kConfig.KanikoDir, "usr", "bin", "sh"),
+		}
+
+		for _, shell := range possibleShells {
+			if _, err := os.Stat(shell); err == nil {
+				return shell
+			}
+		}
+	}
+
+	// Fallback to system shell
+	return "/bin/sh"
+}
+
+// getRootDirectories returns root directories for scanning from configuration
+func getRootDirectories() []string {
+	// Try to get root directories from environment
+	if customRoots := os.Getenv("KANIKO_ROOT_DIRS"); customRoots != "" {
+		return strings.Split(customRoots, ":")
+	}
+
+	// Use kaniko directory as base if available
+	if kConfig.KanikoDir != "" {
+		return []string{kConfig.KanikoDir}
+	}
+
+	// Fallback to system root
+	return []string{"/"}
 }
