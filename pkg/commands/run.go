@@ -38,6 +38,8 @@ import (
 const (
 	// envKeyValueParts is the expected number of parts when splitting environment variable key=value
 	envKeyValueParts = 2
+	// maxScanDepth is the maximum depth for recursive directory scanning
+	maxScanDepth = 3
 )
 
 // RunCommand implements the Dockerfile RUN instruction
@@ -383,25 +385,6 @@ func isExecutable(filePath string) bool {
 	return info.Mode()&0o111 != 0
 }
 
-// tryCommonPaths tries to find command in common locations
-func tryCommonPaths(newCommand []string, commandName string) error {
-	if filepath.IsAbs(newCommand[0]) {
-		return nil
-	}
-
-	// Get common paths from configuration instead of hardcoding
-	commonPaths := getCommonExecutablePaths()
-	for _, commonPath := range commonPaths {
-		fullPath := filepath.Join(commonPath, commandName)
-		if _, err := os.Stat(fullPath); err == nil {
-			newCommand[0] = fullPath
-			logrus.Debugf("Found command in common path: %s", fullPath)
-			return nil
-		}
-	}
-	return fmt.Errorf("command not found in common paths: %s", commandName)
-}
-
 // validateCommand validates command arguments to prevent command injection
 func validateCommand(newCommand []string) error {
 	commandStr := strings.Join(newCommand, " ")
@@ -424,7 +407,7 @@ func hasShellOperators(commandStr string) bool {
 }
 
 // validateShellCommand validates shell commands
-func validateShellCommand(newCommand []string) error {
+func validateShellCommand(_ []string) error {
 	// Disabled dangerous path checking to prevent build failures
 	// All dangerous path validation has been removed
 	return nil
@@ -481,7 +464,8 @@ func createExecCommand(config *v1.Config, buildArgs *dockerfile.BuildArgs, newCo
 // createCommand creates the appropriate command type (shell or direct)
 func createCommand(config *v1.Config, buildArgs *dockerfile.BuildArgs, newCommand []string) (*exec.Cmd, error) {
 	// Check if the command is already a shell command (starts with shell path)
-	if len(newCommand) >= 2 && (newCommand[0] == "/bin/sh" || newCommand[0] == "/bin/bash" || strings.HasSuffix(newCommand[0], "/sh") || strings.HasSuffix(newCommand[0], "/bash")) {
+	if len(newCommand) >= 2 && (newCommand[0] == "/bin/sh" || newCommand[0] == "/bin/bash" ||
+		strings.HasSuffix(newCommand[0], "/sh") || strings.HasSuffix(newCommand[0], "/bash")) {
 		// This is already a shell command, execute it directly
 		return createDirectCommand(newCommand)
 	}
@@ -693,27 +677,12 @@ func discoverExecutablePathsOptimized() []string {
 	// Only scan up to depth 3 to avoid performance issues
 	rootDirs := getRootDirectories()
 	for _, rootDir := range rootDirs {
-		dirs := scanDirectoryRecursively(rootDir, 0, 3) // Limit depth to 3
+		dirs := scanDirectoryRecursively(rootDir, 0, maxScanDepth) // Limit depth to maxScanDepth
 		executableDirs = append(executableDirs, dirs...)
 	}
 
 	// Remove duplicates and return
 	return removeDuplicatePaths(executableDirs)
-}
-
-// scanFilesystemForExecutables recursively scans the filesystem for directories with executables
-func scanFilesystemForExecutables() []string {
-	var executableDirs []string
-
-	// Get root directories from configuration instead of hardcoding
-	rootDirs := getRootDirectories()
-
-	for _, rootDir := range rootDirs {
-		dirs := scanDirectoryRecursively(rootDir, 0, 0) // No depth limit - scan everything
-		executableDirs = append(executableDirs, dirs...)
-	}
-
-	return executableDirs
 }
 
 // scanDirectoryRecursively scans a directory and its subdirectories for executables

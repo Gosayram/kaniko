@@ -587,13 +587,6 @@ func validateLinkPath(link, dest string) error {
 	return checkLinkDestination(absLink, absDest, link, dest)
 }
 
-// checkDangerousPaths checks if the path points to dangerous system locations
-func checkDangerousPaths(absLink string) error {
-	// Disabled dangerous path checking to prevent build failures
-	// All dangerous path validation has been removed
-	return nil
-}
-
 // checkDirectoryTraversal checks for actual directory traversal attempts
 func checkDirectoryTraversal(absLink string) error {
 	if strings.Contains(absLink, "..") {
@@ -1870,10 +1863,9 @@ func validateSymlinkTarget(target, sourcePath string) error {
 				return fmt.Errorf("symlink target would escape source directory: %s -> %s", sourcePath, target)
 			}
 		}
-	} else {
-		// Disabled absolute symlink target validation to prevent build failures
-		// All dangerous path validation has been removed
 	}
+	// Disabled absolute symlink target validation to prevent build failures
+	// All dangerous path validation has been removed
 
 	return nil
 }
