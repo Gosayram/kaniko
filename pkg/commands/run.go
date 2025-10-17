@@ -553,12 +553,13 @@ func enhancePathEnvironment(env []string) []string {
 		env = append(env, "PATH="+strings.Join(standardPaths, ":"))
 		logrus.Debugf("Using standard PATH: %s", strings.Join(standardPaths, ":"))
 	} else {
-		// If PATH is already set, ensure it includes critical system paths
+		// CRITICAL FIX: If PATH is already set (from container), ensure it includes critical system paths
+		// This is especially important for Alpine Linux where apk is in /sbin
 		enhancedPath := ensureStandardPathsInString(currentPath)
 		for i, envVar := range env {
 			if strings.HasPrefix(envVar, "PATH=") {
 				env[i] = "PATH=" + enhancedPath
-				logrus.Debugf("Enhanced PATH: %s", enhancedPath)
+				logrus.Debugf("Enhanced container PATH: %s", enhancedPath)
 				break
 			}
 		}
@@ -789,7 +790,8 @@ func isSystemVariable(key string) bool {
 	systemVars := map[string]bool{
 		"HOME": true, "USER": true, "SHELL": true, "TERM": true,
 		"PWD": true, "OLDPWD": true, "PS1": true, "PS2": true,
-		"PATH": true, "LD_LIBRARY_PATH": true, "DYLD_LIBRARY_PATH": true,
+		// CRITICAL FIX: Don't exclude PATH - it's needed for finding executables in containers
+		"LD_LIBRARY_PATH": true, "DYLD_LIBRARY_PATH": true,
 		"TMPDIR": true, "TMP": true, "TEMP": true,
 	}
 	return systemVars[key]
