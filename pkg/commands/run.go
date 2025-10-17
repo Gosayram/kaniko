@@ -101,6 +101,12 @@ func setupEnvironmentVariables(cmd *exec.Cmd, config *v1.Config, buildArgs *dock
 		return err
 	}
 
+	// CRITICAL FIX: Ensure PATH from container is always included
+	// This is especially important for Alpine Linux where apk is in /sbin
+	if err := ensureContainerPath(cmd, config); err != nil {
+		return err
+	}
+
 	// Inherit host environment variables
 	if err := inheritHostEnvs(cmd); err != nil {
 		return err
@@ -667,6 +673,28 @@ func isSystemVariable(key string) bool {
 		"TMPDIR": true, "TMP": true, "TEMP": true,
 	}
 	return systemVars[key]
+}
+
+// ensureContainerPath ensures that PATH from the container is included
+func ensureContainerPath(cmd *exec.Cmd, _ *v1.Config) error {
+	// Check if PATH is already set in the command environment
+	pathSet := false
+	for _, envVar := range cmd.Env {
+		if strings.HasPrefix(envVar, "PATH=") {
+			pathSet = true
+			break
+		}
+	}
+
+	// If PATH is not set, add standard system paths
+	// This ensures that commands like apk (in /sbin) can be found
+	if !pathSet {
+		standardPaths := []string{"/usr/bin", "/bin", "/usr/local/bin", "/usr/sbin", "/sbin"}
+		cmd.Env = append(cmd.Env, "PATH="+strings.Join(standardPaths, ":"))
+		logrus.Debugf("Added standard PATH to command: %s", strings.Join(standardPaths, ":"))
+	}
+
+	return nil
 }
 
 // getPathDirectories returns the current PATH directories for debugging
