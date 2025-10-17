@@ -40,6 +40,8 @@ const (
 	envKeyValueParts = 2
 	// maxScanDepth is the maximum depth for recursive directory scanning
 	maxScanDepth = 3
+	// envVarParts is the expected number of parts when splitting environment variable key=value
+	envVarParts = 2
 )
 
 // RunCommand implements the Dockerfile RUN instruction
@@ -451,12 +453,22 @@ func createExecCommand(config *v1.Config, buildArgs *dockerfile.BuildArgs, newCo
 	// Configure command settings
 	configureCommandSettings(cmd, config)
 
-	// Set up environment
-	env, err := setupCommandEnvironmentVars(cmd, config, buildArgs)
-	if err != nil {
-		return nil, err
+	// CRITICAL FIX: Don't override environment variables set by setupEnvironmentVariables
+	// Only set up additional environment variables if cmd.Env is empty
+	if len(cmd.Env) == 0 {
+		env, err := setupCommandEnvironmentVars(cmd, config, buildArgs)
+		if err != nil {
+			return nil, err
+		}
+		cmd.Env = env
+	} else {
+		// Merge additional environment variables with existing ones
+		additionalEnv, err := setupCommandEnvironmentVars(cmd, config, buildArgs)
+		if err != nil {
+			return nil, err
+		}
+		cmd.Env = mergeEnvironmentVariables(cmd.Env, additionalEnv)
 	}
-	cmd.Env = env
 
 	return cmd, nil
 }
@@ -568,13 +580,22 @@ func enhancePathEnvironment(env []string) []string {
 		}
 	}
 
-	discoveredPaths := discoverExecutablePaths()
+	// CRITICAL FIX: Always discover paths to ensure we find all executables
+	discoveredPaths := discoverExecutablePathsOptimized()
 
 	if !pathSet {
-		env = append(env, "PATH="+discoveredPaths)
-		logrus.Debugf("Using discovered PATH: %s", discoveredPaths)
+		// If no PATH is set, use discovered paths plus common system paths
+		commonPaths := getCommonExecutablePaths()
+		allPaths := make([]string, 0, len(commonPaths)+len(discoveredPaths))
+		allPaths = append(allPaths, commonPaths...)
+		allPaths = append(allPaths, discoveredPaths...)
+		allPaths = removeDuplicatePaths(allPaths)
+		env = append(env, "PATH="+strings.Join(allPaths, ":"))
+		logrus.Debugf("Using discovered PATH: %s", strings.Join(allPaths, ":"))
 	} else {
-		enhancedPath := mergePaths(currentPath, discoveredPaths)
+		// Merge with existing PATH
+		discoveredPathsStr := strings.Join(discoveredPaths, ":")
+		enhancedPath := mergePaths(currentPath, discoveredPathsStr)
 		for i, envVar := range env {
 			if strings.HasPrefix(envVar, "PATH=") {
 				env[i] = "PATH=" + enhancedPath
@@ -650,14 +671,6 @@ func (r *RunCommand) CacheCommand(img v1.Image) DockerCommand {
 		cmd:       r.cmd,
 		extractFn: util.ExtractFile,
 	}
-}
-
-// discoverExecutablePaths automatically discovers all directories containing executables
-func discoverExecutablePaths() string {
-	// Fast discovery: use optimized scanning with common paths first
-	discoveredPaths := discoverExecutablePathsOptimized()
-
-	return strings.Join(discoveredPaths, ":")
 }
 
 // discoverExecutablePathsOptimized uses fast path discovery with common locations first
@@ -767,6 +780,39 @@ func removeDuplicatePaths(paths []string) []string {
 			keys[path] = true
 			result = append(result, path)
 		}
+	}
+
+	return result
+}
+
+// mergeEnvironmentVariables merges two environment variable slices, avoiding duplicates
+func mergeEnvironmentVariables(existing, additional []string) []string {
+	// Create a map of existing environment variables
+	envMap := make(map[string]string)
+	for _, env := range existing {
+		parts := strings.SplitN(env, "=", envVarParts)
+		if len(parts) == envVarParts {
+			envMap[parts[0]] = parts[1]
+		}
+	}
+
+	// Add additional environment variables, but don't override existing ones
+	for _, env := range additional {
+		parts := strings.SplitN(env, "=", envVarParts)
+		if len(parts) == envVarParts {
+			key := parts[0]
+			value := parts[1]
+			if _, exists := envMap[key]; !exists {
+				envMap[key] = value
+				logrus.Debugf("Added additional environment variable: %s=%s", key, value)
+			}
+		}
+	}
+
+	// Convert back to slice
+	var result []string
+	for key, value := range envMap {
+		result = append(result, key+"="+value)
 	}
 
 	return result
