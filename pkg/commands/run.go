@@ -281,8 +281,13 @@ func resolveCommandPath(newCommand, replacementEnvs []string) error {
 		return nil
 	}
 
-	// Strategy 3: Try common locations
-	return tryCommonPaths(newCommand, commandName)
+	// Strategy 3: Try common locations (enhanced)
+	if err := tryCommonPathsEnhanced(newCommand, commandName); err == nil {
+		return nil
+	}
+
+	// Strategy 4: Try system-wide search (fallback)
+	return trySystemWideSearch(newCommand, commandName)
 }
 
 // tryWithReplacementPaths tries to find command using replacement PATH
@@ -316,6 +321,66 @@ func tryWithReplacementPaths(newCommand []string, commandName string, replacemen
 		}
 	}
 	return fmt.Errorf("command not found: %s", commandName)
+}
+
+// tryCommonPathsEnhanced tries to find command in common locations with better error handling
+func tryCommonPathsEnhanced(newCommand []string, commandName string) error {
+	if filepath.IsAbs(newCommand[0]) {
+		return nil
+	}
+
+	// Get common paths from configuration instead of hardcoding
+	commonPaths := getCommonExecutablePaths()
+	for _, commonPath := range commonPaths {
+		fullPath := filepath.Join(commonPath, commandName)
+		if _, err := os.Stat(fullPath); err == nil {
+			// Check if file is executable
+			if isExecutable(fullPath) {
+				newCommand[0] = fullPath
+				logrus.Debugf("Found command in common path: %s", fullPath)
+				return nil
+			}
+		}
+	}
+	return fmt.Errorf("command not found in common paths: %s", commandName)
+}
+
+// trySystemWideSearch performs a system-wide search for the command
+func trySystemWideSearch(newCommand []string, commandName string) error {
+	if filepath.IsAbs(newCommand[0]) {
+		return nil
+	}
+
+	// Use the optimized discovery to find all executable paths
+	discoveredPaths := discoverExecutablePathsOptimized()
+
+	for _, path := range discoveredPaths {
+		if path == "" {
+			continue
+		}
+		fullPath := filepath.Join(path, commandName)
+		if _, err := os.Stat(fullPath); err == nil {
+			// Check if file is executable
+			if isExecutable(fullPath) {
+				newCommand[0] = fullPath
+				logrus.Debugf("Found command in system-wide search: %s", fullPath)
+				return nil
+			}
+		}
+	}
+
+	return fmt.Errorf("command not found in system-wide search: %s", commandName)
+}
+
+// isExecutable checks if a file is executable
+func isExecutable(filePath string) bool {
+	info, err := os.Stat(filePath)
+	if err != nil {
+		return false
+	}
+
+	// Check if file has executable permissions
+	return info.Mode()&0o111 != 0
 }
 
 // tryCommonPaths tries to find command in common locations
@@ -605,11 +670,35 @@ func (r *RunCommand) CacheCommand(img v1.Image) DockerCommand {
 
 // discoverExecutablePaths automatically discovers all directories containing executables
 func discoverExecutablePaths() string {
-	// Universal discovery: scan the entire filesystem for executable directories
-	// This is more robust than hardcoding specific paths
-	discoveredPaths := scanFilesystemForExecutables()
+	// Fast discovery: use optimized scanning with common paths first
+	discoveredPaths := discoverExecutablePathsOptimized()
 
 	return strings.Join(discoveredPaths, ":")
+}
+
+// discoverExecutablePathsOptimized uses fast path discovery with common locations first
+func discoverExecutablePathsOptimized() []string {
+	var executableDirs []string
+
+	// First, try common system paths (fastest)
+	commonPaths := getCommonExecutablePaths()
+	for _, path := range commonPaths {
+		if _, err := os.Stat(path); err == nil {
+			executableDirs = append(executableDirs, path)
+			logrus.Debugf("Found common executable path: %s", path)
+		}
+	}
+
+	// Then, do limited recursive scanning for additional paths
+	// Only scan up to depth 3 to avoid performance issues
+	rootDirs := getRootDirectories()
+	for _, rootDir := range rootDirs {
+		dirs := scanDirectoryRecursively(rootDir, 0, 3) // Limit depth to 3
+		executableDirs = append(executableDirs, dirs...)
+	}
+
+	// Remove duplicates and return
+	return removeDuplicatePaths(executableDirs)
 }
 
 // scanFilesystemForExecutables recursively scans the filesystem for directories with executables
@@ -697,6 +786,21 @@ func hasExecutables(dir string) bool {
 	}
 
 	return false
+}
+
+// removeDuplicatePaths removes duplicate paths from the slice
+func removeDuplicatePaths(paths []string) []string {
+	keys := make(map[string]bool)
+	var result []string
+
+	for _, path := range paths {
+		if !keys[path] {
+			keys[path] = true
+			result = append(result, path)
+		}
+	}
+
+	return result
 }
 
 // mergePaths intelligently merges two PATH strings, avoiding duplicates
@@ -871,8 +975,18 @@ func getCommonExecutablePaths() []string {
 		}
 	}
 
-	// Fallback to system paths if no configuration available
-	return []string{"/usr/bin", "/bin", "/usr/local/bin", "/opt/bin"}
+	// Enhanced fallback with comprehensive system paths
+	// This covers most Linux distributions including Ubuntu, Debian, Alpine, etc.
+	return []string{
+		"/usr/bin", "/bin", "/usr/local/bin", "/opt/bin",
+		"/usr/sbin", "/sbin", "/usr/local/sbin",
+		"/usr/libexec", "/usr/lib", "/lib",
+		"/usr/games", "/usr/local/games",
+		"/snap/bin", "/var/lib/snapd/snap/bin", // Snap packages
+		"/home/linuxbrew/.linuxbrew/bin", "/home/linuxbrew/.linuxbrew/sbin", // Homebrew on Linux
+		"/opt/homebrew/bin", "/opt/homebrew/sbin", // Homebrew on macOS
+		"/usr/share/bin", "/usr/share/sbin",
+	}
 }
 
 // getShellPath returns the shell path from configuration
