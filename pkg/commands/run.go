@@ -268,89 +268,18 @@ func prepareDirectCommand(cmdRun *instructions.RunCommand, replacementEnvs []str
 }
 
 // resolveCommandPath resolves the path to the executable
-func resolveCommandPath(newCommand, replacementEnvs []string) error {
+func resolveCommandPath(newCommand, _ []string) error {
 	commandName := newCommand[0]
 
-	// Strategy 1: Try to find command in current PATH
+	// Simple approach: just try to find command in current PATH
 	if path, err := exec.LookPath(commandName); err == nil {
 		newCommand[0] = path
 		logrus.Debugf("Found command in PATH: %s", path)
 		return nil
 	}
 
-	// Strategy 2: Try with PATH from replacement environments
-	if err := tryWithReplacementPaths(newCommand, commandName, replacementEnvs); err == nil {
-		return nil
-	}
-
-	// Strategy 3: Try common locations
-	return tryCommonPathsEnhanced(newCommand, commandName)
-}
-
-// tryWithReplacementPaths tries to find command using replacement PATH
-func tryWithReplacementPaths(newCommand []string, commandName string, replacementEnvs []string) error {
-	for _, v := range replacementEnvs {
-		entry := strings.SplitN(v, "=", 2) //nolint:mnd // 2 is the expected number of parts for env var
-		if entry[0] != "PATH" {
-			continue
-		}
-
-		// Temporarily set PATH to find the command
-		oldPath := os.Getenv("PATH")
-		if setErr := os.Setenv("PATH", entry[1]); setErr != nil {
-			logrus.Warnf("Failed to set PATH: %v", setErr)
-			continue
-		}
-
-		if path, err := exec.LookPath(commandName); err == nil {
-			newCommand[0] = path
-			logrus.Debugf("Found command with custom PATH: %s", path)
-			// Restore PATH
-			if setErr := os.Setenv("PATH", oldPath); setErr != nil {
-				logrus.Warnf("Failed to restore PATH: %v", setErr)
-			}
-			return nil
-		}
-
-		// Restore PATH
-		if setErr := os.Setenv("PATH", oldPath); setErr != nil {
-			logrus.Warnf("Failed to restore PATH: %v", setErr)
-		}
-	}
+	// If not found, return error - let the system handle it
 	return fmt.Errorf("command not found: %s", commandName)
-}
-
-// tryCommonPathsEnhanced tries to find command in common locations with better error handling
-func tryCommonPathsEnhanced(newCommand []string, commandName string) error {
-	if filepath.IsAbs(newCommand[0]) {
-		return nil
-	}
-
-	// Get common paths from configuration instead of hardcoding
-	commonPaths := getCommonExecutablePaths()
-	for _, commonPath := range commonPaths {
-		fullPath := filepath.Join(commonPath, commandName)
-		if _, err := os.Stat(fullPath); err == nil {
-			// Check if file is executable
-			if isExecutable(fullPath) {
-				newCommand[0] = fullPath
-				logrus.Debugf("Found command in common path: %s", fullPath)
-				return nil
-			}
-		}
-	}
-	return fmt.Errorf("command not found in common paths: %s", commandName)
-}
-
-// isExecutable checks if a file is executable
-func isExecutable(filePath string) bool {
-	info, err := os.Stat(filePath)
-	if err != nil {
-		return false
-	}
-
-	// Check if file has executable permissions
-	return info.Mode()&0o111 != 0
 }
 
 // validateCommand validates command arguments to prevent command injection
@@ -529,43 +458,9 @@ func setupCommandEnvironmentVars(_ *exec.Cmd, config *v1.Config, buildArgs *dock
 		return nil, errors.Wrap(err, "adding default HOME variable")
 	}
 
-	// Universal PATH resolution
-	env = enhancePathEnvironment(env)
+	// Simple approach: just return the environment as-is
+	// Let the system handle PATH resolution
 	return env, nil
-}
-
-// enhancePathEnvironment enhances PATH with discovered executable paths
-func enhancePathEnvironment(env []string) []string {
-	pathSet := false
-	currentPath := ""
-	for _, envVar := range env {
-		if strings.HasPrefix(envVar, "PATH=") {
-			pathSet = true
-			currentPath = strings.TrimPrefix(envVar, "PATH=")
-			break
-		}
-	}
-
-	if !pathSet {
-		// If no PATH is set, use standard system paths
-		// This ensures basic functionality without complex discovery
-		standardPaths := []string{"/usr/bin", "/bin", "/usr/local/bin", "/usr/sbin", "/sbin"}
-		env = append(env, "PATH="+strings.Join(standardPaths, ":"))
-		logrus.Debugf("Using standard PATH: %s", strings.Join(standardPaths, ":"))
-	} else {
-		// CRITICAL FIX: If PATH is already set (from container), ensure it includes critical system paths
-		// This is especially important for Alpine Linux where apk is in /sbin
-		enhancedPath := ensureStandardPathsInString(currentPath)
-		for i, envVar := range env {
-			if strings.HasPrefix(envVar, "PATH=") {
-				env[i] = "PATH=" + enhancedPath
-				logrus.Debugf("Enhanced container PATH: %s", enhancedPath)
-				break
-			}
-		}
-	}
-
-	return env
 }
 
 // waitAndCleanupProcess waits for the process to complete and cleans up child processes
@@ -631,29 +526,6 @@ func (r *RunCommand) CacheCommand(img v1.Image) DockerCommand {
 		cmd:       r.cmd,
 		extractFn: util.ExtractFile,
 	}
-}
-
-// ensureStandardPathsInString ensures standard system paths are in PATH string
-func ensureStandardPathsInString(pathStr string) string {
-	paths := strings.Split(pathStr, ":")
-	standardPaths := []string{"/usr/bin", "/bin", "/usr/local/bin", "/usr/sbin", "/sbin"}
-
-	// Check if standard paths are already present
-	for _, standardPath := range standardPaths {
-		found := false
-		for _, path := range paths {
-			if path == standardPath {
-				found = true
-				break
-			}
-		}
-		if !found {
-			paths = append(paths, standardPath)
-			logrus.Debugf("Added standard path: %s", standardPath)
-		}
-	}
-
-	return strings.Join(paths, ":")
 }
 
 // mergeEnvironmentVariables merges two environment variable slices, avoiding duplicates
@@ -804,32 +676,6 @@ func getPathDirectories() []string {
 		return []string{}
 	}
 	return strings.Split(path, ":")
-}
-
-// getCommonExecutablePaths returns common executable paths from configuration
-func getCommonExecutablePaths() []string {
-	// Try to get paths from environment variable first
-	if customPaths := os.Getenv("KANIKO_COMMON_PATHS"); customPaths != "" {
-		return strings.Split(customPaths, ":")
-	}
-
-	// Try to get paths from kaniko configuration
-	if kConfig.KanikoDir != "" {
-		// Use kaniko directory as base for common paths
-		kanikoBase := kConfig.KanikoDir
-		return []string{
-			filepath.Join(kanikoBase, "bin"),
-			filepath.Join(kanikoBase, "usr", "bin"),
-			filepath.Join(kanikoBase, "usr", "local", "bin"),
-			filepath.Join(kanikoBase, "opt", "bin"),
-		}
-	}
-
-	// Use standard system paths - let the system handle PATH resolution
-	return []string{
-		"/usr/bin", "/bin", "/usr/local/bin", "/opt/bin",
-		"/usr/sbin", "/sbin", "/usr/local/sbin",
-	}
 }
 
 // getShellPath returns the shell path from configuration

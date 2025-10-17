@@ -179,10 +179,11 @@ func initConfig(img partial.WithConfigFile, opts *config.KanikoOptions) (*v1.Con
 		imageConfig.Config.Env = constants.ScratchEnvVars
 	}
 
-	// CRITICAL FIX: Inherit environment variables from host system
-	// This ensures that CI/CD environment variables (like GitLab CI variables) are available
-	hostEnvs := os.Environ()
-	imageConfig.Config.Env = append(imageConfig.Config.Env, hostEnvs...)
+	// CRITICAL FIX: Don't inherit all host environment variables
+	// This can override PATH from the container, causing "command not found" errors
+	// Only inherit specific CI/CD variables if needed
+	// hostEnvs := os.Environ()
+	// imageConfig.Config.Env = append(imageConfig.Config.Env, hostEnvs...)
 
 	if opts == nil {
 		return imageConfig, nil
