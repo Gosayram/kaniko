@@ -35,13 +35,6 @@ import (
 	"github.com/Gosayram/kaniko/pkg/util"
 )
 
-const (
-	// envKeyValueParts is the expected number of parts when splitting environment variable key=value
-	envKeyValueParts = 2
-	// envVarParts is the expected number of parts when splitting environment variable key=value
-	envVarParts = 2
-)
-
 // RunCommand implements the Dockerfile RUN instruction
 // It handles executing shell commands during the build process
 type RunCommand struct {
@@ -107,68 +100,6 @@ func setupEnvironmentVariables(cmd *exec.Cmd, config *v1.Config, buildArgs *dock
 	return nil
 }
 
-// addReplacementEnvs adds replacement environment variables to command
-func addReplacementEnvs(cmd *exec.Cmd, replacementEnvs []string) error {
-	for _, env := range replacementEnvs {
-		parts := strings.SplitN(env, "=", envKeyValueParts)
-		if len(parts) != envKeyValueParts {
-			continue
-		}
-		key := parts[0]
-		value := parts[1]
-
-		// Always update environment variables to ensure they are current
-		// Remove existing entry if it exists
-		for i, cmdEnv := range cmd.Env {
-			if strings.HasPrefix(cmdEnv, key+"=") {
-				cmd.Env = append(cmd.Env[:i], cmd.Env[i+1:]...)
-				break
-			}
-		}
-		// Add the new environment variable
-		cmd.Env = append(cmd.Env, env)
-		logrus.Debugf("Added environment variable to command: %s=%s", key, value)
-	}
-	return nil
-}
-
-// inheritHostEnvs inherits host environment variables
-func inheritHostEnvs(cmd *exec.Cmd) error {
-	// CRITICAL FIX: Inherit all host environment variables
-	// This ensures that all environment variables from the host system are available
-	// This is especially important for CI/CD systems and package managers
-	hostEnvs := os.Environ()
-	for _, hostEnv := range hostEnvs {
-		parts := strings.SplitN(hostEnv, "=", envKeyValueParts)
-		if len(parts) != envKeyValueParts {
-			continue
-		}
-		key := parts[0]
-
-		// Skip system-specific variables that shouldn't be inherited
-		if isSystemVariable(key) {
-			continue
-		}
-
-		// Check if already set in command environment
-		found := false
-		for i, cmdEnv := range cmd.Env {
-			if strings.HasPrefix(cmdEnv, key+"=") {
-				// Update existing variable
-				cmd.Env[i] = hostEnv
-				found = true
-				break
-			}
-		}
-		if !found {
-			// Add new environment variable
-			cmd.Env = append(cmd.Env, hostEnv)
-		}
-		logrus.Debugf("Inherited host environment variable: %s", key)
-	}
-	return nil
-}
-
 func executeAndCleanupCommand(cmd *exec.Cmd) error {
 	logrus.Infof("Running: %s", cmd.Args)
 	if startErr := cmd.Start(); startErr != nil {
@@ -184,7 +115,6 @@ func executeAndCleanupCommand(cmd *exec.Cmd) error {
 		if strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "command not found") {
 			logrus.Warnf("Command not found: %s", commandStr)
 			logrus.Infof("This might be due to missing PATH or the command not being installed")
-			logrus.Infof("Available PATH: %s", strings.Join(getPathDirectories(), ":"))
 		}
 
 		// Check for permission issues
@@ -382,8 +312,13 @@ func createCommand(config *v1.Config, buildArgs *dockerfile.BuildArgs, newComman
 
 // createShellCommand creates a shell command
 func createShellCommand(config *v1.Config, buildArgs *dockerfile.BuildArgs, commandStr string) (*exec.Cmd, error) {
-	// Get shell path from configuration instead of hardcoding
-	shell := getShellPath(config)
+	// This is the default shell on Linux (same as original kaniko)
+	var shell []string
+	if len(config.Shell) > 0 {
+		shell = config.Shell
+	} else {
+		shell = append(shell, "/bin/sh", "-c")
+	}
 
 	// CRITICAL FIX: Resolve environment variables in shell commands
 	replacementEnvs := buildArgs.ReplacementEnvs(config.Env)
@@ -393,8 +328,8 @@ func createShellCommand(config *v1.Config, buildArgs *dockerfile.BuildArgs, comm
 	}
 
 	cmd := &exec.Cmd{
-		Path: shell,
-		Args: []string{shell, "-c", resolvedCommandStr},
+		Path: shell[0],
+		Args: append(shell, resolvedCommandStr),
 	}
 
 	// CRITICAL FIX: Set up environment variables for shell command
@@ -403,7 +338,7 @@ func createShellCommand(config *v1.Config, buildArgs *dockerfile.BuildArgs, comm
 		return nil, err
 	}
 
-	logrus.Debugf("Executing shell command: %s -c %s", shell, resolvedCommandStr)
+	logrus.Debugf("Executing shell command: %s -c %s", shell[0], resolvedCommandStr)
 	return cmd, nil
 }
 
@@ -529,39 +464,6 @@ func (r *RunCommand) CacheCommand(img v1.Image) DockerCommand {
 	}
 }
 
-// mergeEnvironmentVariables merges two environment variable slices, avoiding duplicates
-func mergeEnvironmentVariables(existing, additional []string) []string {
-	// Create a map of existing environment variables
-	envMap := make(map[string]string)
-	for _, env := range existing {
-		parts := strings.SplitN(env, "=", envVarParts)
-		if len(parts) == envVarParts {
-			envMap[parts[0]] = parts[1]
-		}
-	}
-
-	// Add additional environment variables, but don't override existing ones
-	for _, env := range additional {
-		parts := strings.SplitN(env, "=", envVarParts)
-		if len(parts) == envVarParts {
-			key := parts[0]
-			value := parts[1]
-			if _, exists := envMap[key]; !exists {
-				envMap[key] = value
-				logrus.Debugf("Added additional environment variable: %s=%s", key, value)
-			}
-		}
-	}
-
-	// Convert back to slice
-	var result []string
-	for key, value := range envMap {
-		result = append(result, key+"="+value)
-	}
-
-	return result
-}
-
 // MetadataOnly indicates whether this command only affects metadata (not filesystem)
 func (r *RunCommand) MetadataOnly() bool {
 	return false
@@ -658,18 +560,6 @@ func setWorkDirIfExists(workdir string) string {
 	return ""
 }
 
-// isSystemVariable checks if a variable is system-specific and shouldn't be inherited
-func isSystemVariable(key string) bool {
-	systemVars := map[string]bool{
-		"HOME": true, "USER": true, "SHELL": true, "TERM": true,
-		"PWD": true, "OLDPWD": true, "PS1": true, "PS2": true,
-		// CRITICAL FIX: Don't exclude PATH - it's needed for finding executables in containers
-		"LD_LIBRARY_PATH": true, "DYLD_LIBRARY_PATH": true,
-		"TMPDIR": true, "TMP": true, "TEMP": true,
-	}
-	return systemVars[key]
-}
-
 // setupShellEnvironment sets up environment variables for shell commands
 func setupShellEnvironment(cmd *exec.Cmd, config *v1.Config, buildArgs *dockerfile.BuildArgs) error {
 	// Get environment variables from container (same as original kaniko)
@@ -685,51 +575,4 @@ func setupShellEnvironment(cmd *exec.Cmd, config *v1.Config, buildArgs *dockerfi
 	cmd.Env = env
 
 	return nil
-}
-
-// ensureContainerPath ensures that PATH from the container is included
-func ensureContainerPath(cmd *exec.Cmd, _ *v1.Config) error {
-	// This function is no longer needed since we use the original kaniko approach
-	// where all environment variables (including PATH) are set directly from the container
-	// in setupEnvironmentVariables and setupShellEnvironment functions
-	return nil
-}
-
-// getPathDirectories returns the current PATH directories for debugging
-func getPathDirectories() []string {
-	path := os.Getenv("PATH")
-	if path == "" {
-		return []string{}
-	}
-	return strings.Split(path, ":")
-}
-
-// getShellPath returns the shell path from configuration
-func getShellPath(config *v1.Config) string {
-	if len(config.Shell) > 0 {
-		return config.Shell[0]
-	}
-
-	// Try to get shell from environment
-	if shell := os.Getenv("KANIKO_SHELL"); shell != "" {
-		return shell
-	}
-
-	// Try to get shell from kaniko configuration
-	if kConfig.KanikoDir != "" {
-		// Look for shell in kaniko directory structure
-		possibleShells := []string{
-			filepath.Join(kConfig.KanikoDir, "bin", "sh"),
-			filepath.Join(kConfig.KanikoDir, "usr", "bin", "sh"),
-		}
-
-		for _, shell := range possibleShells {
-			if _, err := os.Stat(shell); err == nil {
-				return shell
-			}
-		}
-	}
-
-	// Fallback to system shell
-	return "/bin/sh"
 }
