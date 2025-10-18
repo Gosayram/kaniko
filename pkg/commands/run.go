@@ -92,25 +92,17 @@ func runCommandInExec(config *v1.Config, buildArgs *dockerfile.BuildArgs, cmdRun
 
 // setupEnvironmentVariables configures environment variables for the command
 func setupEnvironmentVariables(cmd *exec.Cmd, config *v1.Config, buildArgs *dockerfile.BuildArgs) error {
-	// CRITICAL FIX: Ensure all environment variables are properly set in the command environment
-	// This ensures that PATH and other variables from previous RUN commands are preserved
+	// Get environment variables from container (same as original kaniko)
 	replacementEnvs := buildArgs.ReplacementEnvs(config.Env)
 
-	// Add replacement environment variables
-	if err := addReplacementEnvs(cmd, replacementEnvs); err != nil {
-		return err
+	// Add default HOME if needed
+	env, err := addDefaultHOME(config.User, replacementEnvs)
+	if err != nil {
+		return errors.Wrap(err, "adding default HOME variable")
 	}
 
-	// CRITICAL FIX: Ensure PATH from container is always included
-	// This ensures that all executables can be found regardless of base image
-	if err := ensureContainerPath(cmd, config); err != nil {
-		return err
-	}
-
-	// Inherit host environment variables
-	if err := inheritHostEnvs(cmd); err != nil {
-		return err
-	}
+	// Set all environment variables from container
+	cmd.Env = env
 
 	return nil
 }
@@ -355,6 +347,7 @@ func createExecCommand(config *v1.Config, buildArgs *dockerfile.BuildArgs, newCo
 	configureCommandSettings(cmd, config)
 
 	// CRITICAL FIX: Don't override environment variables set by setupEnvironmentVariables
+	// The environment variables are already properly set in setupEnvironmentVariables
 	// Only set up additional environment variables if cmd.Env is empty
 	if len(cmd.Env) == 0 {
 		env, err := setupCommandEnvironmentVars(cmd, config, buildArgs)
@@ -362,14 +355,9 @@ func createExecCommand(config *v1.Config, buildArgs *dockerfile.BuildArgs, newCo
 			return nil, err
 		}
 		cmd.Env = env
-	} else {
-		// Merge additional environment variables with existing ones
-		additionalEnv, err := setupCommandEnvironmentVars(cmd, config, buildArgs)
-		if err != nil {
-			return nil, err
-		}
-		cmd.Env = mergeEnvironmentVariables(cmd.Env, additionalEnv)
 	}
+	// If cmd.Env is not empty, it means setupEnvironmentVariables already set it correctly
+	// Don't override it with additional environment variables
 
 	return cmd, nil
 }
@@ -684,77 +672,26 @@ func isSystemVariable(key string) bool {
 
 // setupShellEnvironment sets up environment variables for shell commands
 func setupShellEnvironment(cmd *exec.Cmd, config *v1.Config, buildArgs *dockerfile.BuildArgs) error {
-	// Get replacement environment variables from container
+	// Get environment variables from container (same as original kaniko)
 	replacementEnvs := buildArgs.ReplacementEnvs(config.Env)
 
-	// Add all container environment variables to shell command
-	// This ensures that PATH and other variables from the container are available
-	for _, env := range replacementEnvs {
-		parts := strings.SplitN(env, "=", envKeyValueParts)
-		if len(parts) != envKeyValueParts {
-			continue
-		}
-		key := parts[0]
-		value := parts[1]
-
-		// Remove existing entry if it exists
-		for i, cmdEnv := range cmd.Env {
-			if strings.HasPrefix(cmdEnv, key+"=") {
-				cmd.Env = append(cmd.Env[:i], cmd.Env[i+1:]...)
-				break
-			}
-		}
-		// Add the new environment variable
-		cmd.Env = append(cmd.Env, env)
-		logrus.Debugf("Added container environment variable to shell command: %s=%s", key, value)
+	// Add default HOME if needed
+	env, err := addDefaultHOME(config.User, replacementEnvs)
+	if err != nil {
+		return errors.Wrap(err, "adding default HOME variable")
 	}
 
-	// CRITICAL FIX: Ensure PATH is always set for shell commands
-	// This works for all base images (Alpine, Ubuntu, CentOS, etc.)
-	pathSet := false
-	for _, envVar := range cmd.Env {
-		if strings.HasPrefix(envVar, "PATH=") {
-			pathSet = true
-			break
-		}
-	}
-
-	if !pathSet {
-		// Universal PATH that works for all Linux distributions
-		// This covers most common executable locations across different base images
-		universalPaths := []string{
-			"/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin",
-			"/sbin", "/bin", "/usr/games", "/usr/local/games",
-		}
-		cmd.Env = append(cmd.Env, "PATH="+strings.Join(universalPaths, ":"))
-		logrus.Debugf("Added universal PATH to shell command: %s", strings.Join(universalPaths, ":"))
-	}
+	// Set all environment variables from container
+	cmd.Env = env
 
 	return nil
 }
 
 // ensureContainerPath ensures that PATH from the container is included
 func ensureContainerPath(cmd *exec.Cmd, _ *v1.Config) error {
-	// Check if PATH is already set in the command environment
-	pathSet := false
-	for _, envVar := range cmd.Env {
-		if strings.HasPrefix(envVar, "PATH=") {
-			pathSet = true
-			break
-		}
-	}
-
-	// If PATH is not set, add universal system paths
-	// This ensures that commands can be found across all Linux distributions
-	if !pathSet {
-		universalPaths := []string{
-			"/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin",
-			"/sbin", "/bin", "/usr/games", "/usr/local/games",
-		}
-		cmd.Env = append(cmd.Env, "PATH="+strings.Join(universalPaths, ":"))
-		logrus.Debugf("Added universal PATH to command: %s", strings.Join(universalPaths, ":"))
-	}
-
+	// This function is no longer needed since we use the original kaniko approach
+	// where all environment variables (including PATH) are set directly from the container
+	// in setupEnvironmentVariables and setupShellEnvironment functions
 	return nil
 }
 
