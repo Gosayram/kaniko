@@ -102,7 +102,7 @@ func setupEnvironmentVariables(cmd *exec.Cmd, config *v1.Config, buildArgs *dock
 	}
 
 	// CRITICAL FIX: Ensure PATH from container is always included
-	// This is especially important for Alpine Linux where apk is in /sbin
+	// This ensures that all executables can be found regardless of base image
 	if err := ensureContainerPath(cmd, config); err != nil {
 		return err
 	}
@@ -408,6 +408,13 @@ func createShellCommand(config *v1.Config, buildArgs *dockerfile.BuildArgs, comm
 		Path: shell,
 		Args: []string{shell, "-c", resolvedCommandStr},
 	}
+
+	// CRITICAL FIX: Set up environment variables for shell command
+	// This ensures that PATH and other variables are available to the shell
+	if err := setupShellEnvironment(cmd, config, buildArgs); err != nil {
+		return nil, err
+	}
+
 	logrus.Debugf("Executing shell command: %s -c %s", shell, resolvedCommandStr)
 	return cmd, nil
 }
@@ -675,6 +682,57 @@ func isSystemVariable(key string) bool {
 	return systemVars[key]
 }
 
+// setupShellEnvironment sets up environment variables for shell commands
+func setupShellEnvironment(cmd *exec.Cmd, config *v1.Config, buildArgs *dockerfile.BuildArgs) error {
+	// Get replacement environment variables from container
+	replacementEnvs := buildArgs.ReplacementEnvs(config.Env)
+
+	// Add all container environment variables to shell command
+	// This ensures that PATH and other variables from the container are available
+	for _, env := range replacementEnvs {
+		parts := strings.SplitN(env, "=", envKeyValueParts)
+		if len(parts) != envKeyValueParts {
+			continue
+		}
+		key := parts[0]
+		value := parts[1]
+
+		// Remove existing entry if it exists
+		for i, cmdEnv := range cmd.Env {
+			if strings.HasPrefix(cmdEnv, key+"=") {
+				cmd.Env = append(cmd.Env[:i], cmd.Env[i+1:]...)
+				break
+			}
+		}
+		// Add the new environment variable
+		cmd.Env = append(cmd.Env, env)
+		logrus.Debugf("Added container environment variable to shell command: %s=%s", key, value)
+	}
+
+	// CRITICAL FIX: Ensure PATH is always set for shell commands
+	// This works for all base images (Alpine, Ubuntu, CentOS, etc.)
+	pathSet := false
+	for _, envVar := range cmd.Env {
+		if strings.HasPrefix(envVar, "PATH=") {
+			pathSet = true
+			break
+		}
+	}
+
+	if !pathSet {
+		// Universal PATH that works for all Linux distributions
+		// This covers most common executable locations across different base images
+		universalPaths := []string{
+			"/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin",
+			"/sbin", "/bin", "/usr/games", "/usr/local/games",
+		}
+		cmd.Env = append(cmd.Env, "PATH="+strings.Join(universalPaths, ":"))
+		logrus.Debugf("Added universal PATH to shell command: %s", strings.Join(universalPaths, ":"))
+	}
+
+	return nil
+}
+
 // ensureContainerPath ensures that PATH from the container is included
 func ensureContainerPath(cmd *exec.Cmd, _ *v1.Config) error {
 	// Check if PATH is already set in the command environment
@@ -686,12 +744,15 @@ func ensureContainerPath(cmd *exec.Cmd, _ *v1.Config) error {
 		}
 	}
 
-	// If PATH is not set, add standard system paths
-	// This ensures that commands like apk (in /sbin) can be found
+	// If PATH is not set, add universal system paths
+	// This ensures that commands can be found across all Linux distributions
 	if !pathSet {
-		standardPaths := []string{"/usr/bin", "/bin", "/usr/local/bin", "/usr/sbin", "/sbin"}
-		cmd.Env = append(cmd.Env, "PATH="+strings.Join(standardPaths, ":"))
-		logrus.Debugf("Added standard PATH to command: %s", strings.Join(standardPaths, ":"))
+		universalPaths := []string{
+			"/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin",
+			"/sbin", "/bin", "/usr/games", "/usr/local/games",
+		}
+		cmd.Env = append(cmd.Env, "PATH="+strings.Join(universalPaths, ":"))
+		logrus.Debugf("Added universal PATH to command: %s", strings.Join(universalPaths, ":"))
 	}
 
 	return nil
