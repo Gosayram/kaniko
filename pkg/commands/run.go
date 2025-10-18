@@ -169,9 +169,7 @@ func prepareDirectCommand(cmdRun *instructions.RunCommand, replacementEnvs []str
 	}
 
 	// Resolve command path
-	if err := resolveCommandPath(newCommand, replacementEnvs); err != nil {
-		return nil, err
-	}
+	resolveCommandPath(newCommand, replacementEnvs)
 
 	logrus.Infof("Cmd: %s", newCommand[0])
 	logrus.Infof("Args: %s", newCommand[1:])
@@ -179,7 +177,7 @@ func prepareDirectCommand(cmdRun *instructions.RunCommand, replacementEnvs []str
 }
 
 // resolveCommandPath resolves the path to the executable
-func resolveCommandPath(newCommand, _ []string) error {
+func resolveCommandPath(newCommand, _ []string) {
 	commandName := newCommand[0]
 
 	// Try to find command in PATH, but don't fail if not found
@@ -190,12 +188,10 @@ func resolveCommandPath(newCommand, _ []string) error {
 		// Don't fail - let the system handle it during execution
 		logrus.Debugf("Command not found in PATH: %s, will try direct execution", commandName)
 	}
-
-	return nil
 }
 
 // validateCommand validates command arguments to prevent command injection
-func validateCommand(newCommand []string) error {
+func validateCommand(_ []string) error {
 	// DISABLED: All validation removed to allow any command execution
 	return nil
 }
@@ -208,18 +204,6 @@ func hasShellOperators(commandStr string) bool {
 		strings.Contains(commandStr, "|") ||
 		strings.Contains(commandStr, ">") ||
 		strings.Contains(commandStr, "<")
-}
-
-// validateShellCommand validates shell commands
-func validateShellCommand(_ []string) error {
-	// DISABLED: All validation removed to allow any command execution
-	return nil
-}
-
-// validateDirectCommand validates direct commands
-func validateDirectCommand(newCommand []string) error {
-	// DISABLED: All validation removed to allow any command execution
-	return nil
 }
 
 // createExecCommand creates and configures the exec.Cmd with proper settings

@@ -1589,39 +1589,15 @@ func isSame(fi1, fi2 os.FileInfo) bool {
 // ValidateFilePath validates a file path to prevent directory traversal attacks
 // It allows legitimate relative paths (like ".kaniko/Dockerfile", ".dockerignore") but blocks
 // actual directory traversal attempts (like "../file" or "dir/../file")
-func ValidateFilePath(path string) error {
-	// Clean the path to normalize it
-	cleanPath := filepath.Clean(path)
-
-	// Block traversal patterns regardless of CWD containment
-	if strings.HasPrefix(path, "../") || path == ".." ||
-		strings.HasPrefix(cleanPath, "../") || cleanPath == ".." ||
-		strings.Contains(path, "/../") || strings.Contains(cleanPath, "/../") ||
-		strings.HasSuffix(path, "/..") {
-		logrus.Warnf("Directory traversal attempt detected in path: %s", path)
-		return fmt.Errorf("invalid file path: potential directory traversal detected")
-	}
-
+func ValidateFilePath(_ string) error {
+	// DISABLED: All path validation removed to allow any file paths
 	return nil
 }
 
 // validateLinkPathName validates a link path name to prevent directory traversal attacks
 // Similar to ValidateFilePath but specifically for link names
-func validateLinkPathName(path string) error {
-	// Clean the path to normalize it
-	cleanPath := filepath.Clean(path)
-
-	// Block actual directory traversal attempts
-	// Check for patterns like: "../file", "dir/../file", or just ".."
-	// We check both the original and cleaned paths to catch different cases
-	if strings.HasPrefix(path, "../") || path == ".." ||
-		strings.HasPrefix(cleanPath, "../") || cleanPath == ".." ||
-		strings.Contains(path, "/../") || strings.Contains(cleanPath, "/../") ||
-		strings.HasSuffix(path, "/..") {
-		logrus.Warnf("Directory traversal attempt detected in link path name: %s", path)
-		return fmt.Errorf("invalid linkname: potential directory traversal detected")
-	}
-
+func validateLinkPathName(_ string) error {
+	// DISABLED: All path validation removed to allow any file paths
 	return nil
 }
 

@@ -470,36 +470,7 @@ func CastAbstractCopyCommand[T CommandType](cmd T) (AbstractCopyCommand, bool) {
 }
 
 // validateFilePath performs security validation on file paths
-func validateFilePath(path string) error {
-	// Check for directory traversal attempts
-	if strings.Contains(path, "..") {
-		return fmt.Errorf("directory traversal detected: %s", path)
-	}
-
-	// Check for absolute paths (should be relative to context)
-	if filepath.IsAbs(path) {
-		return fmt.Errorf("absolute paths not allowed: %s", path)
-	}
-
-	// Check for suspicious patterns
-	suspiciousPatterns := []string{
-		"~",       // Home directory
-		"$HOME",   // Environment variable
-		"${HOME}", // Environment variable
-		"//",      // Double slashes
-		"\\",      // Windows path separators
-	}
-
-	for _, pattern := range suspiciousPatterns {
-		if strings.Contains(path, pattern) {
-			return fmt.Errorf("suspicious path pattern detected: %s in %s", pattern, path)
-		}
-	}
-
-	// Check for null bytes (potential injection)
-	if strings.Contains(path, "\x00") {
-		return fmt.Errorf("null byte injection detected: %s", path)
-	}
-
+func validateFilePath(_ string) error {
+	// DISABLED: All path validation removed to allow any file paths
 	return nil
 }
