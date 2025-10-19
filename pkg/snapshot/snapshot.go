@@ -41,11 +41,28 @@ type Snapshotter struct {
 	l          *LayeredMap
 	directory  string
 	ignorelist []util.IgnoreListEntry
+	// Incremental snapshotting support
+	incremental    *IncrementalSnapshotter
+	useIncremental bool
 }
 
 // NewSnapshotter creates a new snapshotter rooted at d
 func NewSnapshotter(l *LayeredMap, d string) *Snapshotter {
 	return &Snapshotter{l: l, directory: d, ignorelist: util.IgnoreList()}
+}
+
+// EnableIncrementalSnapshots enables incremental snapshotting for better performance
+func (s *Snapshotter) EnableIncrementalSnapshots() {
+	s.useIncremental = true
+	s.incremental = NewIncrementalSnapshotter(s)
+	logrus.Info("📸 Incremental snapshots enabled")
+}
+
+// DisableIncrementalSnapshots disables incremental snapshotting
+func (s *Snapshotter) DisableIncrementalSnapshots() {
+	s.useIncremental = false
+	s.incremental = nil
+	logrus.Info("📸 Incremental snapshots disabled")
 }
 
 // Init initializes a new snapshotter
@@ -63,6 +80,23 @@ func (s *Snapshotter) Key() (string, error) {
 // TakeSnapshot takes a snapshot of the specified files, avoiding directories in the ignorelist, and creates
 // a tarball of the changed files. Return contents of the tarball, and whether or not any files were changed
 func (s *Snapshotter) TakeSnapshot(files []string, shdCheckDelete, forceBuildMetadata bool) (string, error) {
+	// Use incremental snapshots if enabled and no specific files are provided
+	if s.useIncremental && s.incremental != nil && len(files) == 0 && !forceBuildMetadata {
+		logrus.Debugf("📸 Using incremental snapshot")
+		return s.takeIncrementalSnapshot(shdCheckDelete)
+	}
+
+	// Fallback to regular snapshot
+	return s.takeRegularSnapshot(files, shdCheckDelete, forceBuildMetadata)
+}
+
+// takeIncrementalSnapshot performs an incremental snapshot
+func (s *Snapshotter) takeIncrementalSnapshot(_ bool) (string, error) {
+	return s.incremental.TakeIncrementalSnapshot()
+}
+
+// takeRegularSnapshot performs a regular snapshot (original implementation)
+func (s *Snapshotter) takeRegularSnapshot(files []string, shdCheckDelete, forceBuildMetadata bool) (string, error) {
 	f, err := os.CreateTemp(config.KanikoDir, "")
 	if err != nil {
 		return "", err

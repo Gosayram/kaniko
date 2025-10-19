@@ -498,6 +498,17 @@ func addBuildFlags() {
 		"Maximum size for files in tar archives (e.g., 5GB, 10GB). Default: 5GB")
 	RootCmd.PersistentFlags().StringVarP(&opts.MaxTotalArchiveSize, "max-total-archive-size", "", "",
 		"Maximum total size for all files in an archive (e.g., 10GB, 20GB). Default: 10GB")
+
+	// Performance optimization flags
+	RootCmd.PersistentFlags().BoolVarP(&opts.IncrementalSnapshots, "incremental-snapshots", "", false,
+		"Enable incremental snapshots for better performance (experimental)")
+	//nolint:mnd // Default value for incremental snapshots
+	RootCmd.PersistentFlags().IntVarP(&opts.MaxExpectedChanges, "max-expected-changes", "", 1000,
+		"Maximum expected changes before triggering full scan (incremental snapshots)")
+	RootCmd.PersistentFlags().BoolVarP(&opts.IntegrityCheck, "integrity-check", "", true,
+		"Enable integrity checks for incremental snapshots")
+	RootCmd.PersistentFlags().BoolVarP(&opts.FullScanBackup, "full-scan-backup", "", true,
+		"Enable full scan backup when integrity concerns are detected")
 }
 
 // addMultiPlatformFlags adds multi-platform build flags

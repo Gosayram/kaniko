@@ -130,6 +130,12 @@ func newStageBuilder(
 	l := snapshot.NewLayeredMap(hasher)
 	snapshotter := snapshot.NewSnapshotter(l, config.RootDir)
 
+	// Enable incremental snapshots if configured
+	if opts.IncrementalSnapshots {
+		snapshotter.EnableIncrementalSnapshots()
+		logrus.Info("📸 Incremental snapshots enabled for this build")
+	}
+
 	digest, err := sourceImage.Digest()
 	if err != nil {
 		return nil, err

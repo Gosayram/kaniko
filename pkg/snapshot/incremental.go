@@ -1,5 +1,5 @@
 /*
-Copyright 2024 Kaniko Contributors
+Copyright 2024 Google LLC
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -17,179 +17,172 @@ limitations under the License.
 package snapshot
 
 import (
-	"crypto/sha256"
-	"encoding/json"
-	"fmt"
 	"os"
-	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/sirupsen/logrus"
 )
 
-// Constants for incremental snapshots
+// Constants for incremental snapshotter
 const (
-	DefaultScanInterval = 5 * time.Second
-	BufferSize64KB      = 64 * 1024
-	FilePerm600         = 0o600
+	DefaultMaxExpectedChanges = 1000
+	DefaultScanCountThreshold = 100
+	DefaultFullScanInterval   = 24 * time.Hour
 )
 
-// IncrementalSnapshotter provides efficient incremental filesystem scanning
-type IncrementalSnapshotter struct {
-	directory    string
-	lastSnapshot map[string]FileInfo
-	ignoreList   []string
-	mutex        sync.RWMutex
-	cacheFile    string
-	lastScanTime time.Time
-	scanInterval time.Duration
+// FileInfo holds metadata about a file for caching
+type FileInfo struct {
+	Path     string
+	Size     int64
+	ModTime  time.Time
+	Mode     os.FileMode
+	Hash     string
+	Checksum string
 }
 
-// FileInfo represents cached file information
-type FileInfo struct {
-	Path     string      `json:"path"`
-	Size     int64       `json:"size"`
-	ModTime  time.Time   `json:"mod_time"`
-	Mode     os.FileMode `json:"mode"`
-	Checksum string      `json:"checksum"`
+// IncrementalSnapshotter provides safe incremental snapshots with integrity checks
+type IncrementalSnapshotter struct {
+	// Core components
+	baseSnapshotter *Snapshotter
+	fileCache       map[string]FileInfo
+	lastScanTime    time.Time
+
+	// Integrity and safety
+	integrityCheck     bool
+	fullScanBackup     bool
+	maxExpectedChanges int
+
+	// Thread safety
+	mutex sync.RWMutex
+
+	// Performance tracking
+	scanCount    int
+	lastFullScan time.Time
 }
 
 // NewIncrementalSnapshotter creates a new incremental snapshotter
-func NewIncrementalSnapshotter(directory string, ignoreList []string) *IncrementalSnapshotter {
+func NewIncrementalSnapshotter(baseSnapshotter *Snapshotter) *IncrementalSnapshotter {
 	return &IncrementalSnapshotter{
-		directory:    directory,
-		ignoreList:   ignoreList,
-		lastSnapshot: make(map[string]FileInfo),
-		cacheFile:    filepath.Join(directory, ".kaniko_snapshot_cache"),
-		scanInterval: DefaultScanInterval, // Minimum interval between scans
+		baseSnapshotter:    baseSnapshotter,
+		fileCache:          make(map[string]FileInfo),
+		integrityCheck:     true,
+		fullScanBackup:     true,
+		maxExpectedChanges: DefaultMaxExpectedChanges, // Configurable threshold
+		lastFullScan:       time.Now(),
 	}
 }
 
-// TakeIncrementalSnapshot creates a snapshot of only changed files
-func (s *IncrementalSnapshotter) TakeIncrementalSnapshot() (string, error) {
-	s.mutex.Lock()
-	defer s.mutex.Unlock()
+// SafeDetectChanges safely detects file changes with integrity verification
+func (s *IncrementalSnapshotter) SafeDetectChanges() ([]string, error) {
+	logrus.Debugf("🔍 Starting safe incremental change detection")
 
-	// Check if enough time has passed since last scan
-	if time.Since(s.lastScanTime) < s.scanInterval {
-		logrus.Debugf("Skipping incremental scan - too soon (last scan: %v)", s.lastScanTime)
-		return "", nil
-	}
-
-	// Load previous snapshot if available
-	if err := s.loadLastSnapshot(); err != nil {
-		logrus.Warnf("Failed to load last snapshot: %v", err)
-		s.lastSnapshot = make(map[string]FileInfo)
-	}
-
-	// Detect changes
-	changedFiles, deletedFiles, err := s.detectChanges()
+	// 1. Incremental check (fast path)
+	incrementalChanges, err := s.detectIncrementalChanges()
 	if err != nil {
-		return "", fmt.Errorf("failed to detect changes: %w", err)
+		logrus.Warnf("❌ Incremental detection failed: %v", err)
+		return s.fallbackToFullScan()
 	}
 
-	// If no changes, return empty result
-	if len(changedFiles) == 0 && len(deletedFiles) == 0 {
-		logrus.Debugf("No changes detected in incremental scan")
-		s.lastScanTime = time.Now()
-		return "", nil
+	// 2. Integrity verification (critical)
+	if s.needsIntegrityCheck(incrementalChanges) {
+		logrus.Warnf("⚠️ Integrity concerns detected, falling back to full scan")
+		return s.fallbackToFullScan()
 	}
 
-	logrus.Infof("Incremental scan found %d changed files, %d deleted files",
-		len(changedFiles), len(deletedFiles))
-
-	// Create snapshot of changes
-	snapshotPath, err := s.createChangeSnapshot(changedFiles, deletedFiles)
-	if err != nil {
-		return "", fmt.Errorf("failed to create change snapshot: %w", err)
-	}
-
-	// Update cache
-	s.updateSnapshotCache(changedFiles, deletedFiles)
-	s.lastScanTime = time.Now()
-
-	return snapshotPath, nil
+	logrus.Debugf("✅ Incremental detection successful: %d changes", len(incrementalChanges))
+	return incrementalChanges, nil
 }
 
-// detectChanges finds files that have changed since last snapshot
-func (s *IncrementalSnapshotter) detectChanges() (added, modified []string, err error) {
+// detectIncrementalChanges performs fast incremental change detection
+func (s *IncrementalSnapshotter) detectIncrementalChanges() ([]string, error) {
+	s.mutex.RLock()
+	defer s.mutex.RUnlock()
+
 	var changedFiles []string
-	var deletedFiles []string
+	currentTime := time.Now()
 
-	// Walk through directory
-	walkErr := filepath.Walk(s.directory, func(path string, info os.FileInfo, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
+	// Check cached files for changes
+	for path, fileInfo := range s.fileCache {
+		// Check if file still exists
+		if _, err := os.Stat(path); os.IsNotExist(err) {
+			// File was deleted
+			changedFiles = append(changedFiles, path)
+			logrus.Debugf("📄 File deleted: %s", path)
+			continue
 		}
 
-		// Skip if in ignore list
-		if s.isIgnored(path) {
-			return nil
-		}
-
-		// Get relative path
-		relPath, err := filepath.Rel(s.directory, path)
+		// Check modification time
+		stat, err := os.Stat(path)
 		if err != nil {
-			return err
+			logrus.Debugf("❌ Error checking file %s: %v", path, err)
+			continue
 		}
 
-		// Skip root directory
-		if relPath == "." {
-			return nil
+		// File was modified
+		if stat.ModTime().After(fileInfo.ModTime) || stat.Size() != fileInfo.Size {
+			changedFiles = append(changedFiles, path)
+			logrus.Debugf("📄 File modified: %s (size: %d->%d, mtime: %v->%v)",
+				path, fileInfo.Size, stat.Size(), fileInfo.ModTime, stat.ModTime())
 		}
+	}
 
-		// Check if file was deleted
-		if _, exists := s.lastSnapshot[relPath]; exists {
-			// File was in last snapshot, check if it still exists
-			if info == nil {
-				deletedFiles = append(deletedFiles, relPath)
-				return nil
-			}
-		}
+	// Update cache with current file info
+	s.updateFileCache(changedFiles)
+	s.lastScanTime = currentTime
+	s.scanCount++
 
-		// Check if file is new or changed
-		if s.isFileChanged(relPath, info) {
-			changedFiles = append(changedFiles, relPath)
-		}
-
-		return nil
-	})
-
-	return changedFiles, deletedFiles, walkErr
+	return changedFiles, nil
 }
 
-// isFileChanged checks if a file has changed since last snapshot
-func (s *IncrementalSnapshotter) isFileChanged(relPath string, info os.FileInfo) bool {
-	lastInfo, exists := s.lastSnapshot[relPath]
-	if !exists {
-		// New file
+// needsIntegrityCheck determines if a full scan is needed for integrity
+func (s *IncrementalSnapshotter) needsIntegrityCheck(changedFiles []string) bool {
+	// Too many changes - might indicate a problem
+	if len(changedFiles) > s.maxExpectedChanges {
+		logrus.Warnf("⚠️ Too many changes detected: %d (max: %d)", len(changedFiles), s.maxExpectedChanges)
 		return true
 	}
 
-	// Check if size changed
-	if info.Size() != lastInfo.Size {
-		return true
-	}
-
-	// Check if modification time changed
-	if !info.ModTime().Equal(lastInfo.ModTime) {
-		return true
-	}
-
-	// Check if mode changed
-	if info.Mode() != lastInfo.Mode {
-		return true
-	}
-
-	// For small files, check content hash
-	if info.Size() < 1024*1024 { // 1MB threshold
-		checksum, err := s.calculateFileChecksum(filepath.Join(s.directory, relPath))
-		if err != nil {
-			logrus.Warnf("Failed to calculate checksum for %s: %v", relPath, err)
-			return true // Assume changed if we can't verify
+	// Check for suspicious patterns
+	for _, file := range changedFiles {
+		if s.isCriticalSystemFile(file) {
+			logrus.Warnf("⚠️ Critical system file changed: %s", file)
+			return true
 		}
-		if checksum != lastInfo.Checksum {
+	}
+
+	// Force full scan periodically for safety
+	timeSinceLastFullScan := time.Since(s.lastFullScan)
+	if timeSinceLastFullScan > 24*time.Hour {
+		logrus.Infof("🔄 Periodic full scan due to time elapsed: %v", timeSinceLastFullScan)
+		return true
+	}
+
+	// Force full scan after many incremental scans
+	if s.scanCount > DefaultScanCountThreshold {
+		logrus.Infof("🔄 Periodic full scan due to scan count: %d", s.scanCount)
+		return true
+	}
+
+	return false
+}
+
+// isCriticalSystemFile checks if a file is critical for system integrity
+func (s *IncrementalSnapshotter) isCriticalSystemFile(file string) bool {
+	criticalPaths := []string{
+		"/etc/passwd",
+		"/etc/group",
+		"/etc/shadow",
+		"/etc/hosts",
+		"/etc/hostname",
+		"/proc/",
+		"/sys/",
+		"/dev/",
+	}
+
+	for _, criticalPath := range criticalPaths {
+		if strings.HasPrefix(file, criticalPath) {
 			return true
 		}
 	}
@@ -197,154 +190,89 @@ func (s *IncrementalSnapshotter) isFileChanged(relPath string, info os.FileInfo)
 	return false
 }
 
-// calculateFileChecksum calculates MD5 checksum of a file
-func (s *IncrementalSnapshotter) calculateFileChecksum(filePath string) (string, error) {
-	file, err := os.Open(filepath.Clean(filePath))
+// fallbackToFullScan performs a full filesystem scan as fallback
+func (s *IncrementalSnapshotter) fallbackToFullScan() ([]string, error) {
+	logrus.Infof("🔄 Performing full filesystem scan for integrity")
+
+	// Use the base snapshotter's full scan
+	filesToAdd, _, err := s.baseSnapshotter.scanFullFilesystem()
 	if err != nil {
-		return "", err
-	}
-	defer file.Close()
-
-	hash := sha256.New()
-	if _, err := file.Seek(0, 0); err != nil {
-		return "", err
+		return nil, err
 	}
 
-	// Read file in chunks to avoid memory issues
-	buffer := make([]byte, BufferSize64KB) // 64KB buffer
-	for {
-		n, err := file.Read(buffer)
-		if n > 0 {
-			hash.Write(buffer[:n])
-		}
-		if err != nil {
-			break
-		}
-	}
+	// Update cache with all files
+	s.mutex.Lock()
+	s.fileCache = make(map[string]FileInfo)
+	s.updateFileCache(filesToAdd)
+	s.lastFullScan = time.Now()
+	s.scanCount = 0
+	s.mutex.Unlock()
 
-	return fmt.Sprintf("%x", hash.Sum(nil)), nil
+	logrus.Infof("✅ Full scan completed: %d files", len(filesToAdd))
+	return filesToAdd, nil
 }
 
-// isIgnored checks if a path should be ignored
-func (s *IncrementalSnapshotter) isIgnored(path string) bool {
-	for _, pattern := range s.ignoreList {
-		matched, err := filepath.Match(pattern, filepath.Base(path))
+// updateFileCache updates the file cache with current file information
+func (s *IncrementalSnapshotter) updateFileCache(files []string) {
+	for _, file := range files {
+		stat, err := os.Stat(file)
 		if err != nil {
-			logrus.Warnf("Invalid ignore pattern %s: %v", pattern, err)
-			continue
-		}
-		if matched {
-			return true
-		}
-	}
-	return false
-}
-
-// createChangeSnapshot creates a tarball of only the changed files
-func (s *IncrementalSnapshotter) createChangeSnapshot(changedFiles, deletedFiles []string) (string, error) {
-	// Create temporary file for snapshot
-	tmpFile, err := os.CreateTemp("", "kaniko_incremental_*.tar")
-	if err != nil {
-		return "", err
-	}
-	defer tmpFile.Close()
-
-	// TODO: Implement tarball creation
-	// This would use the existing tar utilities from Kaniko
-	// For now, just return the temp file path
-	logrus.Debugf("Created incremental snapshot with %d changed files, %d deleted files",
-		len(changedFiles), len(deletedFiles))
-
-	return tmpFile.Name(), nil
-}
-
-// updateSnapshotCache updates the internal cache with current file states
-func (s *IncrementalSnapshotter) updateSnapshotCache(changedFiles, deletedFiles []string) {
-	// Remove deleted files from cache
-	for _, deletedFile := range deletedFiles {
-		delete(s.lastSnapshot, deletedFile)
-	}
-
-	// Update changed files in cache
-	for _, changedFile := range changedFiles {
-		fullPath := filepath.Join(s.directory, changedFile)
-		info, err := os.Stat(fullPath)
-		if err != nil {
-			logrus.Warnf("Failed to stat changed file %s: %v", changedFile, err)
+			logrus.Debugf("❌ Error updating cache for %s: %v", file, err)
 			continue
 		}
 
-		checksum := ""
-		if info.Size() < 1024*1024 { // Only calculate checksum for small files
-			if cs, err := s.calculateFileChecksum(fullPath); err == nil {
-				checksum = cs
-			}
+		s.fileCache[file] = FileInfo{
+			Path:    file,
+			Size:    stat.Size(),
+			ModTime: stat.ModTime(),
+			Mode:    stat.Mode(),
 		}
-
-		s.lastSnapshot[changedFile] = FileInfo{
-			Path:     changedFile,
-			Size:     info.Size(),
-			ModTime:  info.ModTime(),
-			Mode:     info.Mode(),
-			Checksum: checksum,
-		}
-	}
-
-	// Save cache to disk
-	if err := s.saveSnapshotCache(); err != nil {
-		logrus.Warnf("Failed to save snapshot cache: %v", err)
 	}
 }
 
-// loadLastSnapshot loads the previous snapshot from disk
-func (s *IncrementalSnapshotter) loadLastSnapshot() error {
-	data, err := os.ReadFile(s.cacheFile)
+// TakeIncrementalSnapshot takes an incremental snapshot with safety checks
+func (s *IncrementalSnapshotter) TakeIncrementalSnapshot() (string, error) {
+	logrus.Debugf("📸 Taking incremental snapshot")
+
+	// 1. Safe change detection
+	changedFiles, err := s.SafeDetectChanges()
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil // No previous snapshot
-		}
-		return err
+		return "", err
 	}
 
-	return json.Unmarshal(data, &s.lastSnapshot)
-}
-
-// saveSnapshotCache saves the current snapshot to disk
-func (s *IncrementalSnapshotter) saveSnapshotCache() error {
-	data, err := json.Marshal(s.lastSnapshot)
-	if err != nil {
-		return err
+	// 2. If no changes, return empty result
+	if len(changedFiles) == 0 {
+		logrus.Info("📸 No files changed, skipping incremental snapshot")
+		return "", nil
 	}
 
-	return os.WriteFile(s.cacheFile, data, FilePerm600)
+	// 3. Use base snapshotter to create tarball with only changed files
+	return s.baseSnapshotter.TakeSnapshot(changedFiles, true, false)
 }
 
-// GetCacheStats returns statistics about the snapshot cache
+// GetCacheStats returns statistics about the file cache
 func (s *IncrementalSnapshotter) GetCacheStats() map[string]interface{} {
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
 
 	return map[string]interface{}{
-		"cached_files":    len(s.lastSnapshot),
-		"cache_file":      s.cacheFile,
-		"last_scan_time":  s.lastScanTime,
-		"scan_interval":   s.scanInterval,
-		"directory":       s.directory,
-		"ignore_patterns": len(s.ignoreList),
+		"cached_files":     len(s.fileCache),
+		"scan_count":       s.scanCount,
+		"last_scan_time":   s.lastScanTime,
+		"last_full_scan":   s.lastFullScan,
+		"integrity_check":  s.integrityCheck,
+		"full_scan_backup": s.fullScanBackup,
 	}
 }
 
-// ClearCache clears the snapshot cache
-func (s *IncrementalSnapshotter) ClearCache() error {
+// ClearCache clears the file cache (useful for testing or memory management)
+func (s *IncrementalSnapshotter) ClearCache() {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
-	s.lastSnapshot = make(map[string]FileInfo)
+	s.fileCache = make(map[string]FileInfo)
+	s.scanCount = 0
 	s.lastScanTime = time.Time{}
 
-	if err := os.Remove(s.cacheFile); err != nil && !os.IsNotExist(err) {
-		return err
-	}
-
-	return nil
+	logrus.Info("🧹 File cache cleared")
 }

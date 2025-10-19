@@ -114,6 +114,12 @@ type KanikoOptions struct {
 	MaxTarFileSize      string // --max-tar-file-size=5GB
 	MaxTotalArchiveSize string // --max-total-archive-size=10GB
 
+	// Performance optimization options
+	IncrementalSnapshots bool // --incremental-snapshots=true
+	MaxExpectedChanges   int  // --max-expected-changes=1000
+	IntegrityCheck       bool // --integrity-check=true
+	FullScanBackup       bool // --full-scan-backup=true
+
 	// Debug options for enhanced debugging and development
 	DebugOptions
 }
