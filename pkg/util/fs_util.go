@@ -226,13 +226,19 @@ func GetFSFromLayers(root string, layers []v1.Layer, opts ...FSOpt) ([]string, e
 
 func extractLayers(root string, layers []v1.Layer, cfg *FSConfig) ([]string, error) {
 	var extractedFiles []string
+	logrus.Debugf("Starting extraction of %d layers to %s", len(layers), root)
+
 	for i, l := range layers {
+		logrus.Debugf("Extracting layer %d/%d", i+1, len(layers))
 		layerFiles, err := extractSingleLayer(root, l, i, cfg)
 		if err != nil {
 			return nil, err
 		}
+		logrus.Debugf("Layer %d extracted %d files", i+1, len(layerFiles))
 		extractedFiles = append(extractedFiles, layerFiles...)
 	}
+
+	logrus.Debugf("Total extracted %d files from %d layers", len(extractedFiles), len(layers))
 	return extractedFiles, nil
 }
 
@@ -241,7 +247,7 @@ func extractSingleLayer(root string, layer v1.Layer, index int, cfg *FSConfig) (
 	if mt, err := layer.MediaType(); err == nil {
 		mediaType = string(mt)
 	}
-	logrus.Tracef("Extracting layer %d of media type %s", index, mediaType)
+	logrus.Debugf("Extracting layer %d of media type %s to %s", index, mediaType, root)
 
 	r, err := layer.Uncompressed()
 	if err != nil {
@@ -255,6 +261,7 @@ func extractSingleLayer(root string, layer v1.Layer, index int, cfg *FSConfig) (
 func extractTarEntries(root string, r io.ReadCloser, cfg *FSConfig) ([]string, error) {
 	var extractedFiles []string
 	tr := tar.NewReader(r)
+	entryCount := 0
 
 	for {
 		hdr, err := tr.Next()
@@ -265,6 +272,7 @@ func extractTarEntries(root string, r io.ReadCloser, cfg *FSConfig) ([]string, e
 			return nil, err
 		}
 
+		entryCount++
 		cleanedName := filepath.Clean(hdr.Name)
 		path := filepath.Join(root, cleanedName)
 
@@ -287,6 +295,7 @@ func extractTarEntries(root string, r io.ReadCloser, cfg *FSConfig) ([]string, e
 		extractedFiles = append(extractedFiles, path)
 	}
 
+	logrus.Debugf("Processed %d tar entries, extracted %d files", entryCount, len(extractedFiles))
 	return extractedFiles, nil
 }
 
@@ -413,10 +422,13 @@ func ExtractFile(dest string, hdr *tar.Header, cleanedName string, tr io.Reader)
 		return err
 	}
 
+	// Log what the image is trying to extract
+	logrus.Debugf("Image attempting to extract: %s (type: %c)", path, hdr.Typeflag)
+
 	// Skip system directories that are read-only or should not be modified
 	for _, sysDir := range SystemDirectories {
 		if strings.HasPrefix(abs, sysDir) {
-			logrus.Debugf("Skipping system directory %s", path)
+			logrus.Debugf("Skipping system directory %s (protected by SystemDirectories)", path)
 			return nil
 		}
 	}
@@ -429,14 +441,19 @@ func ExtractFile(dest string, hdr *tar.Header, cleanedName string, tr io.Reader)
 
 	switch hdr.Typeflag {
 	case tar.TypeReg:
+		logrus.Debugf("Extracting regular file: %s (uid:%d, gid:%d, mode:%o)", path, uid, gid, mode)
 		return extractRegularFile(path, mode, uid, gid, tr, hdr)
 	case tar.TypeDir:
+		logrus.Debugf("Extracting directory: %s (uid:%d, gid:%d, mode:%o)", path, uid, gid, mode)
 		return extractDirectory(path, mode, uid, gid)
 	case tar.TypeLink:
+		logrus.Debugf("Extracting hardlink: %s -> %s", path, hdr.Linkname)
 		return extractHardLink(dest, path, hdr)
 	case tar.TypeSymlink:
+		logrus.Debugf("Extracting symlink: %s -> %s", path, hdr.Linkname)
 		return extractSymlink(path, hdr)
 	default:
+		logrus.Debugf("Skipping unknown file type %c: %s", hdr.Typeflag, path)
 		return nil
 	}
 }
@@ -1241,11 +1258,14 @@ func setFilePermissions(path string, mode os.FileMode, uid, gid int) error {
 	if fi, err := os.Lstat(path); err == nil {
 		if stat, ok := fi.Sys().(*syscall.Stat_t); ok {
 			if int(stat.Uid) != uid || int(stat.Gid) != gid {
+				logrus.Debugf("Changing ownership of %s from %d:%d to %d:%d", path, stat.Uid, stat.Gid, uid, gid)
 				if chownErr := os.Chown(path, uid, gid); chownErr != nil {
 					// Log warning but continue - some system files may be protected
 					logrus.Warnf("Could not chown %s: %v, continuing anyway", path, chownErr)
 					return nil
 				}
+			} else {
+				logrus.Debugf("Ownership of %s already correct (%d:%d)", path, uid, gid)
 			}
 		}
 	} else {
