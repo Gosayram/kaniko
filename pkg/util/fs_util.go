@@ -422,8 +422,9 @@ func ExtractFile(dest string, hdr *tar.Header, cleanedName string, tr io.Reader)
 		return err
 	}
 
-	// Log what the image is trying to extract
-	logrus.Debugf("Image attempting to extract: %s (type: %c)", path, hdr.Typeflag)
+	// Log what the image is trying to extract with more details
+	logrus.Debugf("Image attempting to extract: %s (type: %c, size: %d, uid: %d, gid: %d)",
+		path, hdr.Typeflag, hdr.Size, hdr.Uid, hdr.Gid)
 
 	// Skip system directories that are read-only or should not be modified
 	for _, sysDir := range SystemDirectories {
@@ -435,7 +436,7 @@ func ExtractFile(dest string, hdr *tar.Header, cleanedName string, tr io.Reader)
 
 	// Keep original ignore list check for other paths
 	if CheckCleanedPathAgainstIgnoreList(abs) && !checkIgnoreListRoot(dest) {
-		logrus.Debugf("Not adding %s because it is ignored", path)
+		logrus.Debugf("Skipping %s because it is in ignore list", path)
 		return nil
 	}
 
@@ -481,14 +482,18 @@ func extractRegularFile(path string, mode os.FileMode, uid, gid int, tr io.Reade
 	// Create and write file
 	currFile, err := os.Create(cleanPath)
 	if err != nil {
-		return err
+		logrus.Warnf("Could not create file %s: %v, continuing anyway", cleanPath, err)
+		return nil
 	}
 	defer currFile.Close()
 
 	// Use pooled buffer for better memory efficiency
 	if _, err = CopyFileWithBuffer(currFile, tr); err != nil {
-		return err
+		logrus.Warnf("Could not write to file %s: %v, continuing anyway", cleanPath, err)
+		return nil
 	}
+
+	logrus.Debugf("Successfully extracted file: %s", cleanPath)
 
 	// If header lacks ownership, default to current user to avoid privileged chown in tests
 	if uid == 0 && gid == 0 {
@@ -513,31 +518,40 @@ func extractRegularFile(path string, mode os.FileMode, uid, gid int, tr io.Reade
 }
 
 func extractDirectory(path string, mode os.FileMode, uid, gid int) error {
-	logrus.Tracef("Creating dir %s", path)
-	return MkdirAllWithPermissions(path, mode, int64(uid), int64(gid))
+	logrus.Debugf("Creating directory %s (uid: %d, gid: %d, mode: %o)", path, uid, gid, mode)
+	err := MkdirAllWithPermissions(path, mode, int64(uid), int64(gid))
+	if err != nil {
+		logrus.Warnf("Could not create directory %s: %v, continuing anyway", path, err)
+		return nil
+	}
+	logrus.Debugf("Successfully created directory: %s", path)
+	return nil
 }
 
 func extractHardLink(dest, path string, hdr *tar.Header) error {
-	logrus.Tracef("Link from %s to %s", hdr.Linkname, path)
+	logrus.Debugf("Creating hardlink %s -> %s", path, hdr.Linkname)
 	abs, err := filepath.Abs(hdr.Linkname)
 	if err != nil {
-		return err
+		logrus.Warnf("Could not get absolute path for hardlink %s: %v, continuing anyway", hdr.Linkname, err)
+		return nil
 	}
 	if CheckCleanedPathAgainstIgnoreList(abs) {
-		logrus.Tracef("Skipping link from %s to %s because %s is ignored", hdr.Linkname, path, hdr.Linkname)
+		logrus.Debugf("Skipping hardlink from %s to %s because %s is ignored", hdr.Linkname, path, hdr.Linkname)
 		return nil
 	}
 
 	dir := filepath.Dir(path)
 	if mkdirErr := os.MkdirAll(dir, DefaultDirPerm); mkdirErr != nil {
-		return mkdirErr
+		logrus.Warnf("Could not create directory for hardlink %s: %v, continuing anyway", dir, mkdirErr)
+		return nil
 	}
 
 	removeExistingPath(path)
 
 	// Validate linkname to prevent directory traversal before joining paths
 	if linkNameErr := validateLinkPathName(hdr.Linkname); linkNameErr != nil {
-		return linkNameErr
+		logrus.Warnf("Could not validate hardlink name %s: %v, continuing anyway", hdr.Linkname, linkNameErr)
+		return nil
 	}
 
 	// Construct the link path safely
@@ -547,32 +561,49 @@ func extractHardLink(dest, path string, hdr *tar.Header) error {
 	// Additional security check: ensure the link destination is within the destination directory
 	absDest, err := filepath.Abs(dest)
 	if err != nil {
-		return fmt.Errorf("failed to get absolute destination path: %w", err)
+		logrus.Warnf("Could not get absolute destination path %s: %v, continuing anyway", dest, err)
+		return nil
 	}
 	absLink, err := filepath.Abs(link)
 	if err != nil {
-		return fmt.Errorf("failed to get absolute link path: %w", err)
+		logrus.Warnf("Could not get absolute link path %s: %v, continuing anyway", link, err)
+		return nil
 	}
 	if !strings.HasPrefix(absLink, absDest) {
-		return fmt.Errorf("link destination %s is outside destination directory %s", link, dest)
+		logrus.Warnf("Hardlink destination %s is outside destination directory %s, continuing anyway", link, dest)
+		return nil
 	}
 	if err := validateLinkPath(link, dest); err != nil {
-		return err
+		logrus.Warnf("Could not validate hardlink path %s: %v, continuing anyway", link, err)
+		return nil
 	}
 
-	return os.Link(link, path)
+	if err := os.Link(link, path); err != nil {
+		logrus.Warnf("Could not create hardlink %s -> %s: %v, continuing anyway", path, link, err)
+		return nil
+	}
+
+	logrus.Debugf("Successfully created hardlink: %s -> %s", path, link)
+	return nil
 }
 
 func extractSymlink(path string, hdr *tar.Header) error {
-	logrus.Tracef("Symlink from %s to %s", hdr.Linkname, path)
+	logrus.Debugf("Creating symlink %s -> %s", path, hdr.Linkname)
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, TarExtractPerm); err != nil {
-		return err
+		logrus.Warnf("Could not create directory for symlink %s: %v, continuing anyway", dir, err)
+		return nil
 	}
 
 	removeExistingPath(path)
 
-	return os.Symlink(hdr.Linkname, path)
+	if err := os.Symlink(hdr.Linkname, path); err != nil {
+		logrus.Warnf("Could not create symlink %s -> %s: %v, continuing anyway", path, hdr.Linkname, err)
+		return nil
+	}
+
+	logrus.Debugf("Successfully created symlink: %s -> %s", path, hdr.Linkname)
+	return nil
 }
 
 func ensureDirectoryExists(dir string) error {

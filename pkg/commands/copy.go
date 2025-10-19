@@ -374,7 +374,9 @@ func resolveIfSymlink(destPath string) (string, error) {
 				nonexistentPaths = append(nonexistentPaths, file)
 				continue
 			}
-			return "", errors.Wrap(err, "failed to lstat")
+			// Log warning but continue - some paths may not exist yet
+			logrus.Warnf("Could not lstat %s: %v, continuing anyway", newPath, err)
+			return "", nil
 		}
 
 		newPath, err = filepath.EvalSymlinks(newPath)

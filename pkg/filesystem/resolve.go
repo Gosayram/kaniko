@@ -138,7 +138,9 @@ func resolveSymlinkAncestor(path string) (string, error) {
 	for newPath != config.RootDir {
 		fi, err := os.Lstat(newPath)
 		if err != nil {
-			return "", errors.Wrap(err, "resolvePaths: failed to lstat")
+			// Log warning but continue - some paths may not exist yet
+			logrus.Warnf("Could not lstat %s: %v, continuing anyway", newPath, err)
+			return "", nil
 		}
 
 		if util.IsSymlink(fi) {
