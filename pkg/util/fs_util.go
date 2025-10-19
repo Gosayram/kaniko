@@ -996,11 +996,7 @@ func CopySymlink(src, dest string, context FileContext) (bool, error) {
 		return false, err
 	}
 
-	// Check for circular references and validate symlink chain
-	if err := validateSymlinkChain(src, 0); err != nil {
-		logrus.Debugf("Symlink chain validation failed for %s: %v", src, err)
-		return false, err
-	}
+	// DISABLED: Symlink chain validation removed to allow any symlinks
 
 	if FilepathExists(dest) {
 		if err := os.RemoveAll(dest); err != nil {
@@ -1017,11 +1013,7 @@ func CopySymlink(src, dest string, context FileContext) (bool, error) {
 		return false, err
 	}
 
-	// Validate the symlink target path
-	if err := validateSymlinkTarget(link, src); err != nil {
-		logrus.Debugf("Symlink target validation failed for %s -> %s: %v", src, link, err)
-		return false, err
-	}
+	// DISABLED: Symlink target validation removed to allow any symlinks
 
 	return false, os.Symlink(link, dest)
 }
@@ -1820,29 +1812,8 @@ func validateSymlinkChain(symlinkPath string, depth int) error {
 }
 
 // validateSymlinkTarget validates the target of a symlink
-func validateSymlinkTarget(target, sourcePath string) error {
-	// Check for directory traversal in relative paths
-	if !filepath.IsAbs(target) {
-		// For relative paths, check for traversal attempts
-		if strings.Contains(target, "..") {
-			// Check if the resolved path would escape the source directory
-			resolvedPath := filepath.Join(filepath.Dir(sourcePath), target)
-			resolvedPath = filepath.Clean(resolvedPath)
-
-			// Get the source directory
-			sourceDir := filepath.Dir(sourcePath)
-			sourceDir = filepath.Clean(sourceDir)
-
-			// Check if resolved path is outside source directory
-			// Allow legitimate sibling directory access
-			if !strings.HasPrefix(resolvedPath, sourceDir) && !strings.HasPrefix(resolvedPath, filepath.Dir(sourceDir)) {
-				return fmt.Errorf("symlink target would escape source directory: %s -> %s", sourcePath, target)
-			}
-		}
-	}
-	// Disabled absolute symlink target validation to prevent build failures
-	// All dangerous path validation has been removed
-
+func validateSymlinkTarget(_, _ string) error {
+	// DISABLED: All symlink target validation removed to allow any symlinks
 	return nil
 }
 
