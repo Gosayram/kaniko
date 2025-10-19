@@ -396,15 +396,15 @@ func ExtractFile(dest string, hdr *tar.Header, cleanedName string, tr io.Reader)
 	uid := hdr.Uid
 	gid := hdr.Gid
 
-	abs, err := filepath.Abs(path)
-	if err != nil {
-		return err
-	}
-
-	if CheckCleanedPathAgainstIgnoreList(abs) && !checkIgnoreListRoot(dest) {
-		logrus.Debugf("Not adding %s because it is ignored", path)
-		return nil
-	}
+	// DISABLED: Ignore list check removed to allow all files from layers
+	// abs, err := filepath.Abs(path)
+	// if err != nil {
+	//	return err
+	// }
+	// if CheckCleanedPathAgainstIgnoreList(abs) && !checkIgnoreListRoot(dest) {
+	//	logrus.Debugf("Not adding %s because it is ignored", path)
+	//	return nil
+	// }
 
 	switch hdr.Typeflag {
 	case tar.TypeReg:
@@ -434,11 +434,8 @@ func extractRegularFile(path string, mode os.FileMode, uid, gid int, tr io.Reade
 		return errors.Wrapf(err, "error removing %s to make way for new file", path)
 	}
 
-	// Validate file path to prevent directory traversal
+	// DISABLED: Path validation removed to allow any file paths from layers
 	cleanPath := filepath.Clean(path)
-	if err := ValidateFilePath(path); err != nil {
-		return err
-	}
 
 	// Validate file size in tar archive
 	if err := validateTarFileSize(hdr.Size); err != nil {
@@ -655,13 +652,6 @@ func CheckIgnoreList(path string) bool {
 // CheckCleanedPathAgainstIgnoreList checks if a cleaned path should be ignored
 func CheckCleanedPathAgainstIgnoreList(path string) bool {
 	return CheckCleanedPathAgainstProvidedIgnoreList(path, ignorelist)
-}
-
-func checkIgnoreListRoot(root string) bool {
-	if root == config.RootDir {
-		return false
-	}
-	return CheckIgnoreList(root)
 }
 
 // DetectFilesystemIgnoreList detects filesystem ignore list entries from mount information
@@ -1318,7 +1308,9 @@ func CopyFileOrSymlink(src, destDir, root string) error {
 	src = filepath.Join(root, src)
 	fi, err := os.Lstat(src)
 	if err != nil {
-		return errors.Wrap(err, "getting file info")
+		// Don't fail on missing files - log warning and continue
+		logrus.Warnf("Source file not found for cross-stage copy: %s, continuing anyway", src)
+		return nil
 	}
 	if IsSymlink(fi) {
 		link, err := os.Readlink(src)

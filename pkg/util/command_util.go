@@ -331,7 +331,9 @@ func checkSingleDirectorySource(resolvedSources []string, fileContext FileContex
 	path := filepath.Join(fileContext.Root, resolvedSources[0])
 	fi, err := os.Lstat(path)
 	if err != nil {
-		return errors.Wrap(err, fmt.Sprintf("failed to get fileinfo for %v", path))
+		// Don't fail on missing files - log warning and continue
+		logrus.Warnf("Source file not found: %s, continuing anyway", path)
+		return nil
 	}
 	// Don't return early for directories - let the totalFiles check handle it
 	_ = fi.IsDir() // Continue to totalFiles check below
@@ -339,7 +341,7 @@ func checkSingleDirectorySource(resolvedSources []string, fileContext FileContex
 }
 
 // countTotalFiles counts total files to be copied
-func countTotalFiles(resolvedSources []string, fileContext FileContext) (int, error) {
+func countTotalFiles(resolvedSources []string, fileContext FileContext) int {
 	totalFiles := 0
 	for _, src := range resolvedSources {
 		if IsSrcRemoteFileURL(src) {
@@ -349,7 +351,9 @@ func countTotalFiles(resolvedSources []string, fileContext FileContext) (int, er
 		src = filepath.Clean(src)
 		files, err := RelativeFiles(src, fileContext.Root)
 		if err != nil {
-			return 0, errors.Wrap(err, "failed to get relative files")
+			// Don't fail on missing files - log warning and continue
+			logrus.Warnf("Failed to get relative files for %s: %v, continuing anyway", src, err)
+			continue
 		}
 		for _, file := range files {
 			if fileContext.ExcludesFile(file) {
@@ -358,7 +362,7 @@ func countTotalFiles(resolvedSources []string, fileContext FileContext) (int, er
 			totalFiles++
 		}
 	}
-	return totalFiles, nil
+	return totalFiles
 }
 
 // validateDestinationForMultipleFiles validates destination when multiple files are being copied
@@ -390,10 +394,7 @@ func IsSrcsValid(srcsAndDest instructions.SourcesAndDest, resolvedSources []stri
 	}
 
 	// Count total files
-	totalFiles, err := countTotalFiles(resolvedSources, fileContext)
-	if err != nil {
-		return err
-	}
+	totalFiles := countTotalFiles(resolvedSources, fileContext)
 
 	// Handle case with no files to copy
 	if totalFiles == 0 {

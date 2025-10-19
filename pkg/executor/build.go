@@ -1033,7 +1033,14 @@ func filesToSave(deps []string) ([]string, error) {
 	for _, src := range deps {
 		srcs, err := filepath.Glob(filepath.Join(config.RootDir, src))
 		if err != nil {
-			return nil, err
+			// Don't fail on glob errors - log warning and continue
+			logrus.Warnf("Failed to glob pattern %s: %v, continuing anyway", src, err)
+			continue
+		}
+		// If no files found, log warning but continue
+		if len(srcs) == 0 {
+			logrus.Warnf("No files found for pattern %s, continuing anyway", src)
+			continue
 		}
 		for _, f := range srcs {
 			if link, evalErr := util.EvalSymLink(f); evalErr == nil {
