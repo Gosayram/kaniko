@@ -78,41 +78,41 @@ func convertToSafeCredentials(safeUID, safeGID int64) (finalUID, finalGID uint32
 // and returns a syscall.Credential structure with the appropriate credentials.
 // CRITICAL FIX: Added detailed logging for user resolution debugging
 func SyscallCredentials(userStr string) (*syscall.Credential, error) {
-	logrus.Debugf("Resolving credentials for user: %s", userStr)
+	logrus.Debugf("🔐 Resolving credentials for user: '%s'", userStr)
 
 	uid, gid, err := getUIDAndGIDFromString(userStr)
 	if err != nil {
-		logrus.Warnf("Failed to get UID/GID for user %s: %v", userStr, err)
+		logrus.Warnf("❌ Failed to get UID/GID for user '%s': %v", userStr, err)
 		return nil, errors.Wrap(err, "get uid/gid")
 	}
-	logrus.Debugf("Resolved UID/GID for user %s: %d/%d", userStr, uid, gid)
+	logrus.Debugf("✅ Resolved UID/GID for user '%s': %d/%d", userStr, uid, gid)
 
 	// Use safe UID/GID values to prevent "invalid user/group IDs" errors
 	safeUID, safeGID := GetSafeUIDGID(int64(uid), int64(gid))
-	logrus.Debugf("Using safe UID/GID: %d/%d (original: %d/%d) for user %s", safeUID, safeGID, uid, gid, userStr)
+	logrus.Debugf("🛡️ Using safe UID/GID: %d/%d (original: %d/%d) for user '%s'", safeUID, safeGID, uid, gid, userStr)
 
 	u, err := LookupUser(fmt.Sprint(safeUID))
 	if err != nil {
-		logrus.Warnf("Failed to lookup user %s (UID %d): %v", userStr, safeUID, err)
+		logrus.Warnf("❌ Failed to lookup user '%s' (UID %d): %v", userStr, safeUID, err)
 		return nil, errors.Wrap(err, "lookup")
 	}
-	logrus.Debugf("Successfully looked up user %s: UID=%s, GID=%s, Home=%s, Name=%s",
+	logrus.Infof("✅ Successfully looked up user '%s': UID=%s, GID=%s, Home=%s, Name=%s",
 		userStr, u.Uid, u.Gid, u.HomeDir, u.Name)
 
 	groups, err := parseUserGroups(u)
 	if err != nil {
-		logrus.Warnf("Failed to parse user groups for %s: %v", userStr, err)
+		logrus.Warnf("❌ Failed to parse user groups for '%s': %v", userStr, err)
 		return nil, err
 	}
-	logrus.Debugf("User %s belongs to %d groups: %v", userStr, len(groups), groups)
+	logrus.Debugf("👥 User '%s' belongs to %d groups: %v", userStr, len(groups), groups)
 
 	// Adjust GID based on user string format
 	safeGID = adjustGIDForUserString(userStr, u, safeGID)
-	logrus.Debugf("Adjusted GID for user %s: %d", userStr, safeGID)
+	logrus.Debugf("🔧 Adjusted GID for user '%s': %d", userStr, safeGID)
 
 	// Convert to safe uint32 values
 	finalUID, finalGID := convertToSafeCredentials(safeUID, safeGID)
-	logrus.Debugf("Final credentials for user %s: UID=%d, GID=%d", userStr, finalUID, finalGID)
+	logrus.Infof("🎯 Final credentials for user '%s': UID=%d, GID=%d", userStr, finalUID, finalGID)
 
 	return &syscall.Credential{
 		Uid:    finalUID,

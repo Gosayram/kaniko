@@ -735,32 +735,45 @@ func isValidUsernameChar(c rune) bool {
 // tryCreateUserInSystem attempts to create a user in the system if it doesn't exist
 // DYNAMIC: First tries to find user in Docker layer, then creates if needed
 func tryCreateUserInSystem(userStr string) *user.User {
+	logrus.Debugf("🔧 Attempting to resolve user '%s'", userStr)
+
 	// First try to lookup the user in system
+	logrus.Debugf("🔍 Checking system for user '%s'", userStr)
 	userObj, err := user.Lookup(userStr)
 	if err == nil {
+		logrus.Infof("✅ Found user '%s' in system: UID=%s, GID=%s", userStr, userObj.Uid, userObj.Gid)
 		return userObj
 	}
+	logrus.Debugf("❌ User '%s' not found in system: %v", userStr, err)
 
 	// Try to find user in Docker layer (if we have access to extracted filesystem)
 	// This is the key improvement - we look for the user in the Docker layer first
+	logrus.Debugf("🐳 Searching for user '%s' in Docker layer", userStr)
 	if dockerUser := getUserFromDockerLayer(userStr, "/kaniko"); dockerUser != nil {
-		logrus.Debugf("Found user %s in Docker layer, using it", userStr)
+		logrus.Infof("✅ Found user '%s' in Docker layer, using it", userStr)
 		return dockerUser
 	}
 
 	// User doesn't exist in Docker layer either, try to create it in system
+	logrus.Debugf("🔨 User '%s' not found, attempting to create with fallback UID", userStr)
 	fallbackUID := getSafeFallbackUID(userStr)
+	logrus.Debugf("🎲 Generated fallback UID %d for user '%s'", fallbackUID, userStr)
 
 	// Try to create the user in the system
 	createUserInSystem(userStr, fallbackUID)
 
 	// Try to lookup the newly created user
-	if newUserObj, lookupErr := user.Lookup(userStr); lookupErr == nil {
+	logrus.Debugf("🔍 Checking if user '%s' was created successfully", userStr)
+	newUserObj, lookupErr := user.Lookup(userStr)
+	if lookupErr == nil {
+		logrus.Infof("✅ Successfully created user '%s' in system: UID=%s, GID=%s",
+			userStr, newUserObj.Uid, newUserObj.Gid)
 		return newUserObj
 	}
+	logrus.Debugf("❌ Failed to lookup created user '%s': %v", userStr, lookupErr)
 
 	// If creation failed or lookup failed, return a fallback user object
-	logrus.Debugf("Using fallback user object for %s", userStr)
+	logrus.Warnf("⚠️ Using fallback user object for '%s' with UID %d", userStr, fallbackUID)
 	return &user.User{
 		Uid:      fmt.Sprint(fallbackUID),
 		Gid:      fmt.Sprint(fallbackUID),
@@ -773,21 +786,31 @@ func tryCreateUserInSystem(userStr string) *user.User {
 // getUserFromDockerLayer attempts to extract user information from Docker layer
 // This is a more sophisticated approach that looks for the user in the extracted filesystem
 func getUserFromDockerLayer(userStr, rootPath string) *user.User {
+	logrus.Debugf("🔍 Searching for user '%s' in Docker layer at path: %s", userStr, rootPath)
+
 	// Try to find user in /etc/passwd from the extracted layer
 	passwdPath := filepath.Join(rootPath, "etc", "passwd")
-	if userObj, err := getUserFromPasswdFile(userStr, passwdPath); err == nil {
-		logrus.Debugf("Found user %s in Docker layer passwd file: UID=%s, GID=%s", userStr, userObj.Uid, userObj.Gid)
+	logrus.Debugf("📄 Checking passwd file: %s", passwdPath)
+	userObj, err := getUserFromPasswdFile(userStr, passwdPath)
+	if err == nil {
+		logrus.Infof("✅ Found user '%s' in Docker layer passwd file: UID=%s, GID=%s, HomeDir=%s",
+			userStr, userObj.Uid, userObj.Gid, userObj.HomeDir)
 		return userObj
 	}
+	logrus.Debugf("❌ User '%s' not found in passwd file: %v", userStr, err)
 
 	// Try to find user in /etc/group from the extracted layer
 	groupPath := filepath.Join(rootPath, "etc", "group")
-	if userObj, err := getUserFromGroupFile(userStr, groupPath); err == nil {
-		logrus.Debugf("Found user %s in Docker layer group file: UID=%s, GID=%s", userStr, userObj.Uid, userObj.Gid)
+	logrus.Debugf("📄 Checking group file: %s", groupPath)
+	userObj, err = getUserFromGroupFile(userStr, groupPath)
+	if err == nil {
+		logrus.Infof("✅ Found user '%s' in Docker layer group file: UID=%s, GID=%s",
+			userStr, userObj.Uid, userObj.Gid)
 		return userObj
 	}
+	logrus.Debugf("❌ User '%s' not found in group file: %v", userStr, err)
 
-	logrus.Debugf("User %s not found in Docker layer, using fallback", userStr)
+	logrus.Debugf("⚠️ User '%s' not found in Docker layer, will use fallback", userStr)
 	return nil
 }
 
