@@ -130,8 +130,9 @@ func (ofc *OptimizedFileCopy) copyWithBufferPool(dst io.Writer, src io.Reader) (
 		bufferSize = int(ofc.MaxFileSize)
 	}
 
-	buf := GetBuffer(bufferSize)
-	defer PutBuffer(buf)
+	bufferPool := GetGlobalBufferPool()
+	buf := bufferPool.GetBuffer(bufferSize)
+	defer bufferPool.PutBuffer(buf)
 
 	var totalWritten int64
 	for {
@@ -142,9 +143,9 @@ func (ofc *OptimizedFileCopy) copyWithBufferPool(dst io.Writer, src io.Reader) (
 			}
 		}
 
-		nr, er := src.Read(*buf)
+		nr, er := src.Read(buf)
 		if nr > 0 {
-			nw, ew := dst.Write((*buf)[:nr])
+			nw, ew := dst.Write(buf[:nr])
 			if nw < 0 || nr < nw {
 				nw = 0
 				if ew == nil {

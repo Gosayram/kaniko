@@ -488,7 +488,11 @@ func extractRegularFile(path string, mode os.FileMode, uid, gid int, tr io.Reade
 	defer currFile.Close()
 
 	// Use pooled buffer for better memory efficiency
-	if _, err = CopyFileWithBuffer(currFile, tr); err != nil {
+	bufferPool := GetGlobalBufferPool()
+	buffer := bufferPool.GetLargeBuffer()
+	defer bufferPool.PutLargeBuffer(buffer)
+
+	if _, err = io.CopyBuffer(currFile, tr, buffer); err != nil {
 		logrus.Warnf("Could not write to file %s: %v, continuing anyway", cleanPath, err)
 		return nil
 	}
@@ -907,7 +911,11 @@ func CreateFile(path string, reader io.Reader, perm os.FileMode, uid, gid uint32
 	}
 	defer dest.Close()
 	// Use pooled buffer for better memory efficiency
-	if _, err := CopyFileWithBuffer(dest, reader); err != nil {
+	bufferPool := GetGlobalBufferPool()
+	buffer := bufferPool.GetLargeBuffer()
+	defer bufferPool.PutLargeBuffer(buffer)
+
+	if _, err := io.CopyBuffer(dest, reader, buffer); err != nil {
 		return errors.Wrap(err, "copying file")
 	}
 	return setFilePermissions(path, perm, int(uid), int(gid))

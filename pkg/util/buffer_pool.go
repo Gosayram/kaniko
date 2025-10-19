@@ -17,162 +17,373 @@ limitations under the License.
 package util
 
 import (
-	"bytes"
-	"io"
 	"sync"
+
+	"github.com/sirupsen/logrus"
 )
 
-// BufferPool provides a pool of reusable buffers for memory optimization
-type BufferPool struct {
-	pool sync.Pool
-}
-
-// NewBufferPool creates a new buffer pool with the specified buffer size
-func NewBufferPool(bufferSize int) *BufferPool {
-	return &BufferPool{
-		pool: sync.Pool{
-			New: func() interface{} {
-				buf := make([]byte, bufferSize)
-				return &buf
-			},
-		},
-	}
-}
-
-// Get returns a buffer from the pool
-func (bp *BufferPool) Get() *[]byte {
-	return bp.pool.Get().(*[]byte)
-}
-
-// Put returns a buffer to the pool
-func (bp *BufferPool) Put(buf *[]byte) {
-	// Reset the buffer to its original capacity
-	*buf = (*buf)[:cap(*buf)]
-	bp.pool.Put(buf)
-}
-
-// BytesBufferPool provides a pool of reusable bytes.Buffer for string operations
-type BytesBufferPool struct {
-	pool sync.Pool
-}
-
-// NewBytesBufferPool creates a new bytes.Buffer pool
-func NewBytesBufferPool() *BytesBufferPool {
-	return &BytesBufferPool{
-		pool: sync.Pool{
-			New: func() interface{} {
-				const initialCapacity = 1024 // 1KB
-				return bytes.NewBuffer(make([]byte, 0, initialCapacity))
-			},
-		},
-	}
-}
-
-// Get returns a bytes.Buffer from the pool
-func (bbp *BytesBufferPool) Get() *bytes.Buffer {
-	buf := bbp.pool.Get().(*bytes.Buffer)
-	buf.Reset() // Clear any previous content
-	return buf
-}
-
-// Put returns a bytes.Buffer to the pool
-func (bbp *BytesBufferPool) Put(buf *bytes.Buffer) {
-	// Only return smaller buffers to the pool to avoid memory bloat
-	const maxBufferSize = 64 * 1024 // 64KB
-	if buf.Cap() <= maxBufferSize {
-		buf.Reset()
-		bbp.pool.Put(buf)
-	}
-}
-
-// Buffer pool size constants
+// Constants for buffer pool
 const (
-	smallBufferSize  = 4 * 1024   // 4KB
-	mediumBufferSize = 32 * 1024  // 32KB
-	largeBufferSize  = 256 * 1024 // 256KB
+	// Default buffer sizes
+	DefaultSmallBufferSize  = 4 * 1024    // 4KB
+	DefaultMediumBufferSize = 64 * 1024   // 64KB
+	DefaultLargeBufferSize  = 1024 * 1024 // 1MB
+
+	// Buffer pool limits
+	MaxSmallBuffers  = 100
+	MaxMediumBuffers = 50
+	MaxLargeBuffers  = 20
 )
 
-// Global buffer pools for common operations
+// BufferPool provides efficient buffer management with different sizes
+type BufferPool struct {
+	// Small buffers (4KB) - for small file operations
+	smallPool sync.Pool
+
+	// Medium buffers (64KB) - for medium file operations
+	mediumPool sync.Pool
+
+	// Large buffers (1MB) - for large file operations
+	largePool sync.Pool
+
+	// Configuration
+	smallSize  int
+	mediumSize int
+	largeSize  int
+
+	// Statistics
+	stats BufferPoolStats
+
+	// Mutex for thread-safe access to stats
+	statsMutex sync.RWMutex
+}
+
+// BufferPoolStats holds statistics about buffer pool usage
+type BufferPoolStats struct {
+	SmallBuffersAllocated  int64
+	MediumBuffersAllocated int64
+	LargeBuffersAllocated  int64
+	SmallBuffersReturned   int64
+	MediumBuffersReturned  int64
+	LargeBuffersReturned   int64
+	TotalAllocations       int64
+	TotalReturns           int64
+}
+
+// NewBufferPool creates a new buffer pool with default sizes
+func NewBufferPool() *BufferPool {
+	return NewBufferPoolWithSizes(DefaultSmallBufferSize, DefaultMediumBufferSize, DefaultLargeBufferSize)
+}
+
+// NewBufferPoolWithSizes creates a new buffer pool with custom sizes
+func NewBufferPoolWithSizes(smallSize, mediumSize, largeSize int) *BufferPool {
+	if smallSize <= 0 {
+		smallSize = DefaultSmallBufferSize
+	}
+	if mediumSize <= 0 {
+		mediumSize = DefaultMediumBufferSize
+	}
+	if largeSize <= 0 {
+		largeSize = DefaultLargeBufferSize
+	}
+
+	bp := &BufferPool{
+		smallSize:  smallSize,
+		mediumSize: mediumSize,
+		largeSize:  largeSize,
+		stats:      BufferPoolStats{},
+	}
+
+	// Initialize pools with factory functions
+	bp.smallPool = sync.Pool{
+		New: func() interface{} {
+			bp.statsMutex.Lock()
+			bp.stats.SmallBuffersAllocated++
+			bp.stats.TotalAllocations++
+			bp.statsMutex.Unlock()
+
+			return make([]byte, smallSize)
+		},
+	}
+
+	bp.mediumPool = sync.Pool{
+		New: func() interface{} {
+			bp.statsMutex.Lock()
+			bp.stats.MediumBuffersAllocated++
+			bp.stats.TotalAllocations++
+			bp.statsMutex.Unlock()
+
+			return make([]byte, mediumSize)
+		},
+	}
+
+	bp.largePool = sync.Pool{
+		New: func() interface{} {
+			bp.statsMutex.Lock()
+			bp.stats.LargeBuffersAllocated++
+			bp.stats.TotalAllocations++
+			bp.statsMutex.Unlock()
+
+			return make([]byte, largeSize)
+		},
+	}
+
+	//nolint:mnd // Constants for KB conversion
+	logrus.Debugf("🔄 Buffer pool initialized: Small=%dKB, Medium=%dKB, Large=%dKB",
+		smallSize/1024, mediumSize/1024, largeSize/1024)
+
+	return bp
+}
+
+// GetSmallBuffer returns a small buffer from the pool
+func (bp *BufferPool) GetSmallBuffer() []byte {
+	buffer := bp.smallPool.Get().([]byte)
+
+	// Clear the buffer to avoid data leakage
+	for i := range buffer {
+		buffer[i] = 0
+	}
+
+	return buffer
+}
+
+// GetMediumBuffer returns a medium buffer from the pool
+func (bp *BufferPool) GetMediumBuffer() []byte {
+	buffer := bp.mediumPool.Get().([]byte)
+
+	// Clear the buffer to avoid data leakage
+	for i := range buffer {
+		buffer[i] = 0
+	}
+
+	return buffer
+}
+
+// GetLargeBuffer returns a large buffer from the pool
+func (bp *BufferPool) GetLargeBuffer() []byte {
+	buffer := bp.largePool.Get().([]byte)
+
+	// Clear the buffer to avoid data leakage
+	for i := range buffer {
+		buffer[i] = 0
+	}
+
+	return buffer
+}
+
+// GetBuffer returns a buffer of appropriate size based on the requested size
+//
+//nolint:gocritic // if-else chain is more readable than switch for size comparisons
+func (bp *BufferPool) GetBuffer(size int) []byte {
+	if size <= bp.smallSize {
+		return bp.GetSmallBuffer()
+	} else if size <= bp.mediumSize {
+		return bp.GetMediumBuffer()
+	} else if size <= bp.largeSize {
+		return bp.GetLargeBuffer()
+	}
+
+	// For sizes larger than our largest buffer, allocate directly
+	// This should be rare and indicates a need for larger buffer sizes
+	logrus.Warnf("⚠️ Requested buffer size %d exceeds maximum pool size %d, allocating directly",
+		size, bp.largeSize)
+
+	bp.statsMutex.Lock()
+	bp.stats.TotalAllocations++
+	bp.statsMutex.Unlock()
+
+	return make([]byte, size)
+}
+
+// PutSmallBuffer returns a small buffer to the pool
+func (bp *BufferPool) PutSmallBuffer(buffer []byte) {
+	if len(buffer) != bp.smallSize {
+		logrus.Warnf("⚠️ Attempted to return buffer of size %d to small pool (expected %d)",
+			len(buffer), bp.smallSize)
+		return
+	}
+
+	bp.statsMutex.Lock()
+	bp.stats.SmallBuffersReturned++
+	bp.stats.TotalReturns++
+	bp.statsMutex.Unlock()
+
+	//nolint:staticcheck // sync.Pool requires interface{} type
+	bp.smallPool.Put(buffer)
+}
+
+// PutMediumBuffer returns a medium buffer to the pool
+func (bp *BufferPool) PutMediumBuffer(buffer []byte) {
+	if len(buffer) != bp.mediumSize {
+		logrus.Warnf("⚠️ Attempted to return buffer of size %d to medium pool (expected %d)",
+			len(buffer), bp.mediumSize)
+		return
+	}
+
+	bp.statsMutex.Lock()
+	bp.stats.MediumBuffersReturned++
+	bp.stats.TotalReturns++
+	bp.statsMutex.Unlock()
+
+	//nolint:staticcheck // sync.Pool requires interface{} type
+	bp.mediumPool.Put(buffer)
+}
+
+// PutLargeBuffer returns a large buffer to the pool
+func (bp *BufferPool) PutLargeBuffer(buffer []byte) {
+	if len(buffer) != bp.largeSize {
+		logrus.Warnf("⚠️ Attempted to return buffer of size %d to large pool (expected %d)",
+			len(buffer), bp.largeSize)
+		return
+	}
+
+	bp.statsMutex.Lock()
+	bp.stats.LargeBuffersReturned++
+	bp.stats.TotalReturns++
+	bp.statsMutex.Unlock()
+
+	//nolint:staticcheck // sync.Pool requires interface{} type
+	bp.largePool.Put(buffer)
+}
+
+// PutBuffer returns a buffer to the appropriate pool based on its size
+//
+//nolint:gocritic,staticcheck // if-else chain is more readable than switch for size comparisons
+func (bp *BufferPool) PutBuffer(buffer []byte) {
+	size := len(buffer)
+
+	if size == bp.smallSize {
+		bp.PutSmallBuffer(buffer)
+	} else if size == bp.mediumSize {
+		bp.PutMediumBuffer(buffer)
+	} else if size == bp.largeSize {
+		bp.PutLargeBuffer(buffer)
+	} else {
+		// For custom-sized buffers, we don't return them to the pool
+		// This is expected for buffers allocated directly for large sizes
+		logrus.Debugf("🔄 Custom-sized buffer (%d bytes) not returned to pool", size)
+	}
+}
+
+// GetStats returns current buffer pool statistics
+func (bp *BufferPool) GetStats() BufferPoolStats {
+	bp.statsMutex.RLock()
+	defer bp.statsMutex.RUnlock()
+
+	return bp.stats
+}
+
+// LogStats logs current buffer pool statistics
+func (bp *BufferPool) LogStats() {
+	stats := bp.GetStats()
+
+	logrus.Infof("🔄 Buffer Pool Statistics:")
+	logrus.Infof("  📦 Small Buffers: Allocated=%d, Returned=%d",
+		stats.SmallBuffersAllocated, stats.SmallBuffersReturned)
+	logrus.Infof("  📦 Medium Buffers: Allocated=%d, Returned=%d",
+		stats.MediumBuffersAllocated, stats.MediumBuffersReturned)
+	logrus.Infof("  📦 Large Buffers: Allocated=%d, Returned=%d",
+		stats.LargeBuffersAllocated, stats.LargeBuffersReturned)
+	logrus.Infof("  📊 Total: Allocated=%d, Returned=%d",
+		stats.TotalAllocations, stats.TotalReturns)
+
+	// Calculate efficiency
+	if stats.TotalAllocations > 0 {
+		//nolint:mnd // Percentage calculation
+		efficiency := float64(stats.TotalReturns) / float64(stats.TotalAllocations) * 100
+		logrus.Infof("  ⚡ Efficiency: %.1f%%", efficiency)
+	}
+}
+
+// ResetStats resets buffer pool statistics
+func (bp *BufferPool) ResetStats() {
+	bp.statsMutex.Lock()
+	defer bp.statsMutex.Unlock()
+
+	bp.stats = BufferPoolStats{}
+	logrus.Info("🔄 Buffer pool statistics reset")
+}
+
+// GetSmallBufferSize returns the size of small buffers
+func (bp *BufferPool) GetSmallBufferSize() int {
+	return bp.smallSize
+}
+
+// GetMediumBufferSize returns the size of medium buffers
+func (bp *BufferPool) GetMediumBufferSize() int {
+	return bp.mediumSize
+}
+
+// GetLargeBufferSize returns the size of large buffers
+func (bp *BufferPool) GetLargeBufferSize() int {
+	return bp.largeSize
+}
+
+// IsBufferFromPool checks if a buffer was allocated from the pool
+func (bp *BufferPool) IsBufferFromPool(buffer []byte) bool {
+	size := len(buffer)
+	return size == bp.smallSize || size == bp.mediumSize || size == bp.largeSize
+}
+
+// GetOptimalBufferSize returns the optimal buffer size for a given operation size
+//
+//nolint:gocritic // if-else chain is more readable than switch for size comparisons
+func (bp *BufferPool) GetOptimalBufferSize(operationSize int) int {
+	if operationSize <= bp.smallSize {
+		return bp.smallSize
+	} else if operationSize <= bp.mediumSize {
+		return bp.mediumSize
+	} else if operationSize <= bp.largeSize {
+		return bp.largeSize
+	}
+
+	// For operations larger than our largest buffer, return the operation size
+	return operationSize
+}
+
+// PreallocateBuffers pre-allocates a number of buffers to warm up the pool
+func (bp *BufferPool) PreallocateBuffers(smallCount, mediumCount, largeCount int) {
+	logrus.Debugf("🔄 Pre-allocating buffers: Small=%d, Medium=%d, Large=%d",
+		smallCount, mediumCount, largeCount)
+
+	// Pre-allocate small buffers
+	for i := 0; i < smallCount && i < MaxSmallBuffers; i++ {
+		buffer := bp.GetSmallBuffer()
+		bp.PutSmallBuffer(buffer)
+	}
+
+	// Pre-allocate medium buffers
+	for i := 0; i < mediumCount && i < MaxMediumBuffers; i++ {
+		buffer := bp.GetMediumBuffer()
+		bp.PutMediumBuffer(buffer)
+	}
+
+	// Pre-allocate large buffers
+	for i := 0; i < largeCount && i < MaxLargeBuffers; i++ {
+		buffer := bp.GetLargeBuffer()
+		bp.PutLargeBuffer(buffer)
+	}
+
+	logrus.Debugf("✅ Buffer pre-allocation completed")
+}
+
+// Global buffer pool instance
 var (
-	// SmallBufferPool for small operations (4KB)
-	SmallBufferPool = NewBufferPool(smallBufferSize)
-
-	// MediumBufferPool for medium operations (32KB)
-	MediumBufferPool = NewBufferPool(mediumBufferSize)
-
-	// LargeBufferPool for large operations (256KB)
-	LargeBufferPool = NewBufferPool(largeBufferSize)
-
-	// BytesBufferPool for string operations
-	GlobalBytesBufferPool = NewBytesBufferPool()
+	globalBufferPool *BufferPool
+	bufferPoolOnce   sync.Once
 )
 
-// CopyWithBuffer performs io.Copy using a pooled buffer for better memory efficiency
-func CopyWithBuffer(dst io.Writer, src io.Reader, pool *BufferPool) (written int64, err error) {
-	buf := pool.Get()
-	defer pool.Put(buf)
-
-	for {
-		nr, er := src.Read(*buf)
-		if nr > 0 {
-			nw, ew := dst.Write((*buf)[:nr])
-			if nw < 0 || nr < nw {
-				nw = 0
-				if ew == nil {
-					ew = io.ErrShortWrite
-				}
-			}
-			written += int64(nw)
-			if ew != nil {
-				err = ew
-				break
-			}
-			if nr != nw {
-				err = io.ErrShortWrite
-				break
-			}
-		}
-		if er != nil {
-			if er != io.EOF {
-				err = er
-			}
-			break
-		}
-	}
-	return written, err
+// GetGlobalBufferPool returns the global buffer pool instance
+func GetGlobalBufferPool() *BufferPool {
+	bufferPoolOnce.Do(func() {
+		globalBufferPool = NewBufferPool()
+		logrus.Info("🔄 Global buffer pool initialized")
+	})
+	return globalBufferPool
 }
 
-// CopyFileWithBuffer copies a file using a pooled buffer
-func CopyFileWithBuffer(dst io.Writer, src io.Reader) (written int64, err error) {
-	return CopyWithBuffer(dst, src, MediumBufferPool)
-}
-
-// GetBuffer returns a buffer from the appropriate pool based on size
-func GetBuffer(size int) *[]byte {
-	switch {
-	case size <= 4*1024:
-		return SmallBufferPool.Get()
-	case size <= 32*1024:
-		return MediumBufferPool.Get()
-	case size <= 256*1024:
-		return LargeBufferPool.Get()
-	default:
-		// For very large buffers, create a new one
-		buf := make([]byte, size)
-		return &buf
-	}
-}
-
-// PutBuffer returns a buffer to the appropriate pool
-func PutBuffer(buf *[]byte) {
-	size := cap(*buf)
-	switch {
-	case size <= 4*1024:
-		SmallBufferPool.Put(buf)
-	case size <= 32*1024:
-		MediumBufferPool.Put(buf)
-	case size <= 256*1024:
-		LargeBufferPool.Put(buf)
-		// For very large buffers, let GC handle them
-	}
+// SetGlobalBufferPool sets the global buffer pool instance
+func SetGlobalBufferPool(pool *BufferPool) {
+	globalBufferPool = pool
+	logrus.Info("🔄 Global buffer pool updated")
 }
