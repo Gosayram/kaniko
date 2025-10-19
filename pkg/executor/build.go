@@ -93,6 +93,32 @@ type stageBuilder struct {
 	snapshotter      snapShotter
 	layerCache       cache.LayerCache
 	pushLayerToCache cachePusher
+	resourceLimits   *util.ResourceLimits
+}
+
+// initializeResourceLimits initializes resource limits if configured
+func initializeResourceLimits(opts *config.KanikoOptions) *util.ResourceLimits {
+	if opts.MaxMemoryUsageBytes <= 0 && opts.MaxFileSizeBytes <= 0 && opts.MaxTotalFileSizeBytes <= 0 {
+		return nil
+	}
+
+	resourceLimits := util.NewResourceLimits(opts.MaxMemoryUsageBytes, opts.MaxFileSizeBytes, opts.MaxTotalFileSizeBytes)
+
+	// Configure resource limits
+	if opts.GCThreshold > 0 {
+		resourceLimits.SetGCThreshold(opts.GCThreshold)
+	}
+	if opts.MonitoringInterval > 0 {
+		resourceLimits.SetMonitoringInterval(time.Duration(opts.MonitoringInterval) * time.Second)
+	}
+
+	// Start monitoring if enabled
+	if opts.MemoryMonitoring {
+		resourceLimits.StartMonitoring()
+		logrus.Info("🛡️ Resource monitoring enabled for this build")
+	}
+
+	return resourceLimits
 }
 
 // newStageBuilder returns a new type stageBuilder which contains all the information required to build the stage
@@ -136,6 +162,9 @@ func newStageBuilder(
 		logrus.Info("📸 Incremental snapshots enabled for this build")
 	}
 
+	// Initialize resource limits if configured
+	resourceLimits := initializeResourceLimits(opts)
+
 	digest, err := sourceImage.Digest()
 	if err != nil {
 		return nil, err
@@ -153,6 +182,7 @@ func newStageBuilder(
 		stageIdxToDigest: sid,
 		layerCache:       newLayerCache(opts),
 		pushLayerToCache: pushLayerToCache,
+		resourceLimits:   resourceLimits,
 	}
 
 	for _, cmd := range stage.Commands {

@@ -120,6 +120,14 @@ type KanikoOptions struct {
 	IntegrityCheck       bool // --integrity-check=true
 	FullScanBackup       bool // --full-scan-backup=true
 
+	// Resource control options
+	MaxMemoryUsageBytes   int64 // --max-memory-usage-bytes=2GB
+	MaxFileSizeBytes      int64 // --max-file-size-bytes=500MB
+	MaxTotalFileSizeBytes int64 // --max-total-file-size-bytes=10GB
+	MemoryMonitoring      bool  // --memory-monitoring=true
+	GCThreshold           int   // --gc-threshold=80
+	MonitoringInterval    int   // --monitoring-interval=5s
+
 	// Debug options for enhanced debugging and development
 	DebugOptions
 }

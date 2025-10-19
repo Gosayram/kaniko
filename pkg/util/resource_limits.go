@@ -21,317 +21,347 @@ import (
 	"runtime"
 	"sync"
 	"time"
+
+	"github.com/sirupsen/logrus"
 )
 
 // Constants for resource limits
 const (
-	ResourceMaxMemoryUsage   = 2 * 1024 * 1024 * 1024  // 2GB
-	ResourceMaxFileSize      = 500 * 1024 * 1024       // 500MB
-	ResourceMaxTotalFileSize = 10 * 1024 * 1024 * 1024 // 10GB
-	ResourceMaxExecutionTime = 30 * time.Minute        // 30 minutes
-	ResourceMaxConcurrency   = 10                      // 10 concurrent operations
-	ResourceCheckInterval    = 5 * time.Second         // Check every 5 seconds
+	// Default memory limits
+	DefaultMaxMemoryUsage   = 2 * 1024 * 1024 * 1024  // 2GB
+	DefaultMaxFileSize      = 500 * 1024 * 1024       // 500MB
+	DefaultMaxTotalFileSize = 10 * 1024 * 1024 * 1024 // 10GB
+
+	// Memory monitoring thresholds
+	DefaultGCThreshold        = 80 // 80% memory usage triggers GC
+	DefaultMonitoringInterval = 5 * time.Second
+
+	// File size limits
+	MaxSingleFileSize = 1024 * 1024 * 1024 // 1GB max single file
 )
 
-// ResourceLimits provides global resource management
+// ResourceLimits provides resource control and monitoring
 type ResourceLimits struct {
-	MaxMemoryUsage   int64         // Maximum memory usage in bytes
-	MaxFileSize      int64         // Maximum file size in bytes
-	MaxTotalFileSize int64         // Maximum total file size in bytes
-	MaxExecutionTime time.Duration // Maximum execution time
-	MaxConcurrency   int           // Maximum number of concurrent operations
-	CheckInterval    time.Duration // How often to check resource usage
-	mu               sync.RWMutex
-	startTime        time.Time
-	totalFileSize    int64
-	concurrentOps    int
-	stopChan         chan struct{}
-	checkTicker      *time.Ticker
+	// Memory limits
+	MaxMemoryUsage   int64
+	MaxFileSize      int64
+	MaxTotalFileSize int64
+
+	// Monitoring settings
+	GCThreshold        int
+	MonitoringInterval time.Duration
+
+	// Current state
+	currentMemoryUsage int64
+	currentFileSize    int64
+
+	// Monitoring
+	monitoringEnabled bool
+	stopMonitoring    chan bool
+	monitoringMutex   sync.RWMutex
+
+	// Statistics
+	stats ResourceStats
 }
 
-// ResourceStats provides current resource usage statistics
+// ResourceStats holds statistics about resource usage
 type ResourceStats struct {
-	MemoryUsage      uint64        `json:"memory_usage"`
-	MemoryLimit      int64         `json:"memory_limit"`
-	FileSize         int64         `json:"file_size"`
-	FileSizeLimit    int64         `json:"file_size_limit"`
-	TotalFileSize    int64         `json:"total_file_size"`
-	TotalFileLimit   int64         `json:"total_file_limit"`
-	ExecutionTime    time.Duration `json:"execution_time"`
-	ExecutionLimit   time.Duration `json:"execution_limit"`
-	ConcurrentOps    int           `json:"concurrent_ops"`
-	ConcurrencyLimit int           `json:"concurrency_limit"`
-	GCs              int64         `json:"gc_cycles"`
+	PeakMemoryUsage     int64
+	TotalFilesProcessed int64
+	TotalFileSize       int64
+	GCTriggered         int64
+	WarningsIssued      int64
+	StartTime           time.Time
+	LastGC              time.Time
 }
 
-// NewResourceLimits creates a new resource limits manager
-func NewResourceLimits() *ResourceLimits {
-	limits := &ResourceLimits{
-		MaxMemoryUsage:   ResourceMaxMemoryUsage,   // 2GB default
-		MaxFileSize:      ResourceMaxFileSize,      // 500MB default
-		MaxTotalFileSize: ResourceMaxTotalFileSize, // 10GB default
-		MaxExecutionTime: ResourceMaxExecutionTime, // 30 minutes default
-		MaxConcurrency:   ResourceMaxConcurrency,   // 10 concurrent operations default
-		CheckInterval:    ResourceCheckInterval,    // Check every 5 seconds
-		startTime:        time.Now(),
-		stopChan:         make(chan struct{}),
+// NewResourceLimits creates a new resource limits controller
+func NewResourceLimits(maxMemory, maxFileSize, maxTotalFileSize int64) *ResourceLimits {
+	if maxMemory <= 0 {
+		maxMemory = DefaultMaxMemoryUsage
+	}
+	if maxFileSize <= 0 {
+		maxFileSize = DefaultMaxFileSize
+	}
+	if maxTotalFileSize <= 0 {
+		maxTotalFileSize = DefaultMaxTotalFileSize
 	}
 
-	// Start monitoring goroutine
-	limits.startMonitoring()
-
-	return limits
-}
-
-// SetLimits sets resource limits
-func (rl *ResourceLimits) SetLimits(
-	memory, fileSize, totalFileSize int64,
-	executionTime time.Duration,
-	concurrency int,
-) {
-	rl.mu.Lock()
-	defer rl.mu.Unlock()
-
-	rl.MaxMemoryUsage = memory
-	rl.MaxFileSize = fileSize
-	rl.MaxTotalFileSize = totalFileSize
-	rl.MaxExecutionTime = executionTime
-	rl.MaxConcurrency = concurrency
-}
-
-// CheckMemoryUsage checks if memory usage is within limits
-func (rl *ResourceLimits) CheckMemoryUsage() error {
-	var m runtime.MemStats
-	runtime.ReadMemStats(&m)
-
-	rl.mu.RLock()
-	limit := rl.MaxMemoryUsage
-	rl.mu.RUnlock()
-
-	if limit > 0 && m.Alloc > uint64(limit) {
-		return fmt.Errorf("memory limit exceeded: %d bytes (limit: %d bytes)", m.Alloc, limit)
+	rl := &ResourceLimits{
+		MaxMemoryUsage:     maxMemory,
+		MaxFileSize:        maxFileSize,
+		MaxTotalFileSize:   maxTotalFileSize,
+		GCThreshold:        DefaultGCThreshold,
+		MonitoringInterval: DefaultMonitoringInterval,
+		stopMonitoring:     make(chan bool),
+		stats: ResourceStats{
+			StartTime: time.Now(),
+		},
 	}
 
-	return nil
+	//nolint:mnd // Constants for MB conversion
+	logrus.Infof("🛡️ Resource limits initialized: Memory=%dMB, File=%dMB, Total=%dMB",
+		maxMemory/(1024*1024), maxFileSize/(1024*1024), maxTotalFileSize/(1024*1024))
+
+	return rl
 }
 
-// CheckFileSize checks if file size is within limits
-func (rl *ResourceLimits) CheckFileSize(fileSize int64) error {
-	rl.mu.RLock()
-	limit := rl.MaxFileSize
-	rl.mu.RUnlock()
-
-	if fileSize > limit {
-		return fmt.Errorf("file size limit exceeded: %d bytes (limit: %d bytes)", fileSize, limit)
+// StartMonitoring starts background resource monitoring
+func (rl *ResourceLimits) StartMonitoring() {
+	if rl.monitoringEnabled {
+		return
 	}
 
-	return nil
+	rl.monitoringEnabled = true
+	go rl.monitorResources()
+
+	logrus.Info("📊 Resource monitoring started")
 }
 
-// CheckTotalFileSize checks if total file size is within limits
-func (rl *ResourceLimits) CheckTotalFileSize(additionalSize int64) error {
-	rl.mu.Lock()
-	defer rl.mu.Unlock()
-
-	newTotal := rl.totalFileSize + additionalSize
-	if newTotal > rl.MaxTotalFileSize {
-		return fmt.Errorf("total file size limit exceeded: %d bytes (limit: %d bytes)", newTotal, rl.MaxTotalFileSize)
+// StopMonitoring stops background resource monitoring
+func (rl *ResourceLimits) StopMonitoring() {
+	if !rl.monitoringEnabled {
+		return
 	}
 
-	rl.totalFileSize = newTotal
-	return nil
+	rl.monitoringEnabled = false
+	rl.stopMonitoring <- true
+
+	logrus.Info("📊 Resource monitoring stopped")
 }
 
-// CheckExecutionTime checks if execution time is within limits
-func (rl *ResourceLimits) CheckExecutionTime() error {
-	rl.mu.RLock()
-	limit := rl.MaxExecutionTime
-	rl.mu.RUnlock()
-
-	elapsed := time.Since(rl.startTime)
-	if elapsed > limit {
-		return fmt.Errorf("execution time limit exceeded: %v (limit: %v)", elapsed, limit)
-	}
-
-	return nil
-}
-
-// CheckConcurrency checks if concurrency is within limits
-func (rl *ResourceLimits) CheckConcurrency() error {
-	rl.mu.RLock()
-	limit := rl.MaxConcurrency
-	current := rl.concurrentOps
-	rl.mu.RUnlock()
-
-	if current >= limit {
-		return fmt.Errorf("concurrency limit exceeded: %d (limit: %d)", current, limit)
-	}
-
-	return nil
-}
-
-// AcquireConcurrencySlot acquires a concurrency slot
-func (rl *ResourceLimits) AcquireConcurrencySlot() error {
-	if err := rl.CheckConcurrency(); err != nil {
-		return err
-	}
-
-	rl.mu.Lock()
-	rl.concurrentOps++
-	rl.mu.Unlock()
-
-	return nil
-}
-
-// ReleaseConcurrencySlot releases a concurrency slot
-func (rl *ResourceLimits) ReleaseConcurrencySlot() {
-	rl.mu.Lock()
-	if rl.concurrentOps > 0 {
-		rl.concurrentOps--
-	}
-	rl.mu.Unlock()
-}
-
-// CheckAllLimits checks all resource limits
-func (rl *ResourceLimits) CheckAllLimits() error {
-	// Check memory usage
-	if err := rl.CheckMemoryUsage(); err != nil {
-		return fmt.Errorf("memory check failed: %w", err)
-	}
-
-	// Check execution time
-	if err := rl.CheckExecutionTime(); err != nil {
-		return fmt.Errorf("execution time check failed: %w", err)
-	}
-
-	// Check concurrency
-	if err := rl.CheckConcurrency(); err != nil {
-		return fmt.Errorf("concurrency check failed: %w", err)
-	}
-
-	return nil
-}
-
-// GetStats returns current resource usage statistics
-func (rl *ResourceLimits) GetStats() ResourceStats {
-	var m runtime.MemStats
-	runtime.ReadMemStats(&m)
-
-	rl.mu.RLock()
-	defer rl.mu.RUnlock()
-
-	return ResourceStats{
-		MemoryUsage:      m.Alloc,
-		MemoryLimit:      rl.MaxMemoryUsage,
-		FileSize:         0, // Would be set by caller
-		FileSizeLimit:    rl.MaxFileSize,
-		TotalFileSize:    rl.totalFileSize,
-		TotalFileLimit:   rl.MaxTotalFileSize,
-		ExecutionTime:    time.Since(rl.startTime),
-		ExecutionLimit:   rl.MaxExecutionTime,
-		ConcurrentOps:    rl.concurrentOps,
-		ConcurrencyLimit: rl.MaxConcurrency,
-		GCs:              int64(m.NumGC),
-	}
-}
-
-// startMonitoring starts the resource monitoring goroutine
-func (rl *ResourceLimits) startMonitoring() {
-	rl.checkTicker = time.NewTicker(rl.CheckInterval)
-
-	go func() {
-		for {
-			select {
-			case <-rl.checkTicker.C:
-				rl.monitorResources()
-			case <-rl.stopChan:
-				return
-			}
-		}
-	}()
-}
-
-// monitorResources monitors resource usage and takes action if needed
+// monitorResources runs background monitoring
 func (rl *ResourceLimits) monitorResources() {
-	// Check all limits
-	if err := rl.CheckAllLimits(); err != nil {
-		// Log warning but don't fail - this is just monitoring
-		// In a real implementation, you might want to take action
-		// like triggering garbage collection or reducing concurrency
-		_ = err // Suppress unused variable warning
-	}
+	ticker := time.NewTicker(rl.MonitoringInterval)
+	defer ticker.Stop()
 
-	// Force garbage collection if memory usage is high
+	for {
+		select {
+		case <-ticker.C:
+			rl.checkResourceUsage()
+		case <-rl.stopMonitoring:
+			return
+		}
+	}
+}
+
+// checkResourceUsage checks current resource usage and triggers actions
+func (rl *ResourceLimits) checkResourceUsage() {
+	rl.monitoringMutex.Lock()
+	defer rl.monitoringMutex.Unlock()
+
+	// Get current memory usage
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
+	// #nosec G115 - Memory stats conversion is safe
+	currentUsage := int64(m.Alloc)
+	rl.currentMemoryUsage = currentUsage
 
-	rl.mu.RLock()
-	memoryLimit := rl.MaxMemoryUsage
-	rl.mu.RUnlock()
+	// Update peak memory usage
+	if currentUsage > rl.stats.PeakMemoryUsage {
+		rl.stats.PeakMemoryUsage = currentUsage
+	}
 
-	if memoryLimit > 0 && m.Alloc > uint64(memoryLimit)*3/4 { // If using more than 75% of limit
+	// Check memory threshold
+	//nolint:mnd // Percentage calculation
+	memoryPercent := float64(currentUsage) / float64(rl.MaxMemoryUsage) * 100
+
+	if memoryPercent >= float64(rl.GCThreshold) {
+		//nolint:mnd // Constants for MB conversion
+		logrus.Warnf("⚠️ High memory usage detected: %.1f%% (%dMB/%dMB). Triggering GC.",
+			memoryPercent, currentUsage/(1024*1024), rl.MaxMemoryUsage/(1024*1024))
+
+		rl.triggerGC()
+		rl.stats.GCTriggered++
+		rl.stats.LastGC = time.Now()
+	}
+
+	// Log resource usage periodically
+	if rl.stats.TotalFilesProcessed%100 == 0 && rl.stats.TotalFilesProcessed > 0 {
+		//nolint:mnd // Constants for MB conversion
+		logrus.Debugf("📊 Resource usage: Memory=%.1f%% (%dMB), Files=%d, TotalSize=%dMB",
+			memoryPercent, currentUsage/(1024*1024), rl.stats.TotalFilesProcessed, rl.stats.TotalFileSize/(1024*1024))
+	}
+}
+
+// triggerGC forces garbage collection
+func (rl *ResourceLimits) triggerGC() {
+	logrus.Debug("🧹 Triggering garbage collection")
+
+	// Force multiple GC cycles for better cleanup
+	for i := 0; i < 3; i++ {
 		runtime.GC()
+		runtime.Gosched() // Allow other goroutines to run
+	}
+
+	// Log memory after GC
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+	//nolint:mnd // Constants for MB conversion
+	logrus.Debugf("🧹 GC completed. Memory after GC: %dMB", m.Alloc/(1024*1024))
+}
+
+// CheckFileSize checks if a file size is within limits
+func (rl *ResourceLimits) CheckFileSize(filePath string, fileSize int64) error {
+	rl.monitoringMutex.Lock()
+	defer rl.monitoringMutex.Unlock()
+
+	// Check single file size limit
+	if fileSize > rl.MaxFileSize {
+		rl.stats.WarningsIssued++
+		//nolint:mnd // Constants for MB conversion
+		return fmt.Errorf("file size %dMB exceeds limit %dMB: %s",
+			fileSize/(1024*1024), rl.MaxFileSize/(1024*1024), filePath)
+	}
+
+	// Check absolute maximum file size
+	if fileSize > MaxSingleFileSize {
+		rl.stats.WarningsIssued++
+		//nolint:mnd // Constants for MB conversion
+		return fmt.Errorf("file size %dMB exceeds absolute maximum %dMB: %s",
+			fileSize/(1024*1024), MaxSingleFileSize/(1024*1024), filePath)
+	}
+
+	// Update current file size
+	rl.currentFileSize += fileSize
+	rl.stats.TotalFileSize += fileSize
+	rl.stats.TotalFilesProcessed++
+
+	// Check total file size limit
+	if rl.stats.TotalFileSize > rl.MaxTotalFileSize {
+		rl.stats.WarningsIssued++
+		//nolint:mnd // Constants for MB conversion
+		return fmt.Errorf("total file size %dMB exceeds limit %dMB",
+			rl.stats.TotalFileSize/(1024*1024), rl.MaxTotalFileSize/(1024*1024))
+	}
+
+	//nolint:mnd // Constants for MB conversion
+	logrus.Debugf("✅ File size check passed: %s (%dMB)", filePath, fileSize/(1024*1024))
+	return nil
+}
+
+// CheckMemoryUsage checks if current memory usage is within limits
+func (rl *ResourceLimits) CheckMemoryUsage() error {
+	rl.monitoringMutex.RLock()
+	defer rl.monitoringMutex.RUnlock()
+
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+	// #nosec G115 - Memory stats conversion is safe
+	currentUsage := int64(m.Alloc)
+
+	if currentUsage > rl.MaxMemoryUsage {
+		rl.stats.WarningsIssued++
+		//nolint:mnd // Constants for MB conversion
+		return fmt.Errorf("memory usage %dMB exceeds limit %dMB",
+			currentUsage/(1024*1024), rl.MaxMemoryUsage/(1024*1024))
+	}
+
+	return nil
+}
+
+// GetStats returns current resource statistics
+func (rl *ResourceLimits) GetStats() ResourceStats {
+	rl.monitoringMutex.RLock()
+	defer rl.monitoringMutex.RUnlock()
+
+	// Update current memory usage
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+	// #nosec G115 - Memory stats conversion is safe
+	rl.currentMemoryUsage = int64(m.Alloc)
+
+	return rl.stats
+}
+
+// LogStats logs current resource statistics
+func (rl *ResourceLimits) LogStats() {
+	stats := rl.GetStats()
+
+	logrus.Infof("📊 Resource Statistics:")
+	//nolint:mnd // Constants for MB conversion
+	logrus.Infof("  🧠 Peak Memory Usage: %dMB", stats.PeakMemoryUsage/(1024*1024))
+	logrus.Infof("  📁 Total Files Processed: %d", stats.TotalFilesProcessed)
+	//nolint:mnd // Constants for MB conversion
+	logrus.Infof("  💾 Total File Size: %dMB", stats.TotalFileSize/(1024*1024))
+	logrus.Infof("  🧹 GC Triggered: %d times", stats.GCTriggered)
+	logrus.Infof("  ⚠️ Warnings Issued: %d", stats.WarningsIssued)
+	logrus.Infof("  ⏱️ Runtime: %v", time.Since(stats.StartTime))
+
+	if !stats.LastGC.IsZero() {
+		logrus.Infof("  🧹 Last GC: %v ago", time.Since(stats.LastGC))
 	}
 }
 
-// Reset resets resource limits to initial state
-func (rl *ResourceLimits) Reset() {
-	rl.mu.Lock()
-	defer rl.mu.Unlock()
+// ResetStats resets resource statistics
+func (rl *ResourceLimits) ResetStats() {
+	rl.monitoringMutex.Lock()
+	defer rl.monitoringMutex.Unlock()
 
-	rl.startTime = time.Now()
-	rl.totalFileSize = 0
-	rl.concurrentOps = 0
-}
-
-// Close stops the resource monitoring
-func (rl *ResourceLimits) Close() {
-	if rl.checkTicker != nil {
-		rl.checkTicker.Stop()
+	rl.stats = ResourceStats{
+		StartTime: time.Now(),
 	}
-	close(rl.stopChan)
+	rl.currentFileSize = 0
+	rl.stats.TotalFilesProcessed = 0
+	rl.stats.TotalFileSize = 0
+
+	logrus.Info("📊 Resource statistics reset")
 }
 
-// Global resource limits instance
-var (
-	globalResourceLimits *ResourceLimits
-	resourceLimitsOnce   sync.Once
-)
-
-// GetGlobalResourceLimits returns the global resource limits
-func GetGlobalResourceLimits() *ResourceLimits {
-	resourceLimitsOnce.Do(func() {
-		globalResourceLimits = NewResourceLimits()
-	})
-	return globalResourceLimits
+// IsMonitoringEnabled returns whether monitoring is enabled
+func (rl *ResourceLimits) IsMonitoringEnabled() bool {
+	return rl.monitoringEnabled
 }
 
-// CheckGlobalMemoryUsage is a convenience function that uses the global limits
-func CheckGlobalMemoryUsage() error {
-	return GetGlobalResourceLimits().CheckMemoryUsage()
+// SetGCThreshold sets the garbage collection threshold
+func (rl *ResourceLimits) SetGCThreshold(threshold int) {
+	if threshold < 1 || threshold > 100 {
+		threshold = DefaultGCThreshold
+	}
+
+	rl.monitoringMutex.Lock()
+	defer rl.monitoringMutex.Unlock()
+
+	rl.GCThreshold = threshold
+	logrus.Infof("🛡️ GC threshold set to %d%%", threshold)
 }
 
-// CheckGlobalFileSize is a convenience function that uses the global limits
-func CheckGlobalFileSize(fileSize int64) error {
-	return GetGlobalResourceLimits().CheckFileSize(fileSize)
+// SetMonitoringInterval sets the monitoring interval
+func (rl *ResourceLimits) SetMonitoringInterval(interval time.Duration) {
+	if interval < time.Second {
+		interval = DefaultMonitoringInterval
+	}
+
+	rl.monitoringMutex.Lock()
+	defer rl.monitoringMutex.Unlock()
+
+	rl.MonitoringInterval = interval
+	logrus.Infof("🛡️ Monitoring interval set to %v", interval)
 }
 
-// CheckGlobalTotalFileSize is a convenience function that uses the global limits
-func CheckGlobalTotalFileSize(additionalSize int64) error {
-	return GetGlobalResourceLimits().CheckTotalFileSize(additionalSize)
+// GetCurrentMemoryUsage returns current memory usage
+func (rl *ResourceLimits) GetCurrentMemoryUsage() int64 {
+	rl.monitoringMutex.RLock()
+	defer rl.monitoringMutex.RUnlock()
+
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+	// #nosec G115 - Memory stats conversion is safe
+	return int64(m.Alloc)
 }
 
-// CheckGlobalExecutionTime is a convenience function that uses the global limits
-func CheckGlobalExecutionTime() error {
-	return GetGlobalResourceLimits().CheckExecutionTime()
+// GetCurrentFileSize returns current total file size
+func (rl *ResourceLimits) GetCurrentFileSize() int64 {
+	rl.monitoringMutex.RLock()
+	defer rl.monitoringMutex.RUnlock()
+
+	return rl.stats.TotalFileSize
 }
 
-// AcquireGlobalConcurrencySlot is a convenience function that uses the global limits
-func AcquireGlobalConcurrencySlot() error {
-	return GetGlobalResourceLimits().AcquireConcurrencySlot()
-}
+// GetTotalFilesProcessed returns total files processed
+func (rl *ResourceLimits) GetTotalFilesProcessed() int64 {
+	rl.monitoringMutex.RLock()
+	defer rl.monitoringMutex.RUnlock()
 
-// ReleaseGlobalConcurrencySlot is a convenience function that uses the global limits
-func ReleaseGlobalConcurrencySlot() {
-	GetGlobalResourceLimits().ReleaseConcurrencySlot()
+	return rl.stats.TotalFilesProcessed
 }

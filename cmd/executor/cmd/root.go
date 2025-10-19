@@ -509,6 +509,25 @@ func addBuildFlags() {
 		"Enable integrity checks for incremental snapshots")
 	RootCmd.PersistentFlags().BoolVarP(&opts.FullScanBackup, "full-scan-backup", "", true,
 		"Enable full scan backup when integrity concerns are detected")
+
+	// Resource control flags
+	//nolint:mnd // Default values for resource limits
+	RootCmd.PersistentFlags().Int64VarP(&opts.MaxMemoryUsageBytes, "max-memory-usage-bytes", "", 2*1024*1024*1024,
+		"Maximum memory usage in bytes (e.g., 2GB, 4GB). Default: 2GB")
+	//nolint:mnd // Default values for resource limits
+	RootCmd.PersistentFlags().Int64VarP(&opts.MaxFileSizeBytes, "max-file-size-bytes", "", 500*1024*1024,
+		"Maximum single file size in bytes (e.g., 500MB, 1GB). Default: 500MB")
+	//nolint:mnd // Default values for resource limits
+	RootCmd.PersistentFlags().Int64VarP(&opts.MaxTotalFileSizeBytes, "max-total-file-size-bytes", "", 10*1024*1024*1024,
+		"Maximum total file size in bytes (e.g., 10GB, 20GB). Default: 10GB")
+	RootCmd.PersistentFlags().BoolVarP(&opts.MemoryMonitoring, "memory-monitoring", "", true,
+		"Enable memory monitoring and automatic garbage collection")
+	//nolint:mnd // Default values for resource limits
+	RootCmd.PersistentFlags().IntVarP(&opts.GCThreshold, "gc-threshold", "", 80,
+		"Memory usage percentage threshold for triggering garbage collection (1-100). Default: 80")
+	//nolint:mnd // Default values for resource limits
+	RootCmd.PersistentFlags().IntVarP(&opts.MonitoringInterval, "monitoring-interval", "", 5,
+		"Memory monitoring interval in seconds. Default: 5")
 }
 
 // addMultiPlatformFlags adds multi-platform build flags
