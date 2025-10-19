@@ -430,9 +430,7 @@ func extractRegularFile(path string, mode os.FileMode, uid, gid int, tr io.Reade
 	}
 
 	// Remove existing file/symlink if it exists
-	if err := removeExistingPath(path); err != nil {
-		return errors.Wrapf(err, "error removing %s to make way for new file", path)
-	}
+	removeExistingPath(path)
 
 	// DISABLED: Path validation removed to allow any file paths from layers
 	cleanPath := filepath.Clean(path)
@@ -497,9 +495,7 @@ func extractHardLink(dest, path string, hdr *tar.Header) error {
 		return mkdirErr
 	}
 
-	if removeErr := removeExistingPath(path); removeErr != nil {
-		return errors.Wrapf(removeErr, "error removing %s to make way for new link", hdr.Name)
-	}
+	removeExistingPath(path)
 
 	// Validate linkname to prevent directory traversal before joining paths
 	if linkNameErr := validateLinkPathName(hdr.Linkname); linkNameErr != nil {
@@ -536,9 +532,7 @@ func extractSymlink(path string, hdr *tar.Header) error {
 		return err
 	}
 
-	if err := removeExistingPath(path); err != nil {
-		return errors.Wrapf(err, "error removing %s to make way for new symlink", hdr.Name)
-	}
+	removeExistingPath(path)
 
 	return os.Symlink(hdr.Linkname, path)
 }
@@ -555,11 +549,14 @@ func ensureDirectoryExists(dir string) error {
 	return nil
 }
 
-func removeExistingPath(path string) error {
+func removeExistingPath(path string) {
 	if FilepathExists(path) {
-		return os.RemoveAll(path)
+		// Try to remove the file/directory, but don't fail if it's busy or protected
+		if err := os.RemoveAll(path); err != nil {
+			// Log warning but continue - some system files may be busy
+			logrus.Warnf("Could not remove existing path %s: %v, continuing anyway", path, err)
+		}
 	}
-	return nil
 }
 
 func validateLinkPath(link, dest string) error {
@@ -1176,7 +1173,8 @@ func MkdirAllWithPermissions(path string, mode os.FileMode, uid, gid int64) erro
 	if err == nil && !info.IsDir() {
 		logrus.Tracef("Removing file because it needs to be a directory %s", path)
 		if removeErr := os.Remove(path); removeErr != nil {
-			return errors.Wrapf(removeErr, "error removing %s to make way for new directory", path)
+			// Log warning but continue - some system files may be busy
+			logrus.Warnf("Could not remove file %s to make way for directory: %v, continuing anyway", path, removeErr)
 		}
 	}
 	if err != nil && !os.IsNotExist(err) {
