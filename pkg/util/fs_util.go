@@ -82,6 +82,17 @@ const (
 	WorldWritableBit = 0o002
 )
 
+// SystemDirectories contains directories that should be protected from modification
+// These directories are typically read-only or system-managed
+var SystemDirectories = []string{
+	"/sys",
+	"/proc",
+	"/dev",
+	"/run",
+	"/tmp",
+	"/etc",
+}
+
 const (
 	snapshotTimeout = "SNAPSHOT_TIMEOUT_DURATION"
 	defaultTimeout  = "90m"
@@ -396,15 +407,25 @@ func ExtractFile(dest string, hdr *tar.Header, cleanedName string, tr io.Reader)
 	uid := hdr.Uid
 	gid := hdr.Gid
 
-	// DISABLED: Ignore list check removed to allow all files from layers
-	// abs, err := filepath.Abs(path)
-	// if err != nil {
-	//	return err
-	// }
-	// if CheckCleanedPathAgainstIgnoreList(abs) && !checkIgnoreListRoot(dest) {
-	//	logrus.Debugf("Not adding %s because it is ignored", path)
-	//	return nil
-	// }
+	// Check for system directories that should be ignored
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return err
+	}
+
+	// Skip system directories that are read-only or should not be modified
+	for _, sysDir := range SystemDirectories {
+		if strings.HasPrefix(abs, sysDir) {
+			logrus.Debugf("Skipping system directory %s", path)
+			return nil
+		}
+	}
+
+	// Keep original ignore list check for other paths
+	if CheckCleanedPathAgainstIgnoreList(abs) && !checkIgnoreListRoot(dest) {
+		logrus.Debugf("Not adding %s because it is ignored", path)
+		return nil
+	}
 
 	switch hdr.Typeflag {
 	case tar.TypeReg:
@@ -649,6 +670,13 @@ func CheckIgnoreList(path string) bool {
 // CheckCleanedPathAgainstIgnoreList checks if a cleaned path should be ignored
 func CheckCleanedPathAgainstIgnoreList(path string) bool {
 	return CheckCleanedPathAgainstProvidedIgnoreList(path, ignorelist)
+}
+
+func checkIgnoreListRoot(root string) bool {
+	if root == config.RootDir {
+		return false
+	}
+	return CheckIgnoreList(root)
 }
 
 // DetectFilesystemIgnoreList detects filesystem ignore list entries from mount information
@@ -1192,7 +1220,8 @@ func MkdirAllWithPermissions(path string, mode os.FileMode, uid, gid int64) erro
 		)
 	}
 	if err := os.Chown(path, int(uid), int(gid)); err != nil {
-		return err
+		// Log warning but continue - some system directories may be protected
+		logrus.Warnf("Could not chown directory %s: %v, continuing anyway", path, err)
 	}
 	// In some cases, MkdirAll doesn't change the permissions, so run Chmod
 	// Must chmod after chown because chown resets the file mode.
@@ -1200,12 +1229,22 @@ func MkdirAllWithPermissions(path string, mode os.FileMode, uid, gid int64) erro
 }
 
 func setFilePermissions(path string, mode os.FileMode, uid, gid int) error {
+	// Skip system directories that are read-only
+	for _, sysDir := range SystemDirectories {
+		if strings.HasPrefix(path, sysDir) {
+			logrus.Debugf("Skipping permissions change for system directory %s", path)
+			return nil
+		}
+	}
+
 	// Only change ownership if it differs to avoid requiring elevated privileges unnecessarily
 	if fi, err := os.Lstat(path); err == nil {
 		if stat, ok := fi.Sys().(*syscall.Stat_t); ok {
 			if int(stat.Uid) != uid || int(stat.Gid) != gid {
 				if chownErr := os.Chown(path, uid, gid); chownErr != nil {
-					return chownErr
+					// Log warning but continue - some system files may be protected
+					logrus.Warnf("Could not chown %s: %v, continuing anyway", path, chownErr)
+					return nil
 				}
 			}
 		}
@@ -1214,7 +1253,12 @@ func setFilePermissions(path string, mode os.FileMode, uid, gid int) error {
 	}
 	// manually set permissions on file, since the default umask (022) will interfere
 	// Must chmod after chown because chown resets the file mode.
-	return os.Chmod(path, mode)
+	if chmodErr := os.Chmod(path, mode); chmodErr != nil {
+		// Log warning but continue - some system files may be protected
+		logrus.Warnf("Could not chmod %s: %v, continuing anyway", path, chmodErr)
+		return nil
+	}
+	return nil
 }
 
 func setFileTimes(path string, aTime, mTime time.Time) error {
@@ -1407,7 +1451,8 @@ func createParentDirectory(path string, uid, gid int) error {
 				}
 				// Use safe UID/GID values for chown operation
 				if chownErr := os.Chown(dir, int(safeUID), int(safeGID)); chownErr != nil {
-					return errors.Wrapf(chownErr, "failed to chown directory %s", dir)
+					// Log warning but continue - some system directories may be protected
+					logrus.Warnf("Could not chown parent directory %s: %v, continuing anyway", dir, chownErr)
 				}
 			} else if err != nil {
 				return err
