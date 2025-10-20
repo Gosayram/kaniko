@@ -25,6 +25,7 @@ import (
 	"math"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -283,6 +284,13 @@ func RetryWithResultConfig[T any](
 		if err == nil {
 			return result, nil
 		}
+	}
+
+	// Create a more descriptive error message for registry issues
+	if strings.Contains(err.Error(), "503 Service Unavailable") ||
+		strings.Contains(err.Error(), "unexpected status code 503") {
+		return result, fmt.Errorf("registry temporarily unavailable after %d attempts, last error: %w. "+
+			"This might be resolved by Runner's registry mirrors", retryCount, err)
 	}
 
 	return result, fmt.Errorf("unable to complete operation after %d attempts, last error: %w", retryCount, err)

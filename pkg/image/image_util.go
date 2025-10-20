@@ -74,23 +74,29 @@ func RetrieveSourceImage(stage *config.KanikoStage, opts *config.KanikoOptions) 
 	// Finally, check if local caching is enabled
 	// If so, look in the local cache before trying the remote registry
 	if opts.Cache && opts.CacheDir != "" {
-		cachedImage, err := cachedImage(opts, currentBaseName)
-		if err != nil {
+		cachedImg, cacheErr := cachedImage(opts, currentBaseName)
+		if cacheErr != nil {
 			switch {
-			case cache.IsNotFound(err):
+			case cache.IsNotFound(cacheErr):
 				logrus.Debugf("Image %v not found in cache", currentBaseName)
-			case cache.IsExpired(err):
+			case cache.IsExpired(cacheErr):
 				logrus.Debugf("Image %v found in cache but was expired", currentBaseName)
 			default:
-				logrus.Errorf("Error while retrieving image from cache: %v %v", currentBaseName, err)
+				logrus.Errorf("Error while retrieving image from cache: %v %v", currentBaseName, cacheErr)
 			}
-		} else if cachedImage != nil {
-			return cachedImage, nil
+		} else if cachedImg != nil {
+			return cachedImg, nil
 		}
 	}
 
 	// Otherwise, initialize image as usual
-	return RetrieveRemoteImage(currentBaseName, &opts.RegistryOptions, opts.CustomPlatform)
+	image, err := RetrieveRemoteImage(currentBaseName, &opts.RegistryOptions, opts.CustomPlatform)
+	if err != nil {
+		// Log warning instead of error for registry issues
+		logrus.Warnf("Failed to retrieve image %s: %v", currentBaseName, err)
+		logrus.Warnf("This might be due to registry unavailability.")
+	}
+	return image, err
 }
 
 func tarballImage(index int) (v1.Image, error) {

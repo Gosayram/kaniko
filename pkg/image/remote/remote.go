@@ -110,6 +110,9 @@ func RetrieveRemoteImage(image string, opts *config.RegistryOptions, customPlatf
 		manifestCache[image] = remoteImage
 	}
 
+	// Handle registry errors gracefully
+	handleRegistryError(err, ref, registryName)
+
 	return remoteImage, err
 }
 
@@ -185,4 +188,21 @@ func parseRegistryMapping(regMapping string) (regURL, repositoryPrefix string) {
 	}
 
 	return regURL, repositoryPrefix
+}
+
+// handleRegistryError handles registry errors gracefully with appropriate logging
+func handleRegistryError(err error, ref name.Reference, registryName string) {
+	if err == nil {
+		return
+	}
+
+	logrus.Warnf("Failed to retrieve image %s from registry %s: %v", ref, registryName, err)
+	logrus.Warnf("This might be due to registry unavailability (e.g., Docker Hub 503). " +
+		"Consider using registry mirrors or cached images.")
+
+	// Check if this is a network/registry issue that might be resolved by GitLab Runner's mirrors
+	if strings.Contains(err.Error(), "503 Service Unavailable") ||
+		strings.Contains(err.Error(), "unable to complete operation") {
+		logrus.Warnf("Registry appears to be unavailable. GitLab Runner should handle this with its own mirrors.")
+	}
 }
