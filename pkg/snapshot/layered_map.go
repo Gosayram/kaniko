@@ -22,6 +22,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"sync"
 
 	"github.com/Gosayram/kaniko/pkg/timing"
 	"github.com/Gosayram/kaniko/pkg/util"
@@ -38,6 +39,9 @@ type LayeredMap struct {
 
 	layerHashCache map[string]string
 	hasher         func(string) (string, error)
+
+	// Mutex for thread-safe access to layerHashCache
+	cacheMutex sync.RWMutex
 }
 
 // NewLayeredMap creates a new layered map which keeps track of adds and deletes.
@@ -58,7 +62,11 @@ func (l *LayeredMap) Snapshot() {
 
 	l.adds = append(l.adds, map[string]string{})
 	l.deletes = append(l.deletes, map[string]struct{}{})
-	l.layerHashCache = map[string]string{} // Erase the hash cache for this new layer.
+
+	// Erase the hash cache for this new layer with write lock
+	l.cacheMutex.Lock()
+	l.layerHashCache = map[string]string{}
+	l.cacheMutex.Unlock()
 }
 
 // Key returns a hash for added and delted files.
@@ -157,10 +165,25 @@ func (l *LayeredMap) Add(s string) error {
 
 	// Use hash function and add to layers
 	newV, err := func(s string) (string, error) {
-		if v, ok := l.layerHashCache[s]; ok {
+		l.cacheMutex.RLock()
+		v, ok := l.layerHashCache[s]
+		l.cacheMutex.RUnlock()
+
+		if ok {
 			return v, nil
 		}
-		return l.hasher(s)
+
+		hash, err := l.hasher(s)
+		if err != nil {
+			return "", err
+		}
+
+		// Cache the hash for future use
+		l.cacheMutex.Lock()
+		l.layerHashCache[s] = hash
+		l.cacheMutex.Unlock()
+
+		return hash, nil
 	}(s)
 
 	if err != nil {
@@ -179,14 +202,28 @@ func (l *LayeredMap) CheckFileChange(s string) (bool, error) {
 	t := timing.Start("Hashing files")
 	defer timing.DefaultRun.Stop(t)
 
-	newV, err := l.hasher(s)
-	if err != nil {
-		return false, err
-	}
+	// Check cache first with read lock
+	l.cacheMutex.RLock()
+	cachedHash, exists := l.layerHashCache[s]
+	l.cacheMutex.RUnlock()
 
-	// Save hash to not recompute it when
-	// adding the file.
-	l.layerHashCache[s] = newV
+	var newV string
+	var err error
+
+	if exists {
+		newV = cachedHash
+	} else {
+		// Compute hash if not cached
+		newV, err = l.hasher(s)
+		if err != nil {
+			return false, err
+		}
+
+		// Save hash to cache with write lock
+		l.cacheMutex.Lock()
+		l.layerHashCache[s] = newV
+		l.cacheMutex.Unlock()
+	}
 
 	oldV, ok := l.get(s)
 	if ok && newV == oldV {

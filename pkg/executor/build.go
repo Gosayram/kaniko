@@ -95,6 +95,9 @@ type stageBuilder struct {
 	layerCache       cache.LayerCache
 	pushLayerToCache cachePusher
 	resourceLimits   *util.ResourceLimits
+
+	// Mutex for thread-safe access to shared state
+	mutex sync.RWMutex
 }
 
 // initializeResourceLimits initializes resource limits if configured
@@ -496,14 +499,20 @@ func (s *stageBuilder) processCommand(
 	cacheGroup *errgroup.Group,
 	initSnapshotTaken bool,
 ) error {
+	// Protect shared state access with read lock
+	s.mutex.RLock()
 	files, err := command.FilesUsedFromContext(&s.cf.Config, s.args)
+	s.mutex.RUnlock()
+
 	if err != nil {
 		return errors.Wrap(err, "failed to get files used from context")
 	}
 
 	if s.opts.Cache {
 		var err error
+		s.mutex.RLock()
 		*compositeKey, err = s.populateCompositeKey(command, files, *compositeKey, s.args, s.cf.Config.Env)
+		s.mutex.RUnlock()
 		if err != nil {
 			return err
 		}
@@ -522,6 +531,7 @@ func (s *stageBuilder) processCommand(
 		}
 	}
 
+	// Execute command (this is safe as it doesn't modify shared state)
 	if err := command.ExecuteCommand(&s.cf.Config, s.args); err != nil {
 		// Log command failure
 		commandDuration := time.Since(commandStartTime).Milliseconds()
@@ -561,7 +571,11 @@ func (s *stageBuilder) handleSnapshot(
 		return s.saveLayerToImage(command.(commands.Cached).Layer(), command.String())
 	}
 
+	// Protect snapshotter access with write lock
+	s.mutex.Lock()
 	tarPath, err := s.takeSnapshot(files, command.ShouldDetectDeletedFiles())
+	s.mutex.Unlock()
+
 	if err != nil {
 		return errors.Wrap(err, "failed to take snapshot")
 	}
@@ -1436,7 +1450,13 @@ func ResolveCrossStageInstructions(stages []config.KanikoStage) map[string]strin
 
 func (s *stageBuilder) initSnapshotWithTimings() error {
 	t := timing.Start("Initial FS snapshot")
-	if err := s.snapshotter.Init(); err != nil {
+
+	// Protect snapshotter access with write lock
+	s.mutex.Lock()
+	err := s.snapshotter.Init()
+	s.mutex.Unlock()
+
+	if err != nil {
 		return err
 	}
 	timing.DefaultRun.Stop(t)
