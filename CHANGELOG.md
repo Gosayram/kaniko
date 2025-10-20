@@ -1,20 +1,57 @@
-# v1.24.1 Release 2025-09-16
+# v1.25.0 Release 2025-10-20
 The executor images in this release are:
 ```
-gcr.io/Gosayram/executor:v1.24.1
-gcr.io/Gosayram/executor:latest
+gcr.io/Gosayram/kaniko/executor:v1.25.0
+gcr.io/Gosayram/kaniko/executor:latest
 ```
 
 The debug images are available at:
 ```
-gcr.io/Gosayram/executor:debug
-gcr.io/Gosayram/executor:v1.24.1-debug
+gcr.io/Gosayram/kaniko/executor:debug
+gcr.io/Gosayram/kaniko/executor:v1.25.0-debug
 ```
 
 The slim executor images which don't contain any authentication binaries are available at:
 ```
-gcr.io/Gosayram/executor:slim
-gcr.io/Gosayram/executor:v1.24.1-slim
+gcr.io/Gosayram/kaniko/executor:slim
+gcr.io/Gosayram/kaniko/executor:v1.25.0-slim
+```
+
+## Features
+* Implement comprehensive logging system with emoji indicators and performance tracking
+* Add incremental snapshots with integrity verification and automatic fallback
+* Implement resource management with memory monitoring and automatic GC
+* Add buffer pools for memory optimization
+* Implement parallel command execution with dependency analysis
+* Add smart cache with LRU and preloading capabilities
+* Implement optimized file copying with sendfile() support
+* Add comprehensive network optimizations (connection pooling, DNS caching)
+* Implement registry client optimizations and manifest caching
+* Improve logging for Docker layer user extraction mechanism
+* Improve logging for file extraction from layers with detailed attributes
+
+Huge thank you for this release towards our contributors: 
+- Abdurakhman R.
+
+---
+
+# v1.24.1 Release 2025-09-16
+The executor images in this release are:
+```
+gcr.io/Gosayram/kaniko/executor:v1.24.1
+gcr.io/Gosayram/kaniko/executor:latest
+```
+
+The debug images are available at:
+```
+gcr.io/Gosayram/kaniko/executor:debug
+gcr.io/Gosayram/kaniko/executor:v1.24.1-debug
+```
+
+The slim executor images which don't contain any authentication binaries are available at:
+```
+gcr.io/Gosayram/kaniko/executor:slim
+gcr.io/Gosayram/kaniko/executor:v1.24.1-slim
 ```
 
 
