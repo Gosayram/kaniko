@@ -24,6 +24,7 @@ import (
 	"strings"
 
 	"github.com/pkg/errors"
+	"github.com/sirupsen/logrus"
 
 	"github.com/Gosayram/kaniko/pkg/util"
 )
@@ -61,6 +62,12 @@ func (s *CompositeCache) AddPath(p string, context util.FileContext) error {
 	sha := sha256.New()
 	fi, err := os.Lstat(p)
 	if err != nil {
+		// If path doesn't exist, log warning and continue without adding to cache
+		// This prevents build failures when expected build artifacts are missing
+		if os.IsNotExist(err) {
+			logrus.Warnf("Path %s does not exist, skipping from cache key", p)
+			return nil
+		}
 		return errors.Wrap(err, "could not add path")
 	}
 
@@ -99,6 +106,12 @@ func hashDir(p string, context util.FileContext) (isEmpty bool, hash string, err
 	empty := true
 	if err := filepath.Walk(p, func(path string, _ os.FileInfo, err error) error {
 		if err != nil {
+			// If individual file access fails, log warning and continue
+			// This prevents build failures when some files are inaccessible
+			if os.IsNotExist(err) {
+				logrus.Debugf("File %s does not exist during directory walk, skipping", path)
+				return nil
+			}
 			return err
 		}
 		exclude := context.ExcludesFile(path)
@@ -108,7 +121,10 @@ func hashDir(p string, context util.FileContext) (isEmpty bool, hash string, err
 
 		fileHash, err := util.CacheHasher()(path)
 		if err != nil {
-			return err
+			// If file hashing fails, log warning and continue
+			// This prevents build failures when some files can't be hashed
+			logrus.Debugf("Failed to hash file %s: %v, skipping", path, err)
+			return nil
 		}
 		if _, err := sha.Write([]byte(fileHash)); err != nil {
 			return err

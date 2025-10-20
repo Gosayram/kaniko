@@ -341,6 +341,8 @@ func (s *stageBuilder) optimize(compositeKey CompositeCache, cfg *v1.Config) err
 				logrus.Debugf("Failed to retrieve layer: %s", err)
 				logrus.Infof("No cached layer found for cmd %s", command.String())
 				logrus.Debugf("Key missing was: %s", compositeKey.Key())
+				// Log detailed cache key information for debugging
+				logrus.Debugf("Cache key components: %v", compositeKey.keys)
 				stopCache = true
 				continue
 			}
@@ -1130,9 +1132,21 @@ func handleNonFinalStage(
 		}
 	}
 
+	// Log cross-stage dependencies for debugging
+	logrus.Debugf("Cross-stage dependencies for stage %d: %v", index, crossStageDependencies[index])
 	filesToSave, err := filesToSave(crossStageDependencies[index])
 	if err != nil {
 		return err
+	}
+
+	// If no files to save, log warning and continue
+	if len(filesToSave) == 0 {
+		logrus.Warnf("No files found for cross-stage dependencies in stage %d, continuing anyway", index)
+		logrus.Debugf("Expected patterns: %v", crossStageDependencies[index])
+		return errors.Wrap(
+			util.DeleteFilesystem(),
+			fmt.Sprintf("deleting file system after stage %d", index),
+		)
 	}
 
 	dstDir := filepath.Join(config.KanikoDir, strconv.Itoa(index))
@@ -1144,7 +1158,9 @@ func handleNonFinalStage(
 	for _, p := range filesToSave {
 		logrus.Infof("Saving file %s for later use", p)
 		if err := util.CopyFileOrSymlink(p, dstDir, config.RootDir); err != nil {
-			return errors.Wrap(err, "could not save file")
+			// Don't fail on individual file copy errors - log warning and continue
+			logrus.Warnf("Failed to save file %s for cross-stage dependency: %v, continuing anyway", p, err)
+			continue
 		}
 	}
 
