@@ -27,6 +27,29 @@ docker run -v $(pwd):/workspace \
   --context=dir:///workspace
 ```
 
+### Using Default User
+
+⚠️ **SECURITY WARNING**: Only use this for development or legacy builds. **NEVER use `--default-user=root` in production!**
+
+For Dockerfiles that need root privileges but don't specify a USER instruction:
+
+```bash
+docker run -v $(pwd):/workspace \
+  ghcr.io/gosayram/kaniko:latest \
+  --dockerfile=/workspace/Dockerfile \
+  --destination=<your-registry/your-image:tag> \
+  --context=dir:///workspace \
+  --default-user=root
+```
+
+**Recommended approach**: Always specify a non-root user in your Dockerfile:
+```dockerfile
+FROM node:18-alpine
+# ... your build steps ...
+USER node
+CMD ["node", "app.js"]
+```
+
 ### In Kubernetes
 
 ```yaml
@@ -55,12 +78,101 @@ spec:
         secretName: kaniko-secret
 ```
 
+### Kubernetes with Default User
+
+⚠️ **SECURITY WARNING**: Only use this for development or legacy builds. **NEVER use `--default-user=root` in production!**
+
+For builds that need root privileges:
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: kaniko-root
+spec:
+  containers:
+    - name: kaniko
+      image: ghcr.io/gosayram/kaniko:latest
+      args:
+        - "--dockerfile=/workspace/Dockerfile"
+        - "--context=gs://bucket>/context.tar.gz"
+        - "--destination=gcr.io/your-project/your-image:tag"
+        - "--default-user=root"
+      volumeMounts:
+        - name: kaniko-secret
+          mountPath: /secret
+      env:
+        - name: GOOGLE_APPLICATION_CREDENTIALS
+          value: /secret/kaniko-secret.json
+  restartPolicy: Never
+  volumes:
+    - name: kaniko-secret
+      secret:
+        secretName: kaniko-secret
+```
+
+**Recommended approach**: Always specify a non-root user in your Dockerfile:
+```dockerfile
+FROM node:18-alpine
+# ... your build steps ...
+USER node
+CMD ["node", "app.js"]
+```
+
+## 🔒 Security Best Practices
+
+### User Security
+
+**⚠️ CRITICAL SECURITY REQUIREMENTS:**
+
+1. **NEVER use `--default-user=root` in production environments**
+2. **Always specify a non-root user in your Dockerfile with `USER` instruction**
+3. **Not specifying a user or overriding it with root is considered unsafe and prohibited in production**
+4. **The `--default-user` flag should only be used for development or legacy builds that cannot be modified**
+
+### Recommended Dockerfile Pattern
+
+```dockerfile
+FROM node:18-alpine
+
+# Install dependencies as root (if needed)
+RUN apk add --no-cache curl
+
+# Create non-root user
+RUN addgroup -g 1001 -S nodejs && \
+    adduser -S nextjs -u 1001
+
+# Switch to non-root user
+USER nextjs
+
+# Copy application files
+COPY --chown=nextjs:nodejs . .
+
+# Run application as non-root user
+CMD ["node", "app.js"]
+```
+
+### Production Security Checklist
+
+- ✅ **Specify non-root user in Dockerfile**
+- ✅ **Use `USER` instruction in Dockerfile**
+- ✅ **Avoid `--default-user=root` in production**
+- ✅ **Test containers with non-root user**
+- ✅ **Use minimal base images**
+- ✅ **Regular security updates**
+
 ## 📋 Table of Contents
 
 - [kaniko - Build Images In Kubernetes](#kaniko---build-images-in-kubernetes)
   - [🚀 Quick Start](#-quick-start)
     - [Basic Usage](#basic-usage)
+    - [Using Default User](#using-default-user)
     - [In Kubernetes](#in-kubernetes)
+    - [Kubernetes with Default User](#kubernetes-with-default-user)
+  - [🔒 Security Best Practices](#-security-best-practices)
+    - [User Security](#user-security)
+    - [Recommended Dockerfile Pattern](#recommended-dockerfile-pattern)
+    - [Production Security Checklist](#production-security-checklist)
   - [📋 Table of Contents](#-table-of-contents)
   - [🔧 How does kaniko work?](#-how-does-kaniko-work)
   - [🚨 Known Issues](#-known-issues)
@@ -99,6 +211,7 @@ spec:
       - [Flag `--compressed-caching`](#flag---compressed-caching)
       - [Flag `--context-sub-path`](#flag---context-sub-path)
       - [Flag `--custom-platform`](#flag---custom-platform)
+      - [Flag `--default-user`](#flag---default-user)
       - [Flag `--digest-file`](#flag---digest-file)
       - [Flag `--dockerfile`](#flag---dockerfile)
       - [Flag `--force`](#flag---force)
@@ -779,6 +892,34 @@ It's also possible specifying CPU variants adding it as a third parameter (like 
 _The resulting images cannot provide any metadata about CPU variant due to a limitation of the OCI-image specification._
 
 _This is not virtualization and cannot help to build an architecture not natively supported by the build host. This is used to build i386 on an amd64 Host for example, or arm32 on an arm64 host._
+
+#### Flag `--default-user`
+
+Set this flag to specify the default user when no USER instruction is present in the Dockerfile. 
+
+**Default behavior (without flag):**
+- If no user is specified in the Dockerfile or base image, Kaniko automatically sets `kaniko:kaniko` as the default user for security
+- This ensures builds run with minimal privileges by default
+
+**Examples:**
+- No flag specified - Uses secure default `kaniko:kaniko` (recommended)
+- `--default-user=root` - Use root as the default user (⚠️ **SECURITY RISK**)
+- `--default-user=appuser` - Use a specific user as default
+- `--default-user=nobody` - Use nobody as the default user
+
+**Use cases:**
+- Dockerfiles that need to install system packages or modify system files (use `--default-user=root`)
+- Builds that require root privileges for certain operations
+- Legacy Dockerfiles that don't specify USER instructions
+
+**⚠️ SECURITY WARNING:**
+- **NEVER use `--default-user=root` in production environments**
+- **Always specify a non-root user in your Dockerfile with `USER` instruction**
+- **Not specifying a user or overriding it with root is considered unsafe and prohibited in production**
+- **This flag should only be used for development or legacy builds that cannot be modified**
+- **By default, Kaniko uses `kaniko:kaniko` for security when no user is specified**
+
+**Note:** This flag only applies when the base image doesn't have a user set. If the Dockerfile contains a `USER` instruction, it takes precedence over this flag.
 
 #### Flag `--digest-file`
 

@@ -106,8 +106,11 @@ type KanikoOptions struct {
 	RequireNativeNodes  bool             // --require-native-nodes=true
 	OCIMode             string           // --oci-mode=[oci|auto|docker]
 	SignImages          bool             // --sign-images[=true|false]
-	CosignKeyPath       string           // --cosign-key-path=/path/to/key
-	CosignKeyPassword   string           // --cosign-key-password=secret
+
+	// User configuration options
+	DefaultUser       string // --default-user=kaniko (default user when no USER instruction)
+	CosignKeyPath     string // --cosign-key-path=/path/to/key
+	CosignKeyPassword string // --cosign-key-password=secret
 
 	// File size limit options for security and resource control
 	MaxFileSize         string // --max-file-size=500MB

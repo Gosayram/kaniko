@@ -229,6 +229,26 @@ func initConfig(img partial.WithConfigFile, opts *config.KanikoOptions) (*v1.Con
 		return imageConfig, nil
 	}
 
+	// Set default user with security best practices
+	// If no user is set in the base image, apply default user
+	if imageConfig.Config.User == "" {
+		if opts.DefaultUser != "" {
+			// User explicitly specified via --default-user flag
+			if opts.DefaultUser == "root" {
+				logrus.Warnf("⚠️ SECURITY WARNING: Using --default-user=root is unsafe and prohibited in production!")
+				logrus.Warnf("Consider specifying a non-root user in your Dockerfile with USER instruction instead.")
+			}
+			logrus.Infof("Setting default user to: %s", opts.DefaultUser)
+			imageConfig.Config.User = opts.DefaultUser
+		} else {
+			// No user specified - apply secure default (non-root user)
+			// Use kaniko:kaniko (1000:1000) as default for security
+			const defaultSecureUser = "kaniko:kaniko"
+			logrus.Infof("No user specified. Setting secure default user: %s", defaultSecureUser)
+			imageConfig.Config.User = defaultSecureUser
+		}
+	}
+
 	if l := len(opts.Labels); l > 0 {
 		if imageConfig.Config.Labels == nil {
 			imageConfig.Config.Labels = make(map[string]string)

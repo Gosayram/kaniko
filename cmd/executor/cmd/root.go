@@ -510,6 +510,13 @@ func addBuildFlags() {
 	RootCmd.PersistentFlags().BoolVarP(&opts.RunV2, "use-new-run", "", false,
 		"Use the experimental run implementation for detecting changes without requiring file system snapshots.")
 
+	// User configuration flags
+	RootCmd.PersistentFlags().StringVarP(&opts.DefaultUser, "default-user", "", "",
+		"Default user to use when no USER instruction is present (e.g., appuser, nobody). "+
+			"⚠️ SECURITY WARNING: Using 'root' is unsafe and prohibited in production! "+
+			"By default, Kaniko uses 'kaniko:kaniko' for security when no user is specified. "+
+			"Always specify non-root users in your Dockerfile with USER instruction.")
+
 	// File size limit flags for security and resource control
 	RootCmd.PersistentFlags().StringVarP(&opts.MaxFileSize, "max-file-size", "", "",
 		"Maximum size for individual files (e.g., 500MB, 1GB). Default: 500MB")
