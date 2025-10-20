@@ -47,6 +47,7 @@ import (
 	"github.com/Gosayram/kaniko/pkg/dockerfile"
 	image_util "github.com/Gosayram/kaniko/pkg/image"
 	"github.com/Gosayram/kaniko/pkg/image/remote"
+	"github.com/Gosayram/kaniko/pkg/logging"
 	"github.com/Gosayram/kaniko/pkg/multiplatform"
 	"github.com/Gosayram/kaniko/pkg/snapshot"
 	"github.com/Gosayram/kaniko/pkg/timing"
@@ -510,6 +511,11 @@ func (s *stageBuilder) processCommand(
 
 	logrus.Info(command.String())
 
+	// Log command start with structured logging
+	globalLogger := logging.GetGlobalManager()
+	commandStartTime := time.Now()
+	globalLogger.LogCommandStart(index, command.String(), "stage")
+
 	if !initSnapshotTaken && !isCacheCommand(command) && !command.ProvidesFilesToSnapshot() {
 		if err := s.initSnapshotWithTimings(); err != nil {
 			return err
@@ -517,8 +523,19 @@ func (s *stageBuilder) processCommand(
 	}
 
 	if err := command.ExecuteCommand(&s.cf.Config, s.args); err != nil {
+		// Log command failure
+		commandDuration := time.Since(commandStartTime).Milliseconds()
+		globalLogger.LogCommandComplete(index, command.String(), commandDuration, false)
+		globalLogger.LogError("command", "execute", err, map[string]interface{}{
+			"command_index": index,
+			"command":       command.String(),
+		})
 		return errors.Wrap(err, "failed to execute command")
 	}
+
+	// Log command completion
+	commandDuration := time.Since(commandStartTime).Milliseconds()
+	globalLogger.LogCommandComplete(index, command.String(), commandDuration, true)
 
 	files = command.FilesToSnapshot()
 	if !s.shouldTakeSnapshot(index, command.MetadataOnly()) && !s.opts.ForceBuildMetadata {
@@ -877,6 +894,20 @@ func DoBuild(opts *config.KanikoOptions) (v1.Image, error) {
 	timer := timing.Start("Total Build Time")
 	defer timing.DefaultRun.Stop(timer)
 
+	// Initialize global logging manager
+	globalLogger := logging.GetGlobalManager()
+	if !globalLogger.IsInitialized() {
+		if err := globalLogger.Initialize("info", "kaniko", true); err != nil {
+			logrus.Warnf("Failed to initialize structured logging: %v", err)
+		}
+	}
+
+	// Generate build ID for tracking
+	buildID := fmt.Sprintf("build-%d", time.Now().Unix())
+	buildStartTime := time.Now()
+	// Note: We'll get the actual stage count after parsing the Dockerfile
+	globalLogger.LogBuildStart(buildID, opts.DockerfilePath, 0)
+
 	kanikoStages, stageNameToIdx, fileContext, err := initBuildStages(opts)
 	if err != nil {
 		return nil, err
@@ -906,10 +937,20 @@ func DoBuild(opts *config.KanikoOptions) (v1.Image, error) {
 		}
 
 		if stage.Final {
+			// Log build completion
+			buildDuration := time.Since(buildStartTime).Milliseconds()
+			globalLogger.LogBuildComplete(buildID, buildDuration, true)
 			return handleFinalImage(sourceImage, opts, timer)
 		}
 
 		if err := handleNonFinalStage(index, stage, sourceImage, crossStageDependencies); err != nil {
+			// Log build failure
+			buildDuration := time.Since(buildStartTime).Milliseconds()
+			globalLogger.LogBuildComplete(buildID, buildDuration, false)
+			globalLogger.LogError("build", "stage", err, map[string]interface{}{
+				"stage_index": index,
+				"stage_name":  stage.BaseName,
+			})
 			return nil, err
 		}
 	}
@@ -981,9 +1022,25 @@ func buildStage(
 	logrus.Infof("Building stage '%v' [idx: '%v', base-idx: '%v']",
 		stage.BaseName, stage.Index, stage.BaseImageIndex)
 
+	// Log stage start with structured logging
+	globalLogger := logging.GetGlobalManager()
+	stageStartTime := time.Now()
+	globalLogger.LogStageStart(stage.Index, stage.BaseName, stage.BaseName)
+
 	if err = sb.build(); err != nil {
+		// Log stage failure
+		stageDuration := time.Since(stageStartTime).Milliseconds()
+		globalLogger.LogStageComplete(stage.Index, stage.BaseName, stageDuration, false)
+		globalLogger.LogError("stage", "build", err, map[string]interface{}{
+			"stage_index": stage.Index,
+			"stage_name":  stage.BaseName,
+		})
 		return nil, errors.Wrap(err, "error building stage")
 	}
+
+	// Log stage completion
+	stageDuration := time.Since(stageStartTime).Milliseconds()
+	globalLogger.LogStageComplete(stage.Index, stage.BaseName, stageDuration, true)
 
 	reviewConfig(stage, &sb.cf.Config)
 

@@ -222,19 +222,19 @@ func (el *EnhancedLogger) LogSecurityEvent(groupName, event, severity string, de
 	switch severity {
 	case "critical":
 		emoji = "🚨"
-		level = "error"
+		level = LevelError
 	case "high":
 		emoji = "⚠️"
-		level = "warn"
+		level = LevelWarn
 	case "medium":
 		emoji = "🔍"
-		level = "info"
+		level = LevelInfo
 	case "low":
 		emoji = "ℹ️"
-		level = "debug"
+		level = LevelDebug
 	default:
 		emoji = "🔒"
-		level = "info"
+		level = LevelInfo
 	}
 
 	message := fmt.Sprintf("%s Security: %s", emoji, event)

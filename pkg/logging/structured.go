@@ -169,7 +169,7 @@ func NewStructuredLogger(
 		logger.SetLevel(logrus.InfoLevel)
 	case "warn":
 		logger.SetLevel(logrus.WarnLevel)
-	case "error":
+	case LevelError:
 		logger.SetLevel(logrus.ErrorLevel)
 	default:
 		logger.SetLevel(logrus.InfoLevel)
