@@ -1,5 +1,5 @@
 /*
-Copyright 2024 Kaniko Contributors
+Copyright 2024 Google LLC
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -19,428 +19,422 @@ package executor
 import (
 	"context"
 	"fmt"
+	"runtime"
 	"sync"
 	"time"
 
+	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/sirupsen/logrus"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/Gosayram/kaniko/pkg/commands"
+	"github.com/Gosayram/kaniko/pkg/config"
+	"github.com/Gosayram/kaniko/pkg/dockerfile"
 )
-
-// Constants for parallel execution
-const (
-	DefaultTimeout    = 30 * time.Minute
-	DefaultBufferSize = 100
-)
-
-// ParallelExecutor handles parallel execution of Docker commands
-type ParallelExecutor struct {
-	maxWorkers    int
-	timeout       time.Duration
-	_             func(error) error // errorHandler - reserved for future use
-	progressChan  chan ProgressUpdate
-	mu            sync.RWMutex
-	executionPlan []ExecutionGroup
-}
-
-// ExecutionGroup represents a group of commands that can be executed in parallel
-type ExecutionGroup struct {
-	Commands []commands.DockerCommand
-	Index    int
-	Priority int
-}
-
-// ProgressUpdate provides information about command execution progress
-type ProgressUpdate struct {
-	CommandIndex int
-	CommandName  string
-	Status       string
-	Error        error
-	Duration     time.Duration
-}
 
 // CommandDependency represents a dependency between commands
 type CommandDependency struct {
-	From int    // Source command index
-	To   int    // Target command index
-	Type string // "file", "env", "stage"
+	From int // Source command index
+	To   int // Target command index
+	Type DependencyType
+}
+
+// DependencyType defines the type of dependency between commands
+type DependencyType int
+
+const (
+	// FileSystemDependency - command depends on filesystem changes from another command
+	FileSystemDependency DependencyType = iota
+	// EnvironmentDependency - command depends on environment variables from another command
+	EnvironmentDependency
+	// MetadataDependency - command depends on metadata changes from another command
+	MetadataDependency
+	// CacheDependency - command depends on cache state from another command
+	CacheDependency
+)
+
+// ParallelExecutor handles parallel execution of Docker commands with dependency analysis
+type ParallelExecutor struct {
+	commands     []commands.DockerCommand
+	dependencies []CommandDependency
+	config       *config.KanikoOptions
+	args         *dockerfile.BuildArgs
+	imageConfig  *v1.Config
+	stageBuilder *stageBuilder
+
+	// Worker pool configuration
+	maxWorkers int
+	workerPool chan struct{}
+
+	// Execution state
+	executionOrder []int
+	executed       map[int]bool
+	executedMutex  sync.RWMutex
+
+	// Performance monitoring
+	executionStats map[int]*CommandExecutionStats
+	statsMutex     sync.RWMutex
+}
+
+// CommandExecutionStats tracks execution statistics for a command
+type CommandExecutionStats struct {
+	StartTime    time.Time
+	EndTime      time.Time
+	Duration     time.Duration
+	Success      bool
+	ErrorMessage string
+	WorkerID     int
 }
 
 // NewParallelExecutor creates a new parallel executor
-func NewParallelExecutor(maxWorkers int, timeout time.Duration) *ParallelExecutor {
+func NewParallelExecutor(
+	cmds []commands.DockerCommand,
+	opts *config.KanikoOptions,
+	args *dockerfile.BuildArgs,
+	imageConfig *v1.Config,
+	sb *stageBuilder,
+) *ParallelExecutor {
+	maxWorkers := opts.MaxParallelCommands
 	if maxWorkers <= 0 {
-		maxWorkers = 4 // Default to 4 workers
-	}
-	if timeout <= 0 {
-		timeout = DefaultTimeout // Default timeout
+		maxWorkers = runtime.NumCPU()
 	}
 
 	return &ParallelExecutor{
-		maxWorkers:   maxWorkers,
-		timeout:      timeout,
-		progressChan: make(chan ProgressUpdate, DefaultBufferSize),
+		commands:       cmds,
+		config:         opts,
+		args:           args,
+		imageConfig:    imageConfig,
+		stageBuilder:   sb,
+		maxWorkers:     maxWorkers,
+		workerPool:     make(chan struct{}, maxWorkers),
+		executed:       make(map[int]bool),
+		executionStats: make(map[int]*CommandExecutionStats),
 	}
 }
 
-// ExecuteCommandsParallel executes commands in parallel where possible
-func (pe *ParallelExecutor) ExecuteCommandsParallel(
-	cmds []commands.DockerCommand,
-	compositeKey *CompositeCache,
-	initSnapshotTaken bool,
-	stageBuilder *stageBuilder,
-) error {
-	ctx, cancel := context.WithTimeout(context.Background(), pe.timeout)
-	defer cancel()
+// AnalyzeDependencies analyzes command dependencies to determine execution order
+func (pe *ParallelExecutor) AnalyzeDependencies() error {
+	logrus.Info("🔍 Analyzing command dependencies for parallel execution")
 
-	// Analyze command dependencies
-	dependencies := pe.analyzeDependencies(cmds)
+	dependencies := make([]CommandDependency, 0)
 
-	// Create execution plan
-	executionPlan, err := pe.createExecutionPlan(cmds, dependencies)
-	if err != nil {
-		return fmt.Errorf("failed to create execution plan: %w", err)
-	}
-
-	pe.mu.Lock()
-	pe.executionPlan = executionPlan
-	pe.mu.Unlock()
-
-	// Execute plan
-	return pe.executePlan(ctx, executionPlan, compositeKey, initSnapshotTaken, stageBuilder)
-}
-
-// analyzeDependencies analyzes dependencies between commands
-func (pe *ParallelExecutor) analyzeDependencies(cmds []commands.DockerCommand) []CommandDependency {
-	var dependencies []CommandDependency
-
-	for i, cmd := range cmds {
+	for i, cmd := range pe.commands {
 		if cmd == nil {
 			continue
 		}
 
-		// Analyze file dependencies
-		fileDeps := pe.analyzeFileDependencies(cmd, i, cmds)
-		dependencies = append(dependencies, fileDeps...)
+		// Analyze dependencies for this command
+		cmdDeps := pe.analyzeCommandDependencies(i, cmd)
+		dependencies = append(dependencies, cmdDeps...)
+	}
 
-		// Analyze environment dependencies
-		envDeps := pe.analyzeEnvironmentDependencies(cmd, i, cmds)
-		dependencies = append(dependencies, envDeps...)
+	pe.dependencies = dependencies
 
-		// Analyze stage dependencies
-		stageDeps := pe.analyzeStageDependencies(cmd, i, cmds)
-		dependencies = append(dependencies, stageDeps...)
+	// Build execution order based on dependencies
+	executionOrder := pe.buildExecutionOrder()
+
+	pe.executionOrder = executionOrder
+
+	logrus.Infof("📊 Found %d dependencies, execution order: %v", len(dependencies), executionOrder)
+	return nil
+}
+
+// analyzeCommandDependencies analyzes dependencies for a specific command
+func (pe *ParallelExecutor) analyzeCommandDependencies(index int, cmd commands.DockerCommand) []CommandDependency {
+	dependencies := make([]CommandDependency, 0)
+
+	// Check for filesystem dependencies
+	if pe.hasFilesystemDependency(index, cmd) {
+		// Find the last command that modifies filesystem
+		for i := index - 1; i >= 0; i-- {
+			if pe.commands[i] != nil && !pe.commands[i].MetadataOnly() {
+				dependencies = append(dependencies, CommandDependency{
+					From: i,
+					To:   index,
+					Type: FileSystemDependency,
+				})
+				break
+			}
+		}
+	}
+
+	// Check for environment dependencies
+	if pe.hasEnvironmentDependency(index, cmd) {
+		// Find the last command that modifies environment
+		for i := index - 1; i >= 0; i-- {
+			if pe.commands[i] != nil && pe.commands[i].MetadataOnly() {
+				// Check if it's an environment-related command
+				if pe.isEnvironmentCommand(pe.commands[i]) {
+					dependencies = append(dependencies, CommandDependency{
+						From: i,
+						To:   index,
+						Type: EnvironmentDependency,
+					})
+					break
+				}
+			}
+		}
 	}
 
 	return dependencies
 }
 
-// analyzeFileDependencies analyzes file-based dependencies
-func (pe *ParallelExecutor) analyzeFileDependencies(
-	cmd commands.DockerCommand,
-	index int,
-	allCmds []commands.DockerCommand,
-) []CommandDependency {
-	var deps []CommandDependency
+// hasFilesystemDependency checks if a command depends on filesystem changes
+func (pe *ParallelExecutor) hasFilesystemDependency(_ int, cmd commands.DockerCommand) bool {
+	// Commands that read from filesystem depend on previous filesystem changes
+	return !cmd.MetadataOnly() && cmd.RequiresUnpackedFS()
+}
 
-	// Check if command reads from files created by previous commands
-	if copyCmd, ok := cmd.(*commands.CopyCommand); ok {
-		for i := 0; i < index; i++ {
-			if prevCmd := allCmds[i]; prevCmd != nil {
-				// Check if previous command creates files that this command reads
-				if pe.commandsHaveFileDependency(prevCmd, copyCmd) {
-					deps = append(deps, CommandDependency{
-						From: i,
-						To:   index,
-						Type: "file",
-					})
-				}
-			}
+// hasEnvironmentDependency checks if a command depends on environment variables
+func (pe *ParallelExecutor) hasEnvironmentDependency(_ int, cmd commands.DockerCommand) bool {
+	// RUN commands typically depend on environment variables
+	return !cmd.MetadataOnly() && cmd.RequiresUnpackedFS()
+}
+
+// isEnvironmentCommand checks if a command modifies environment
+func (pe *ParallelExecutor) isEnvironmentCommand(cmd commands.DockerCommand) bool {
+	// This would need to be implemented based on command type
+	// For now, assume metadata commands can affect environment
+	return cmd.MetadataOnly()
+}
+
+// buildExecutionOrder builds the execution order based on dependencies
+func (pe *ParallelExecutor) buildExecutionOrder() []int {
+	// Simple topological sort for now
+	// In a more sophisticated implementation, we could use Kahn's algorithm
+
+	order := make([]int, 0, len(pe.commands))
+	visited := make(map[int]bool)
+
+	// Add commands that have no dependencies first
+	for i, cmd := range pe.commands {
+		if cmd == nil {
+			continue
 		}
-	}
 
-	return deps
-}
-
-// analyzeEnvironmentDependencies analyzes environment variable dependencies
-func (pe *ParallelExecutor) analyzeEnvironmentDependencies(
-	cmd commands.DockerCommand,
-	index int,
-	allCmds []commands.DockerCommand,
-) []CommandDependency {
-	var deps []CommandDependency
-
-	// Check if command uses environment variables set by previous commands
-	if runCmd, ok := cmd.(*commands.RunCommand); ok {
-		for i := 0; i < index; i++ {
-			if prevCmd := allCmds[i]; prevCmd != nil {
-				// Check if previous command sets environment variables used by this command
-				if pe.commandsHaveEnvironmentDependency(prevCmd, runCmd) {
-					deps = append(deps, CommandDependency{
-						From: i,
-						To:   index,
-						Type: "env",
-					})
-				}
-			}
-		}
-	}
-
-	return deps
-}
-
-// analyzeStageDependencies analyzes cross-stage dependencies
-func (pe *ParallelExecutor) analyzeStageDependencies(
-	cmd commands.DockerCommand,
-	index int,
-	allCmds []commands.DockerCommand,
-) []CommandDependency {
-	var deps []CommandDependency
-
-	// Check if command depends on previous stage
-	if copyCmd, ok := cmd.(*commands.CopyCommand); ok && copyCmd.From() != "" {
-		// Find the stage this command depends on
-		for i := 0; i < index; i++ {
-			if prevCmd := allCmds[i]; prevCmd != nil {
-				if pe.isStageDependency(prevCmd, copyCmd) {
-					deps = append(deps, CommandDependency{
-						From: i,
-						To:   index,
-						Type: "stage",
-					})
-				}
-			}
-		}
-	}
-
-	return deps
-}
-
-// commandsHaveFileDependency checks if two commands have file dependencies
-func (pe *ParallelExecutor) commandsHaveFileDependency(_, _ commands.DockerCommand) bool {
-	// This is a simplified check - in reality, you'd need more sophisticated analysis
-	// of what files each command creates and what files each command reads
-
-	// For now, assume all commands have potential file dependencies
-	// In a real implementation, you'd analyze the actual file operations
-	return true
-}
-
-// commandsHaveEnvironmentDependency checks if two commands have environment dependencies
-func (pe *ParallelExecutor) commandsHaveEnvironmentDependency(_, currCmd commands.DockerCommand) bool {
-	// This is a simplified check - in reality, you'd need to analyze
-	// environment variable usage in command strings
-
-	// For now, assume RUN commands might depend on previous commands
-	if _, ok := currCmd.(*commands.RunCommand); ok {
-		return true
-	}
-	return false
-}
-
-// isStageDependency checks if a command depends on a previous stage
-func (pe *ParallelExecutor) isStageDependency(_, currCmd commands.DockerCommand) bool {
-	// Check if current command is a COPY --from command
-	if copyCmd, ok := currCmd.(*commands.CopyCommand); ok && copyCmd.From() != "" {
-		// This is a simplified check - in reality, you'd need to match
-		// the stage name with the actual stage
-		return true
-	}
-	return false
-}
-
-// createExecutionPlan creates a plan for parallel execution
-func (pe *ParallelExecutor) createExecutionPlan(
-	cmds []commands.DockerCommand,
-	dependencies []CommandDependency,
-) ([]ExecutionGroup, error) {
-	var plan []ExecutionGroup
-	executed := make(map[int]bool)
-	groupIndex := 0
-
-	for len(executed) < len(cmds) {
-		var currentGroup []commands.DockerCommand
-		var currentIndices []int
-
-		// Find commands that can be executed in parallel
-		for i, cmd := range cmds {
-			if cmd == nil || executed[i] {
-				continue
-			}
-
-			// Check if all dependencies are satisfied
-			if pe.allDependenciesSatisfied(i, dependencies, executed) {
-				currentGroup = append(currentGroup, cmd)
-				currentIndices = append(currentIndices, i)
+		hasDependencies := false
+		for _, dep := range pe.dependencies {
+			if dep.To == i {
+				hasDependencies = true
+				break
 			}
 		}
 
-		if len(currentGroup) == 0 {
-			return nil, fmt.Errorf("circular dependency detected in commands")
+		if !hasDependencies {
+			order = append(order, i)
+			visited[i] = true
 		}
-
-		// Create execution group
-		group := ExecutionGroup{
-			Commands: currentGroup,
-			Index:    groupIndex,
-			Priority: groupIndex,
-		}
-
-		plan = append(plan, group)
-
-		// Mark commands as executed
-		for _, idx := range currentIndices {
-			executed[idx] = true
-		}
-
-		groupIndex++
 	}
 
-	return plan, nil
+	// Add remaining commands in order
+	for i, cmd := range pe.commands {
+		if cmd == nil || visited[i] {
+			continue
+		}
+		order = append(order, i)
+	}
+
+	return order
 }
 
-// allDependenciesSatisfied checks if all dependencies for a command are satisfied
-func (pe *ParallelExecutor) allDependenciesSatisfied(
-	cmdIndex int,
-	dependencies []CommandDependency,
-	executed map[int]bool,
-) bool {
-	for _, dep := range dependencies {
-		if dep.To == cmdIndex {
-			if !executed[dep.From] {
-				return false
-			}
-		}
-	}
-	return true
-}
+// ExecuteCommands executes commands in parallel with dependency resolution
+func (pe *ParallelExecutor) ExecuteCommands(compositeKey *CompositeCache, initSnapshotTaken bool) error {
+	logrus.Info("🚀 Starting parallel command execution")
 
-// executePlan executes the execution plan
-func (pe *ParallelExecutor) executePlan(
-	ctx context.Context,
-	plan []ExecutionGroup,
-	compositeKey *CompositeCache,
-	initSnapshotTaken bool,
-	stageBuilder *stageBuilder,
-) error {
-	for _, group := range plan {
-		logrus.Infof("Executing group %d with %d commands in parallel", group.Index, len(group.Commands))
-
-		if err := pe.executeGroup(ctx, group, compositeKey, initSnapshotTaken, stageBuilder); err != nil {
-			return fmt.Errorf("failed to execute group %d: %w", group.Index, err)
+	// Analyze dependencies if not already done
+	if len(pe.executionOrder) == 0 {
+		if err := pe.AnalyzeDependencies(); err != nil {
+			return fmt.Errorf("failed to analyze dependencies: %w", err)
 		}
 	}
 
+	// Create execution groups based on dependencies
+	executionGroups := pe.buildExecutionGroups()
+
+	// Execute each group in parallel
+	for groupIndex, group := range executionGroups {
+		logrus.Infof("📦 Executing group %d with %d commands", groupIndex, len(group))
+
+		if err := pe.executeGroup(group, compositeKey, initSnapshotTaken); err != nil {
+			return fmt.Errorf("failed to execute group %d: %w", groupIndex, err)
+		}
+	}
+
+	// Log execution statistics
+	pe.logExecutionStats()
+
+	logrus.Info("✅ Parallel command execution completed")
 	return nil
+}
+
+// buildExecutionGroups builds groups of commands that can be executed in parallel
+func (pe *ParallelExecutor) buildExecutionGroups() [][]int {
+	groups := make([][]int, 0)
+	executed := make(map[int]bool)
+
+	for _, cmdIndex := range pe.executionOrder {
+		if executed[cmdIndex] {
+			continue
+		}
+
+		// Find all commands that can be executed in parallel with this one
+		group := pe.findParallelGroup(cmdIndex, executed)
+		groups = append(groups, group)
+
+		// Mark all commands in this group as executed
+		for _, cmdIdx := range group {
+			executed[cmdIdx] = true
+		}
+	}
+
+	return groups
+}
+
+// findParallelGroup finds commands that can be executed in parallel
+func (pe *ParallelExecutor) findParallelGroup(startIndex int, executed map[int]bool) []int {
+	group := []int{startIndex}
+
+	// Find commands that don't depend on the start command
+	for i, cmd := range pe.commands {
+		if cmd == nil || executed[i] || i == startIndex {
+			continue
+		}
+
+		// Check if this command can be executed in parallel
+		if pe.canExecuteInParallel(startIndex, i) {
+			group = append(group, i)
+		}
+	}
+
+	return group
+}
+
+// canExecuteInParallel checks if two commands can be executed in parallel
+func (pe *ParallelExecutor) canExecuteInParallel(cmd1Index, cmd2Index int) bool {
+	// Check if cmd2 depends on cmd1
+	for _, dep := range pe.dependencies {
+		if dep.From == cmd1Index && dep.To == cmd2Index {
+			return false
+		}
+	}
+
+	// Check if cmd1 depends on cmd2
+	for _, dep := range pe.dependencies {
+		if dep.From == cmd2Index && dep.To == cmd1Index {
+			return false
+		}
+	}
+
+	return true
 }
 
 // executeGroup executes a group of commands in parallel
-func (pe *ParallelExecutor) executeGroup(
-	ctx context.Context,
-	group ExecutionGroup,
-	compositeKey *CompositeCache,
-	initSnapshotTaken bool,
-	stageBuilder *stageBuilder,
-) error {
-	// Limit number of parallel workers
-	maxWorkers := pe.maxWorkers
-	if len(group.Commands) < maxWorkers {
-		maxWorkers = len(group.Commands)
+func (pe *ParallelExecutor) executeGroup(group []int, compositeKey *CompositeCache, initSnapshotTaken bool) error {
+	if len(group) == 1 {
+		// Single command - execute directly
+		return pe.executeCommand(group[0], compositeKey, initSnapshotTaken)
 	}
 
-	// Create worker pool
-	workerChan := make(chan int, maxWorkers)
-	var wg sync.WaitGroup
-	var mu sync.Mutex
-	var errors []error
+	// Multiple commands - execute in parallel
+	ctx, cancel := context.WithTimeout(context.Background(), pe.config.CommandTimeout)
+	defer cancel()
 
-	// Start workers
-	for i := 0; i < maxWorkers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for cmdIndex := range workerChan {
-				cmd := group.Commands[cmdIndex]
-				if err := pe.executeCommand(
-					ctx, cmdIndex, cmd, compositeKey,
-					initSnapshotTaken, stageBuilder,
-				); err != nil {
-					mu.Lock()
-					errors = append(errors, fmt.Errorf("command %d failed: %w", cmdIndex, err))
-					mu.Unlock()
-				}
-			}
-		}()
+	g, _ := errgroup.WithContext(ctx)
+
+	for _, cmdIndex := range group {
+		cmdIndex := cmdIndex // Capture for closure
+		g.Go(func() error {
+			return pe.executeCommandWithWorker(cmdIndex, compositeKey, initSnapshotTaken)
+		})
 	}
 
-	// Send work to workers
-	for i := range group.Commands {
-		select {
-		case workerChan <- i:
-		case <-ctx.Done():
-			close(workerChan)
-			return ctx.Err()
-		}
-	}
+	return g.Wait()
+}
 
-	close(workerChan)
-	wg.Wait()
+// executeCommandWithWorker executes a command using the worker pool
+func (pe *ParallelExecutor) executeCommandWithWorker(
+	cmdIndex int, compositeKey *CompositeCache, initSnapshotTaken bool) error {
+	// Acquire worker
+	pe.workerPool <- struct{}{}
+	defer func() { <-pe.workerPool }()
 
-	// Check for errors
-	if len(errors) > 0 {
-		return fmt.Errorf("group execution failed: %v", errors)
-	}
-
-	return nil
+	return pe.executeCommand(cmdIndex, compositeKey, initSnapshotTaken)
 }
 
 // executeCommand executes a single command
-func (pe *ParallelExecutor) executeCommand(
-	_ context.Context,
-	cmdIndex int,
-	cmd commands.DockerCommand,
-	compositeKey *CompositeCache,
-	initSnapshotTaken bool,
-	stageBuilder *stageBuilder,
-) error {
-	startTime := time.Now()
-
-	// Send progress update
-	pe.progressChan <- ProgressUpdate{
-		CommandIndex: cmdIndex,
-		CommandName:  cmd.String(),
-		Status:       "starting",
+func (pe *ParallelExecutor) executeCommand(cmdIndex int, compositeKey *CompositeCache, initSnapshotTaken bool) error {
+	cmd := pe.commands[cmdIndex]
+	if cmd == nil {
+		return nil
 	}
 
-	// Execute command
-	err := stageBuilder.processCommand(cmd, cmdIndex, compositeKey, nil, initSnapshotTaken)
-
-	duration := time.Since(startTime)
-
-	// Send progress update
-	pe.progressChan <- ProgressUpdate{
-		CommandIndex: cmdIndex,
-		CommandName:  cmd.String(),
-		Status:       "completed",
-		Error:        err,
-		Duration:     duration,
+	// Start timing
+	stats := &CommandExecutionStats{
+		StartTime: time.Now(),
+		WorkerID:  len(pe.workerPool),
 	}
 
-	return err
+	pe.statsMutex.Lock()
+	pe.executionStats[cmdIndex] = stats
+	pe.statsMutex.Unlock()
+
+	logrus.Infof("🔄 Executing command %d: %s", cmdIndex, cmd.String())
+
+	// Execute the command using the existing stageBuilder logic
+	err := pe.stageBuilder.processCommand(cmd, cmdIndex, compositeKey, &errgroup.Group{}, initSnapshotTaken)
+
+	// Update statistics
+	stats.EndTime = time.Now()
+	stats.Duration = stats.EndTime.Sub(stats.StartTime)
+	stats.Success = err == nil
+	if err != nil {
+		stats.ErrorMessage = err.Error()
+	}
+
+	pe.executedMutex.Lock()
+	pe.executed[cmdIndex] = true
+	pe.executedMutex.Unlock()
+
+	if err != nil {
+		logrus.Errorf("❌ Command %d failed: %v", cmdIndex, err)
+		return fmt.Errorf("command %d (%s) failed: %w", cmdIndex, cmd.String(), err)
+	}
+
+	logrus.Infof("✅ Command %d completed in %v", cmdIndex, stats.Duration)
+	return nil
 }
 
-// GetProgressChannel returns the progress update channel
-func (pe *ParallelExecutor) GetProgressChannel() <-chan ProgressUpdate {
-	return pe.progressChan
+// logExecutionStats logs execution statistics
+func (pe *ParallelExecutor) logExecutionStats() {
+	pe.statsMutex.RLock()
+	defer pe.statsMutex.RUnlock()
+
+	totalDuration := time.Duration(0)
+	successCount := 0
+
+	for cmdIndex, stats := range pe.executionStats {
+		totalDuration += stats.Duration
+		if stats.Success {
+			successCount++
+		}
+
+		logrus.Infof("📊 Command %d: %v (success: %v, worker: %d)",
+			cmdIndex, stats.Duration, stats.Success, stats.WorkerID)
+	}
+
+	logrus.Infof("📈 Total execution time: %v, success rate: %d/%d",
+		totalDuration, successCount, len(pe.executionStats))
 }
 
-// GetExecutionStats returns statistics about the execution
-func (pe *ParallelExecutor) GetExecutionStats() map[string]interface{} {
-	pe.mu.RLock()
-	defer pe.mu.RUnlock()
+// GetExecutionStats returns execution statistics
+func (pe *ParallelExecutor) GetExecutionStats() map[int]*CommandExecutionStats {
+	pe.statsMutex.RLock()
+	defer pe.statsMutex.RUnlock()
 
-	return map[string]interface{}{
-		"max_workers":      pe.maxWorkers,
-		"timeout":          pe.timeout,
-		"execution_groups": len(pe.executionPlan),
+	// Return a copy to avoid race conditions
+	stats := make(map[int]*CommandExecutionStats)
+	for k, v := range pe.executionStats {
+		stats[k] = v
 	}
+	return stats
 }

@@ -128,6 +128,17 @@ type KanikoOptions struct {
 	GCThreshold           int   // --gc-threshold=80
 	MonitoringInterval    int   // --monitoring-interval=5s
 
+	// Parallel execution options (enabled by default for performance)
+	MaxParallelCommands int           // --max-parallel-commands=4 (auto-detect CPU cores)
+	CommandTimeout      time.Duration // --command-timeout=30m
+	EnableParallelExec  bool          // --enable-parallel-exec=true (enabled by default)
+
+	// Smart cache options (optimized for 1GB cache)
+	MaxCacheEntries  int           // --max-cache-entries=2000 (optimized for 1GB)
+	MaxPreloadSize   int           // --max-preload-size=100 (increased for better performance)
+	PreloadTimeout   time.Duration // --preload-timeout=10m (increased for large cache)
+	EnableSmartCache bool          // --enable-smart-cache=true (enabled by default)
+
 	// Debug options for enhanced debugging and development
 	DebugOptions
 }

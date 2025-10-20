@@ -430,6 +430,28 @@ func (s *stageBuilder) unpackFilesystemIfNeeded() error {
 }
 
 func (s *stageBuilder) executeCommands(compositeKey *CompositeCache, initSnapshotTaken bool) error {
+	// Check if parallel execution is enabled
+	if s.opts.EnableParallelExec {
+		logrus.Info("🚀 Using parallel command execution")
+		return s.executeCommandsParallel(compositeKey, initSnapshotTaken)
+	}
+
+	// Fallback to sequential execution
+	logrus.Info("🔄 Using sequential command execution")
+	return s.executeCommandsSequential(compositeKey, initSnapshotTaken)
+}
+
+// executeCommandsParallel executes commands in parallel using ParallelExecutor
+func (s *stageBuilder) executeCommandsParallel(compositeKey *CompositeCache, initSnapshotTaken bool) error {
+	// Create parallel executor
+	executor := NewParallelExecutor(s.cmds, s.opts, s.args, &s.cf.Config, s)
+
+	// Execute commands in parallel
+	return executor.ExecuteCommands(compositeKey, initSnapshotTaken)
+}
+
+// executeCommandsSequential executes commands sequentially (original implementation)
+func (s *stageBuilder) executeCommandsSequential(compositeKey *CompositeCache, initSnapshotTaken bool) error {
 	cacheGroup := errgroup.Group{}
 	var commandErrors []error
 	var errorMutex sync.Mutex

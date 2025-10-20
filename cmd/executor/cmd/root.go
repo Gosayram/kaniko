@@ -69,6 +69,25 @@ const (
 	defaultPushRetryBackoffMultiplier = 2.0
 )
 
+// Resource limit constants
+const (
+	// Memory limits
+	maxMemoryUsageBytes   = 2 * 1024 * 1024 * 1024  // 2GB
+	maxFileSizeBytes      = 500 * 1024 * 1024       // 500MB
+	maxTotalFileSizeBytes = 10 * 1024 * 1024 * 1024 // 10GB
+
+	// Performance optimization constants
+	maxExpectedChanges = 1000 // Maximum expected changes for incremental snapshots
+	gcThreshold        = 80   // Memory usage percentage threshold for GC
+	monitoringInterval = 5    // Memory monitoring interval in seconds
+
+	// Parallel execution constants
+	defaultCommandTimeout  = 30   // Default command timeout in minutes
+	defaultMaxCacheEntries = 2000 // Default cache entries (optimized for 1GB)
+	defaultMaxPreloadSize  = 100  // Default preload size
+	defaultPreloadTimeout  = 10   // Default preload timeout in minutes
+)
+
 func init() {
 	RootCmd.PersistentFlags().StringVarP(&logLevel, "verbosity", "v", logging.DefaultLevel,
 		"Log level (trace, debug, info, warn, error, fatal, panic)")
@@ -502,8 +521,7 @@ func addBuildFlags() {
 	// Performance optimization flags
 	RootCmd.PersistentFlags().BoolVarP(&opts.IncrementalSnapshots, "incremental-snapshots", "", false,
 		"Enable incremental snapshots for better performance (experimental)")
-	//nolint:mnd // Default value for incremental snapshots
-	RootCmd.PersistentFlags().IntVarP(&opts.MaxExpectedChanges, "max-expected-changes", "", 1000,
+	RootCmd.PersistentFlags().IntVarP(&opts.MaxExpectedChanges, "max-expected-changes", "", maxExpectedChanges,
 		"Maximum expected changes before triggering full scan (incremental snapshots)")
 	RootCmd.PersistentFlags().BoolVarP(&opts.IntegrityCheck, "integrity-check", "", true,
 		"Enable integrity checks for incremental snapshots")
@@ -511,23 +529,36 @@ func addBuildFlags() {
 		"Enable full scan backup when integrity concerns are detected")
 
 	// Resource control flags
-	//nolint:mnd // Default values for resource limits
-	RootCmd.PersistentFlags().Int64VarP(&opts.MaxMemoryUsageBytes, "max-memory-usage-bytes", "", 2*1024*1024*1024,
+	RootCmd.PersistentFlags().Int64VarP(&opts.MaxMemoryUsageBytes, "max-memory-usage-bytes", "", maxMemoryUsageBytes,
 		"Maximum memory usage in bytes (e.g., 2GB, 4GB). Default: 2GB")
-	//nolint:mnd // Default values for resource limits
-	RootCmd.PersistentFlags().Int64VarP(&opts.MaxFileSizeBytes, "max-file-size-bytes", "", 500*1024*1024,
+	RootCmd.PersistentFlags().Int64VarP(&opts.MaxFileSizeBytes, "max-file-size-bytes", "", maxFileSizeBytes,
 		"Maximum single file size in bytes (e.g., 500MB, 1GB). Default: 500MB")
-	//nolint:mnd // Default values for resource limits
-	RootCmd.PersistentFlags().Int64VarP(&opts.MaxTotalFileSizeBytes, "max-total-file-size-bytes", "", 10*1024*1024*1024,
-		"Maximum total file size in bytes (e.g., 10GB, 20GB). Default: 10GB")
+	RootCmd.PersistentFlags().Int64VarP(&opts.MaxTotalFileSizeBytes, "max-total-file-size-bytes", "",
+		maxTotalFileSizeBytes, "Maximum total file size in bytes (e.g., 10GB, 20GB). Default: 10GB")
 	RootCmd.PersistentFlags().BoolVarP(&opts.MemoryMonitoring, "memory-monitoring", "", true,
 		"Enable memory monitoring and automatic garbage collection")
-	//nolint:mnd // Default values for resource limits
-	RootCmd.PersistentFlags().IntVarP(&opts.GCThreshold, "gc-threshold", "", 80,
+	RootCmd.PersistentFlags().IntVarP(&opts.GCThreshold, "gc-threshold", "", gcThreshold,
 		"Memory usage percentage threshold for triggering garbage collection (1-100). Default: 80")
-	//nolint:mnd // Default values for resource limits
-	RootCmd.PersistentFlags().IntVarP(&opts.MonitoringInterval, "monitoring-interval", "", 5,
+	RootCmd.PersistentFlags().IntVarP(&opts.MonitoringInterval, "monitoring-interval", "", monitoringInterval,
 		"Memory monitoring interval in seconds. Default: 5")
+
+	// Parallel execution flags (enabled by default for performance)
+	RootCmd.PersistentFlags().IntVarP(&opts.MaxParallelCommands, "max-parallel-commands", "", 0,
+		"Maximum number of commands to execute in parallel (0 = auto-detect based on CPU cores). Default: auto-detect")
+	RootCmd.PersistentFlags().DurationVarP(&opts.CommandTimeout, "command-timeout", "", defaultCommandTimeout*time.Minute,
+		"Timeout for command execution (e.g., 30m, 1h). Default: 30m")
+	RootCmd.PersistentFlags().BoolVarP(&opts.EnableParallelExec, "enable-parallel-exec", "", true,
+		"Enable parallel execution of independent commands. Default: enabled for better performance")
+
+	// Smart cache flags (optimized for 1GB cache)
+	RootCmd.PersistentFlags().IntVarP(&opts.MaxCacheEntries, "max-cache-entries", "", defaultMaxCacheEntries,
+		"Maximum number of entries in the LRU cache. Default: 2000 (optimized for 1GB cache)")
+	RootCmd.PersistentFlags().IntVarP(&opts.MaxPreloadSize, "max-preload-size", "", defaultMaxPreloadSize,
+		"Maximum number of images to preload. Default: 100 (increased for better performance)")
+	RootCmd.PersistentFlags().DurationVarP(&opts.PreloadTimeout, "preload-timeout", "", defaultPreloadTimeout*time.Minute,
+		"Timeout for preload operations (e.g., 5m, 10m). Default: 10m (increased for large cache)")
+	RootCmd.PersistentFlags().BoolVarP(&opts.EnableSmartCache, "enable-smart-cache", "", true,
+		"Enable smart cache with LRU and preloading capabilities. Default: enabled for better performance")
 }
 
 // addMultiPlatformFlags adds multi-platform build flags
