@@ -29,6 +29,12 @@ import (
 	"github.com/Gosayram/kaniko/pkg/debug"
 )
 
+// Architecture constants
+const (
+	ArchArm   = "arm"
+	ArchArm64 = "arm64"
+)
+
 // Info contains information about a build platform
 type Info struct {
 	OS           string   `json:"os"`
@@ -124,9 +130,9 @@ func (pd *Detector) detectHostPlatform() Info {
 	// Check for common architecture variants
 	var variant string
 	switch goarch {
-	case "arm":
+	case ArchArm:
 		variant = "v7"
-	case "arm64":
+	case ArchArm64:
 		variant = "v8"
 	case "amd64":
 		variant = "v1"

@@ -1,13 +1,14 @@
 //go:build darwin
 // +build darwin
 
+// Package platform provides platform-specific utilities for Darwin/macOS systems.
 package platform
 
 import "runtime"
 
-// possibleCPUs returns the set of possible CPUs on Darwin/macOS.
+// PossibleCPUs returns the set of possible CPUs on Darwin/macOS.
 // On macOS, we use runtime.NumCPU() as the number of possible CPUs.
-func possibleCPUs() []int {
+func PossibleCPUs() []int {
 	ncpu := runtime.NumCPU()
 	var cpus []int
 	for i := 0; i < ncpu; i++ {
@@ -16,8 +17,8 @@ func possibleCPUs() []int {
 	return cpus
 }
 
-// runtimeArchitecture gets the name of the current architecture on Darwin
-func runtimeArchitecture() (string, error) {
+// RuntimeArchitecture gets the name of the current architecture on Darwin
+func RuntimeArchitecture() (string, error) {
 	switch runtime.GOARCH {
 	case "amd64":
 		return "x86_64", nil

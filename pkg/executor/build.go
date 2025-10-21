@@ -65,6 +65,37 @@ const (
 	DefaultDirPerm      = 0o750
 )
 
+// Optimization constants
+const (
+	// Snapshot mode constants
+	SnapshotModeTime = "time"
+
+	// Compression constants
+	CompressionZstd = "zstd"
+
+	// Performance optimization constants
+	NoCacheParallelMultiplier = 2
+	MemoryLimitGB             = 2
+	MemoryLimitBytes          = 2 * 1024 * 1024 * 1024 // 2GB
+	CommandTimeoutMinutes     = 30
+	MaxFileSizeMB             = 500
+	MaxFileSizeBytes          = 500 * 1024 * 1024 // 500MB
+	MaxTotalFileSizeGB        = 10
+	MaxTotalFileSizeBytes     = 10 * 1024 * 1024 * 1024 // 10GB
+
+	// Network optimization constants
+	MaxIdleConns            = 200
+	MaxIdleConnsPerHost     = 20
+	MaxConnsPerHost         = 100
+	IdleConnTimeoutMin      = 5
+	MaxConcurrency          = 15
+	RequestTimeoutMin       = 5
+	RetryAttempts           = 5
+	RetryDelaySec           = 2
+	DNSCacheTimeoutMin      = 10
+	ManifestCacheTimeoutMin = 30
+)
+
 // for testing
 var (
 	initializeConfig = initConfig
@@ -1524,7 +1555,7 @@ func optimizeForNoCache(opts *config.KanikoOptions) {
 
 	// 2. Increase parallelism to compensate for lack of cache
 	if opts.MaxParallelCommands == 0 {
-		opts.MaxParallelCommands = runtime.NumCPU() * 2
+		opts.MaxParallelCommands = runtime.NumCPU() * NoCacheParallelMultiplier
 		logrus.Infof("⚡ Set parallel commands to %d for no-cache build", opts.MaxParallelCommands)
 	}
 
@@ -1536,13 +1567,13 @@ func optimizeForNoCache(opts *config.KanikoOptions) {
 
 	// 4. Optimize snapshot mode for better performance
 	if opts.SnapshotMode == "" {
-		opts.SnapshotMode = "time" // Faster for large projects
+		opts.SnapshotMode = SnapshotModeTime // Faster for large projects
 		logrus.Info("⏱️ Set snapshot mode to 'time' for faster no-cache builds")
 	}
 
 	// 5. Set reasonable memory limits if not configured
 	if opts.MaxMemoryUsageBytes == 0 {
-		opts.MaxMemoryUsageBytes = 2 * 1024 * 1024 * 1024 // 2GB
+		opts.MaxMemoryUsageBytes = MemoryLimitBytes
 		logrus.Info("💾 Set memory limit to 2GB for no-cache build")
 	}
 
@@ -1560,7 +1591,7 @@ func optimizeForNoCache(opts *config.KanikoOptions) {
 
 	// 8. Increase command timeout for slower operations without cache
 	if opts.CommandTimeout == 0 {
-		opts.CommandTimeout = 30 * time.Minute
+		opts.CommandTimeout = CommandTimeoutMinutes * time.Minute
 		logrus.Info("⏰ Set command timeout to 30 minutes for no-cache build")
 	}
 
@@ -1572,12 +1603,12 @@ func optimizeForNoCache(opts *config.KanikoOptions) {
 
 	// 10. Set reasonable file size limits
 	if opts.MaxFileSizeBytes == 0 {
-		opts.MaxFileSizeBytes = 500 * 1024 * 1024 // 500MB
+		opts.MaxFileSizeBytes = MaxFileSizeBytes
 		logrus.Info("📁 Set max file size to 500MB for no-cache build")
 	}
 
 	if opts.MaxTotalFileSizeBytes == 0 {
-		opts.MaxTotalFileSizeBytes = 10 * 1024 * 1024 * 1024 // 10GB
+		opts.MaxTotalFileSizeBytes = MaxTotalFileSizeBytes
 		logrus.Info("📦 Set max total file size to 10GB for no-cache build")
 	}
 
@@ -1590,7 +1621,7 @@ func optimizePerformance(opts *config.KanikoOptions) {
 
 	// 1. Optimize compression for better speed/size balance
 	if opts.Compression == "" {
-		opts.Compression = "zstd"
+		opts.Compression = CompressionZstd
 		logrus.Info("🗜️ Set compression to zstd for better performance")
 	}
 
@@ -1677,22 +1708,22 @@ func optimizeNetwork(opts *config.KanikoOptions) {
 }
 
 // initializeNetworkManager initializes the advanced network manager
-func initializeNetworkManager(opts *config.KanikoOptions) *network.Manager {
+func initializeNetworkManager(_ *config.KanikoOptions) *network.Manager {
 	logrus.Info("🌐 Initializing advanced network manager")
 
 	// Create optimized network manager configuration
-	config := &network.ManagerConfig{
+	networkConfig := &network.ManagerConfig{
 		// Connection pool settings - optimized for registry operations
-		MaxIdleConns:        200,             // Increased for better connection reuse
-		MaxIdleConnsPerHost: 20,              // Increased for registry connections
-		MaxConnsPerHost:     100,             // Increased for parallel operations
-		IdleConnTimeout:     5 * time.Minute, // Longer timeout for registry connections
+		MaxIdleConns:        MaxIdleConns,                     // Increased for better connection reuse
+		MaxIdleConnsPerHost: MaxIdleConnsPerHost,              // Increased for registry connections
+		MaxConnsPerHost:     MaxConnsPerHost,                  // Increased for parallel operations
+		IdleConnTimeout:     IdleConnTimeoutMin * time.Minute, // Longer timeout for registry connections
 
 		// Parallel client settings - optimized for image operations
-		MaxConcurrency: 15,              // Increased for better parallelism
-		RequestTimeout: 5 * time.Minute, // Longer timeout for large images
-		RetryAttempts:  5,               // More retries for better reliability
-		RetryDelay:     2 * time.Second, // Longer delay between retries
+		MaxConcurrency: MaxConcurrency,                  // Increased for better parallelism
+		RequestTimeout: RequestTimeoutMin * time.Minute, // Longer timeout for large images
+		RetryAttempts:  RetryAttempts,                   // More retries for better reliability
+		RetryDelay:     RetryDelaySec * time.Second,     // Longer delay between retries
 
 		// Registry client settings - optimized for container registries
 		EnableParallelPull: true,
@@ -1701,13 +1732,13 @@ func initializeNetworkManager(opts *config.KanikoOptions) *network.Manager {
 
 		// Cache settings - optimized for build performance
 		EnableDNSOptimization: true,
-		DNSCacheTimeout:       10 * time.Minute, // Longer DNS cache
+		DNSCacheTimeout:       DNSCacheTimeoutMin * time.Minute, // Longer DNS cache
 		EnableManifestCache:   true,
-		ManifestCacheTimeout:  30 * time.Minute, // Longer manifest cache
+		ManifestCacheTimeout:  ManifestCacheTimeoutMin * time.Minute, // Longer manifest cache
 	}
 
 	// Create network manager
-	manager := network.NewManager(config)
+	manager := network.NewManager(networkConfig)
 
 	// Initialize the manager
 	if err := manager.Initialize(); err != nil {
@@ -1725,7 +1756,7 @@ func optimizeFilesystem(opts *config.KanikoOptions) {
 
 	// 1. Optimize snapshot mode for better performance
 	if opts.SnapshotMode == "" {
-		opts.SnapshotMode = "time" // Faster for most use cases
+		opts.SnapshotMode = SnapshotModeTime // Faster for most use cases
 		logrus.Info("⏱️ Set snapshot mode to 'time' for faster filesystem operations")
 	}
 
@@ -1755,12 +1786,12 @@ func optimizeFilesystem(opts *config.KanikoOptions) {
 
 	// 6. Set reasonable file size limits
 	if opts.MaxFileSizeBytes == 0 {
-		opts.MaxFileSizeBytes = 500 * 1024 * 1024 // 500MB
+		opts.MaxFileSizeBytes = MaxFileSizeBytes
 		logrus.Info("📁 Set max file size to 500MB for filesystem operations")
 	}
 
 	if opts.MaxTotalFileSizeBytes == 0 {
-		opts.MaxTotalFileSizeBytes = 10 * 1024 * 1024 * 1024 // 10GB
+		opts.MaxTotalFileSizeBytes = MaxTotalFileSizeBytes
 		logrus.Info("📦 Set max total file size to 10GB for filesystem operations")
 	}
 
@@ -1772,7 +1803,7 @@ func optimizeFilesystem(opts *config.KanikoOptions) {
 
 	// 8. Set optimal compression for filesystem operations
 	if opts.Compression == "" {
-		opts.Compression = "zstd"
+		opts.Compression = CompressionZstd
 		logrus.Info("🗜️ Set compression to zstd for better filesystem performance")
 	}
 

@@ -201,7 +201,7 @@ func (s *Snapshotter) scanFullFilesystem() (filesToAdd, filesToWhiteout []string
 		trySyncFs(dir)
 	} else {
 		// fallback to full page cache sync for non-Linux systems
-		syscall.Sync()
+		syncFilesystem()
 	}
 
 	s.l.Snapshot()
@@ -381,7 +381,7 @@ func trySyncFs(dir *os.File) {
 		syncFsSyscallNum = 348 // SYS_SYNCFS for PowerPC
 	default:
 		// For unknown architectures, use regular sync
-		syscall.Sync()
+		syncFilesystem()
 		return
 	}
 
@@ -389,6 +389,6 @@ func trySyncFs(dir *os.File) {
 	_, _, errno := syscall.Syscall(syncFsSyscallNum, dir.Fd(), 0, 0)
 	if errno != 0 {
 		// If syncfs fails, fall back to regular sync
-		syscall.Sync()
+		syncFilesystem()
 	}
 }

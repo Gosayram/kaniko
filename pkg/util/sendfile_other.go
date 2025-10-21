@@ -23,34 +23,14 @@ import (
 )
 
 // sendfileOther provides fallback implementation for non-Linux platforms
-func sendfileOther(dstFd, srcFd int, size int64) (int64, error) {
+func sendfileOther(_, _ int, _ int64) (int64, error) {
 	return 0, fmt.Errorf("sendfile() not supported on this platform")
-}
-
-// isSendfileSupportedOther checks if sendfile() is supported on non-Linux platforms
-func isSendfileSupportedOther(srcFd, dstFd int) bool {
-	return false // sendfile() not supported on non-Linux platforms
-}
-
-// getFileSystemInfoOther gets filesystem information for non-Linux platforms
-func getFileSystemInfoOther(path string) (uint64, error) {
-	return 0, fmt.Errorf("filesystem info not available on this platform")
 }
 
 // isSameFilesystemOther checks if two files are on the same filesystem on non-Linux platforms
-func isSameFilesystemOther(src, dst string) bool {
+func isSameFilesystemOther(_, _ string) bool {
 	// Conservative approach: assume different filesystems
 	return false
-}
-
-// getFileSizeOther gets file size using fstat on non-Linux platforms
-func getFileSizeOther(fd int) (int64, error) {
-	return 0, fmt.Errorf("file size not available on this platform")
-}
-
-// copyFileWithSendfileOther copies a file using sendfile() on non-Linux platforms
-func copyFileWithSendfileOther(srcFd, dstFd int) (int64, error) {
-	return 0, fmt.Errorf("sendfile() not supported on this platform")
 }
 
 // sendfilePlatform provides platform-specific sendfile implementation
