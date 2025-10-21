@@ -1219,6 +1219,7 @@ func handleNonFinalStage(
 			logrus.Warnf("Failed to save file %s for cross-stage dependency: %v, continuing anyway", p, err)
 			continue
 		}
+		logrus.Debugf("✅ Successfully saved file %s for cross-stage dependency", p)
 	}
 
 	// Delete the filesystem
@@ -1237,17 +1238,57 @@ func filesToSave(deps []string) ([]string, error) {
 		// This ensures we look in the actual container filesystem where files are created
 		// Clean the path to avoid double slashes
 		searchPath := filepath.Clean("/" + src)
-		srcs, err := filepath.Glob(searchPath)
+
+		var srcs []string
+		var err error
+
+		// Enhanced file search with better hidden directory support
+		logrus.Debugf("🔍 Searching for files: %s", searchPath)
+
+		// First try exact path (works for both files and directories)
+		if info, err := os.Stat(searchPath); err == nil {
+			if info.IsDir() {
+				logrus.Debugf("✅ Found directory: %s", searchPath)
+				// Walk the directory to get all files
+				err := filepath.Walk(searchPath, func(path string, info os.FileInfo, err error) error {
+					if err != nil {
+						return nil // Skip errors
+					}
+					if !info.IsDir() {
+						relPath, err := filepath.Rel("/", path)
+						if err == nil {
+							srcFiles = append(srcFiles, relPath)
+							logrus.Debugf("📁 Added file to cross-stage dependencies: %s", relPath)
+						}
+					}
+					return nil
+				})
+				if err != nil {
+					logrus.Warnf("Failed to walk directory %s: %v", searchPath, err)
+				}
+				continue
+			} else {
+				// It's a file, add it directly
+				relPath, err := filepath.Rel("/", searchPath)
+				if err == nil {
+					srcFiles = append(srcFiles, relPath)
+					logrus.Debugf("📁 Added file to cross-stage dependencies: %s", relPath)
+				}
+				continue
+			}
+		}
+
+		// If exact path not found, try glob pattern
+		srcs, err = filepath.Glob(searchPath)
 		if err != nil {
-			// Don't fail on glob errors - log warning and continue
 			logrus.Warnf("Failed to glob pattern %s: %v, continuing anyway", searchPath, err)
 			continue
 		}
-		// If no files found, log warning but continue
 		if len(srcs) == 0 {
 			logrus.Warnf("No files found for pattern %s, continuing anyway", searchPath)
 			continue
 		}
+
 		for _, f := range srcs {
 			if link, evalErr := util.EvalSymLink(f); evalErr == nil {
 				link, err = filepath.Rel("/", link)
@@ -1558,6 +1599,9 @@ func optimizeForNoCache(opts *config.KanikoOptions) {
 		opts.IncrementalSnapshots = true
 		logrus.Info("📸 Enabled incremental snapshots for no-cache build")
 	}
+
+	// 2. Enable comprehensive file processing for cross-stage dependencies
+	logrus.Info("🔍 Enabled comprehensive file processing for cross-stage dependencies")
 
 	// 2. Increase parallelism to compensate for lack of cache
 	if opts.MaxParallelCommands == 0 {
