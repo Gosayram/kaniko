@@ -49,6 +49,7 @@ import (
 	"github.com/Gosayram/kaniko/pkg/image/remote"
 	"github.com/Gosayram/kaniko/pkg/logging"
 	"github.com/Gosayram/kaniko/pkg/multiplatform"
+	"github.com/Gosayram/kaniko/pkg/network"
 	"github.com/Gosayram/kaniko/pkg/snapshot"
 	"github.com/Gosayram/kaniko/pkg/timing"
 	"github.com/Gosayram/kaniko/pkg/util"
@@ -168,6 +169,9 @@ func newStageBuilder(
 
 	// Initialize resource limits if configured
 	resourceLimits := initializeResourceLimits(opts)
+
+	// Apply comprehensive optimizations
+	applyComprehensiveOptimizations(opts)
 
 	digest, err := sourceImage.Digest()
 	if err != nil {
@@ -1503,4 +1507,350 @@ func (s *stageBuilder) initSnapshotWithTimings() error {
 func InitMultiPlatformBuild() {
 	// Set the build function for multi-platform coordinator
 	multiplatform.SetBuildFunc(DoBuild)
+}
+
+// optimizeForNoCache applies simple optimizations when cache is disabled
+func optimizeForNoCache(opts *config.KanikoOptions) {
+	// This function is only called when cache is not enabled
+	// No need to check opts.Cache here as it's already verified in applyComprehensiveOptimizations
+
+	logrus.Info("🚀 Applying no-cache optimizations for better performance")
+
+	// 1. Enable incremental snapshots for faster filesystem scanning
+	if !opts.IncrementalSnapshots {
+		opts.IncrementalSnapshots = true
+		logrus.Info("📸 Enabled incremental snapshots for no-cache build")
+	}
+
+	// 2. Increase parallelism to compensate for lack of cache
+	if opts.MaxParallelCommands == 0 {
+		opts.MaxParallelCommands = runtime.NumCPU() * 2
+		logrus.Infof("⚡ Set parallel commands to %d for no-cache build", opts.MaxParallelCommands)
+	}
+
+	// 3. Enable parallel execution if not already enabled
+	if !opts.EnableParallelExec {
+		opts.EnableParallelExec = true
+		logrus.Info("🔄 Enabled parallel execution for no-cache build")
+	}
+
+	// 4. Optimize snapshot mode for better performance
+	if opts.SnapshotMode == "" {
+		opts.SnapshotMode = "time" // Faster for large projects
+		logrus.Info("⏱️ Set snapshot mode to 'time' for faster no-cache builds")
+	}
+
+	// 5. Set reasonable memory limits if not configured
+	if opts.MaxMemoryUsageBytes == 0 {
+		opts.MaxMemoryUsageBytes = 2 * 1024 * 1024 * 1024 // 2GB
+		logrus.Info("💾 Set memory limit to 2GB for no-cache build")
+	}
+
+	// 6. Enable memory monitoring for better resource management
+	if !opts.MemoryMonitoring {
+		opts.MemoryMonitoring = true
+		logrus.Info("📊 Enabled memory monitoring for no-cache build")
+	}
+
+	// 7. Set garbage collection threshold for better memory management
+	if opts.GCThreshold == 0 {
+		opts.GCThreshold = 80
+		logrus.Info("🗑️ Set GC threshold to 80% for no-cache build")
+	}
+
+	// 8. Increase command timeout for slower operations without cache
+	if opts.CommandTimeout == 0 {
+		opts.CommandTimeout = 30 * time.Minute
+		logrus.Info("⏰ Set command timeout to 30 minutes for no-cache build")
+	}
+
+	// 9. Increase retry attempts for network operations
+	if opts.ImageFSExtractRetry == 0 {
+		opts.ImageFSExtractRetry = 3
+		logrus.Info("🔄 Set image extraction retries to 3 for no-cache build")
+	}
+
+	// 10. Set reasonable file size limits
+	if opts.MaxFileSizeBytes == 0 {
+		opts.MaxFileSizeBytes = 500 * 1024 * 1024 // 500MB
+		logrus.Info("📁 Set max file size to 500MB for no-cache build")
+	}
+
+	if opts.MaxTotalFileSizeBytes == 0 {
+		opts.MaxTotalFileSizeBytes = 10 * 1024 * 1024 * 1024 // 10GB
+		logrus.Info("📦 Set max total file size to 10GB for no-cache build")
+	}
+
+	logrus.Info("✅ No-cache optimizations applied successfully")
+}
+
+// optimizePerformance applies additional performance optimizations
+func optimizePerformance(opts *config.KanikoOptions) {
+	logrus.Info("⚡ Applying performance optimizations")
+
+	// 1. Optimize compression for better speed/size balance
+	if opts.Compression == "" {
+		opts.Compression = "zstd"
+		logrus.Info("🗜️ Set compression to zstd for better performance")
+	}
+
+	// 2. Set optimal compression level
+	if opts.CompressionLevel == 0 {
+		opts.CompressionLevel = 3 // Good balance between speed and compression
+		logrus.Info("📊 Set compression level to 3 for optimal performance")
+	}
+
+	// 3. Enable compressed caching for better layer handling
+	if !opts.CompressedCaching {
+		opts.CompressedCaching = true
+		logrus.Info("💾 Enabled compressed caching for better performance")
+	}
+
+	// 4. Set monitoring interval for better resource tracking
+	if opts.MonitoringInterval == 0 {
+		opts.MonitoringInterval = 5 // 5 seconds
+		logrus.Info("⏱️ Set monitoring interval to 5 seconds for better resource tracking")
+	}
+
+	// 5. Enable integrity check for better reliability
+	if !opts.IntegrityCheck {
+		opts.IntegrityCheck = true
+		logrus.Info("🔒 Enabled integrity check for better reliability")
+	}
+
+	// 6. Set reasonable max expected changes
+	if opts.MaxExpectedChanges == 0 {
+		opts.MaxExpectedChanges = 1000
+		logrus.Info("📈 Set max expected changes to 1000 for better performance")
+	}
+
+	// 7. Enable full scan backup for safety
+	if !opts.FullScanBackup {
+		opts.FullScanBackup = true
+		logrus.Info("🛡️ Enabled full scan backup for safety")
+	}
+
+	logrus.Info("✅ Performance optimizations applied successfully")
+}
+
+// optimizeNetwork applies network optimizations for better stability
+func optimizeNetwork(opts *config.KanikoOptions) {
+	logrus.Info("🌐 Applying network optimizations")
+
+	// 1. Set reasonable push retry settings
+	if opts.PushRetry == 0 {
+		opts.PushRetry = 3
+		logrus.Info("🔄 Set push retry to 3 for better network stability")
+	}
+
+	// 2. Set initial delay for retries
+	if opts.PushRetryInitialDelay == 0 {
+		opts.PushRetryInitialDelay = 1000 // 1 second
+		logrus.Info("⏱️ Set push retry initial delay to 1 second")
+	}
+
+	// 3. Set max delay for retries
+	if opts.PushRetryMaxDelay == 0 {
+		opts.PushRetryMaxDelay = 30000 // 30 seconds
+		logrus.Info("⏰ Set push retry max delay to 30 seconds")
+	}
+
+	// 4. Set backoff multiplier for exponential backoff
+	if opts.PushRetryBackoffMultiplier == 0 {
+		opts.PushRetryBackoffMultiplier = 2.0
+		logrus.Info("📈 Set push retry backoff multiplier to 2.0")
+	}
+
+	// 5. Set image download retry
+	if opts.ImageDownloadRetry == 0 {
+		opts.ImageDownloadRetry = 3
+		logrus.Info("⬇️ Set image download retry to 3")
+	}
+
+	// 6. Enable push ignore immutable tag errors for better compatibility
+	if !opts.PushIgnoreImmutableTagErrors {
+		opts.PushIgnoreImmutableTagErrors = true
+		logrus.Info("🏷️ Enabled push ignore immutable tag errors for better compatibility")
+	}
+
+	logrus.Info("✅ Network optimizations applied successfully")
+}
+
+// initializeNetworkManager initializes the advanced network manager
+func initializeNetworkManager(opts *config.KanikoOptions) *network.Manager {
+	logrus.Info("🌐 Initializing advanced network manager")
+
+	// Create optimized network manager configuration
+	config := &network.ManagerConfig{
+		// Connection pool settings - optimized for registry operations
+		MaxIdleConns:        200,             // Increased for better connection reuse
+		MaxIdleConnsPerHost: 20,              // Increased for registry connections
+		MaxConnsPerHost:     100,             // Increased for parallel operations
+		IdleConnTimeout:     5 * time.Minute, // Longer timeout for registry connections
+
+		// Parallel client settings - optimized for image operations
+		MaxConcurrency: 15,              // Increased for better parallelism
+		RequestTimeout: 5 * time.Minute, // Longer timeout for large images
+		RetryAttempts:  5,               // More retries for better reliability
+		RetryDelay:     2 * time.Second, // Longer delay between retries
+
+		// Registry client settings - optimized for container registries
+		EnableParallelPull: true,
+		EnableCompression:  true,
+		UserAgent:          "kaniko-optimized/2.0",
+
+		// Cache settings - optimized for build performance
+		EnableDNSOptimization: true,
+		DNSCacheTimeout:       10 * time.Minute, // Longer DNS cache
+		EnableManifestCache:   true,
+		ManifestCacheTimeout:  30 * time.Minute, // Longer manifest cache
+	}
+
+	// Create network manager
+	manager := network.NewManager(config)
+
+	// Initialize the manager
+	if err := manager.Initialize(); err != nil {
+		logrus.Warnf("Failed to initialize network manager: %v", err)
+		return nil
+	}
+
+	logrus.Info("✅ Advanced network manager initialized successfully")
+	return manager
+}
+
+// optimizeFilesystem applies filesystem optimizations for better performance
+func optimizeFilesystem(opts *config.KanikoOptions) {
+	logrus.Info("📁 Applying filesystem optimizations")
+
+	// 1. Optimize snapshot mode for better performance
+	if opts.SnapshotMode == "" {
+		opts.SnapshotMode = "time" // Faster for most use cases
+		logrus.Info("⏱️ Set snapshot mode to 'time' for faster filesystem operations")
+	}
+
+	// 2. Enable incremental snapshots for better performance (only when cache is not used)
+	if !opts.Cache && !opts.IncrementalSnapshots {
+		opts.IncrementalSnapshots = true
+		logrus.Info("📸 Enabled incremental snapshots for faster filesystem scanning")
+	}
+
+	// 3. Set reasonable max expected changes for integrity checking
+	if opts.MaxExpectedChanges == 0 {
+		opts.MaxExpectedChanges = 5000 // Good balance for most projects
+		logrus.Info("📊 Set max expected changes to 5000 for better integrity checking")
+	}
+
+	// 4. Enable integrity check for better reliability
+	if !opts.IntegrityCheck {
+		opts.IntegrityCheck = true
+		logrus.Info("🔒 Enabled integrity check for better filesystem reliability")
+	}
+
+	// 5. Enable full scan backup for safety
+	if !opts.FullScanBackup {
+		opts.FullScanBackup = true
+		logrus.Info("🛡️ Enabled full scan backup for filesystem safety")
+	}
+
+	// 6. Set reasonable file size limits
+	if opts.MaxFileSizeBytes == 0 {
+		opts.MaxFileSizeBytes = 500 * 1024 * 1024 // 500MB
+		logrus.Info("📁 Set max file size to 500MB for filesystem operations")
+	}
+
+	if opts.MaxTotalFileSizeBytes == 0 {
+		opts.MaxTotalFileSizeBytes = 10 * 1024 * 1024 * 1024 // 10GB
+		logrus.Info("📦 Set max total file size to 10GB for filesystem operations")
+	}
+
+	// 7. Enable compressed caching for better layer handling
+	if !opts.CompressedCaching {
+		opts.CompressedCaching = true
+		logrus.Info("💾 Enabled compressed caching for better filesystem performance")
+	}
+
+	// 8. Set optimal compression for filesystem operations
+	if opts.Compression == "" {
+		opts.Compression = "zstd"
+		logrus.Info("🗜️ Set compression to zstd for better filesystem performance")
+	}
+
+	if opts.CompressionLevel == 0 {
+		opts.CompressionLevel = 3 // Good balance between speed and compression
+		logrus.Info("📊 Set compression level to 3 for optimal filesystem performance")
+	}
+
+	logrus.Info("✅ Filesystem optimizations applied successfully")
+}
+
+// applyComprehensiveOptimizations applies all optimizations in the correct order
+func applyComprehensiveOptimizations(opts *config.KanikoOptions) {
+	logrus.Info("🚀 Applying comprehensive optimizations for maximum performance")
+
+	// 1. Apply no-cache optimizations first (foundation) - only when cache is not used
+	if !opts.Cache {
+		logrus.Info("📦 Cache not enabled - applying no-cache optimizations for better performance")
+		optimizeForNoCache(opts)
+	} else {
+		logrus.Info("💾 Cache enabled - skipping no-cache optimizations")
+	}
+
+	// 2. Apply performance optimizations (core improvements) - always beneficial
+	optimizePerformance(opts)
+
+	// 3. Apply network optimizations (connectivity) - always beneficial
+	optimizeNetwork(opts)
+
+	// 4. Initialize advanced network manager (advanced networking) - always beneficial
+	_ = initializeNetworkManager(opts)
+
+	// 5. Apply filesystem optimizations (storage) - always beneficial
+	optimizeFilesystem(opts)
+
+	// 6. Final integration checks
+	validateOptimizations(opts)
+
+	logrus.Info("✅ All comprehensive optimizations applied successfully")
+}
+
+// validateOptimizations validates that all optimizations are properly configured
+func validateOptimizations(opts *config.KanikoOptions) {
+	logrus.Info("🔍 Validating optimization configuration")
+
+	// Validate no-cache optimizations
+	if !opts.Cache {
+		if !opts.IncrementalSnapshots {
+			logrus.Warn("⚠️ Incremental snapshots should be enabled for no-cache builds")
+		}
+		if opts.MaxParallelCommands == 0 {
+			logrus.Warn("⚠️ MaxParallelCommands should be set for no-cache builds")
+		}
+	}
+
+	// Validate performance optimizations
+	if opts.Compression == "" {
+		logrus.Warn("⚠️ Compression should be set for optimal performance")
+	}
+	if opts.CompressionLevel == 0 {
+		logrus.Warn("⚠️ CompressionLevel should be set for optimal performance")
+	}
+
+	// Validate network optimizations
+	if opts.PushRetry == 0 {
+		logrus.Warn("⚠️ PushRetry should be set for network stability")
+	}
+	if opts.ImageDownloadRetry == 0 {
+		logrus.Warn("⚠️ ImageDownloadRetry should be set for network stability")
+	}
+
+	// Validate filesystem optimizations
+	if opts.SnapshotMode == "" {
+		logrus.Warn("⚠️ SnapshotMode should be set for filesystem performance")
+	}
+	if !opts.IntegrityCheck {
+		logrus.Warn("⚠️ IntegrityCheck should be enabled for reliability")
+	}
+
+	logrus.Info("✅ Optimization validation completed")
 }

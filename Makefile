@@ -15,8 +15,8 @@
 # -------------------------- Project metadata --------------------------
 SHELL := /bin/bash
 
-GOOS  ?= linux
-GOARCH ?= amd64
+GOOS ?= $(shell go env GOOS)
+GOARCH ?= $(shell go env GOARCH)
 
 ORG     := github.com/Gosayram
 PROJECT := kaniko
@@ -29,7 +29,7 @@ VERSION ?= $(shell cat .release-version 2>/dev/null || echo v1.24.0)
 # Extract version components for backward compatibility
 VERSION_MAJOR ?= 1
 VERSION_MINOR ?= 25
-VERSION_BUILD ?= 0
+VERSION_BUILD ?= 1
 
 GOPATH ?= $(shell go env GOPATH)
 GOLANGCI_LINT = $(GOPATH)/bin/golangci-lint
