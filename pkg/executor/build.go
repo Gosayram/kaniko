@@ -1231,28 +1231,31 @@ func handleNonFinalStage(
 func filesToSave(deps []string) ([]string, error) {
 	srcFiles := []string{}
 	for _, src := range deps {
-		srcs, err := filepath.Glob(filepath.Join(config.RootDir, src))
+		// Use the current filesystem root (/) instead of config.RootDir for cross-stage dependencies
+		// This ensures we look in the actual container filesystem where files are created
+		searchPath := "/" + src
+		srcs, err := filepath.Glob(searchPath)
 		if err != nil {
 			// Don't fail on glob errors - log warning and continue
-			logrus.Warnf("Failed to glob pattern %s: %v, continuing anyway", src, err)
+			logrus.Warnf("Failed to glob pattern %s: %v, continuing anyway", searchPath, err)
 			continue
 		}
 		// If no files found, log warning but continue
 		if len(srcs) == 0 {
-			logrus.Warnf("No files found for pattern %s, continuing anyway", src)
+			logrus.Warnf("No files found for pattern %s, continuing anyway", searchPath)
 			continue
 		}
 		for _, f := range srcs {
 			if link, evalErr := util.EvalSymLink(f); evalErr == nil {
-				link, err = filepath.Rel(config.RootDir, link)
+				link, err = filepath.Rel("/", link)
 				if err != nil {
-					return nil, errors.Wrap(err, fmt.Sprintf("could not find relative path to %s", config.RootDir))
+					return nil, errors.Wrap(err, "could not find relative path to /")
 				}
 				srcFiles = append(srcFiles, link)
 			}
-			f, err = filepath.Rel(config.RootDir, f)
+			f, err = filepath.Rel("/", f)
 			if err != nil {
-				return nil, errors.Wrap(err, fmt.Sprintf("could not find relative path to %s", config.RootDir))
+				return nil, errors.Wrap(err, "could not find relative path to /")
 			}
 			srcFiles = append(srcFiles, f)
 		}
