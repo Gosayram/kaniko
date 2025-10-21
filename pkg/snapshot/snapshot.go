@@ -208,7 +208,24 @@ func (s *Snapshotter) scanFullFilesystem() (filesToAdd, filesToWhiteout []string
 
 	logrus.Debugf("Current image filesystem: %v", s.l.currentImage)
 
-	changedPaths, deletedPaths := util.WalkFS(s.directory, s.l.GetCurrentPaths(), s.l.CheckFileChange)
+	// Use SafeSnapshotOptimizer for better hidden file support
+	// MaxExpectedChanges: threshold for integrity checking
+	// - Small projects (< 100 files): 500-1000
+	// - Medium projects (100-1000 files): 2000-5000
+	// - Large projects (1000+ files): 5000-10000
+	// - Enterprise projects (10000+ files): 10000-50000
+	const defaultMaxExpectedChanges = 5000 // Increased for better large project support
+	optimizer := NewSafeSnapshotOptimizer(s, &config.KanikoOptions{
+		EnableParallelExec: true,
+		IntegrityCheck:     true,
+		MaxExpectedChanges: defaultMaxExpectedChanges,
+	})
+
+	changedPaths, deletedPaths, err := optimizer.OptimizedWalkFS(s.directory, s.l.GetCurrentPaths())
+	if err != nil {
+		logrus.Warnf("SafeSnapshotOptimizer failed, falling back to standard WalkFS: %v", err)
+		changedPaths, deletedPaths = util.WalkFS(s.directory, s.l.GetCurrentPaths(), s.l.CheckFileChange)
+	}
 	timer := timing.Start("Resolving Paths")
 
 	filesToAdd = []string{}

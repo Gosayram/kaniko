@@ -338,9 +338,20 @@ type ScanResults struct {
 
 // shouldProcessFile determines if a file should be processed
 func (sso *SafeSnapshotOptimizer) shouldProcessFile(path string, info os.FileInfo) bool {
-	// Skip hidden files and temporary files
-	if filepath.Base(path)[0] == '.' {
-		return false
+	// Skip only system hidden files, but allow all user-created hidden files
+	baseName := filepath.Base(path)
+	if baseName[0] == '.' {
+		// Skip only system/temporary hidden files
+		systemHiddenFiles := []string{
+			".DS_Store", ".Thumbs.db", ".Spotlight-V100",
+			".Trashes", ".fseventsd", ".TemporaryItems",
+		}
+		for _, system := range systemHiddenFiles {
+			if baseName == system {
+				return false
+			}
+		}
+		// Allow all other hidden files (including .output, .next, etc.)
 	}
 
 	// Skip if in ignore list
