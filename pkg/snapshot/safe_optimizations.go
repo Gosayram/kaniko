@@ -21,6 +21,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -297,7 +298,13 @@ func (sso *SafeSnapshotOptimizer) parallelDirectoryScan(dir string) (*ScanResult
 
 	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
-			return err
+			// Skip problematic paths like /proc/*/fd/* that may not be accessible in containers
+			if strings.Contains(path, "/proc/") && strings.Contains(path, "/fd/") {
+				return filepath.SkipDir
+			}
+			// For other errors, log and continue
+			logrus.Debugf("Skipping problematic path %s: %v", path, err)
+			return nil
 		}
 
 		// Skip if not a regular file

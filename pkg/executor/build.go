@@ -1233,7 +1233,8 @@ func filesToSave(deps []string) ([]string, error) {
 	for _, src := range deps {
 		// Use the current filesystem root (/) instead of config.RootDir for cross-stage dependencies
 		// This ensures we look in the actual container filesystem where files are created
-		searchPath := "/" + src
+		// Clean the path to avoid double slashes
+		searchPath := filepath.Clean("/" + src)
 		srcs, err := filepath.Glob(searchPath)
 		if err != nil {
 			// Don't fail on glob errors - log warning and continue
