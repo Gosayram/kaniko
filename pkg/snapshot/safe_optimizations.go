@@ -255,10 +255,13 @@ func (sso *SafeSnapshotOptimizer) OptimizedWalkFS(
 	logrus.Debugf("🔍 Starting optimized filesystem walk for %s", dir)
 
 	// 1. Parallel directory scanning
+	logrus.Debugf("🔍 Starting parallel directory scan for %s", dir)
 	scanResults, err := sso.parallelDirectoryScan(dir)
 	if err != nil {
+		logrus.Warnf("⚠️ Parallel directory scan failed: %v, falling back to standard WalkFS", err)
 		return nil, nil, fmt.Errorf("parallel directory scan failed: %w", err)
 	}
+	logrus.Debugf("🔍 Parallel directory scan completed: found %d files", len(scanResults.files))
 
 	// 2. Parallel file hashing with integrity verification
 	changedFiles, err = sso.parallelFileHashing(scanResults.files)
@@ -355,22 +358,27 @@ func (sso *SafeSnapshotOptimizer) shouldProcessFile(path string, info os.FileInf
 		}
 		for _, system := range systemHiddenFiles {
 			if baseName == system {
+				logrus.Debugf("🚫 Skipping system hidden file: %s", path)
 				return false
 			}
 		}
 		// Allow all other hidden files (including .output, .next, etc.)
+		logrus.Debugf("✅ Processing hidden file: %s", path)
 	}
 
 	// Skip if in ignore list
 	if util.CheckIgnoreList(path) {
+		logrus.Debugf("🚫 Skipping ignored file: %s", path)
 		return false
 	}
 
 	// Skip if too small (likely not important)
 	if info.Size() < minFileSizeBytes { // Optimized for better performance
+		logrus.Debugf("🚫 Skipping small file: %s (size: %d)", path, info.Size())
 		return false
 	}
 
+	logrus.Debugf("✅ Processing file: %s", path)
 	return true
 }
 

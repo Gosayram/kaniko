@@ -1212,7 +1212,9 @@ func handleNonFinalStage(
 
 	for _, p := range filesToSave {
 		logrus.Infof("Saving file %s for later use", p)
-		if err := util.CopyFileOrSymlink(p, dstDir, config.RootDir); err != nil {
+		// CopyFileOrSymlink expects paths relative to root, but filesToSave returns paths relative to container root (/)
+		// So we need to use "/" as root instead of config.RootDir
+		if err := util.CopyFileOrSymlink(p, dstDir, "/"); err != nil {
 			// Don't fail on individual file copy errors - log warning and continue
 			logrus.Warnf("Failed to save file %s for cross-stage dependency: %v, continuing anyway", p, err)
 			continue
