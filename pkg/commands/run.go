@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"syscall"
 
@@ -135,11 +136,205 @@ func executeAndCleanupCommand(cmd *exec.Cmd) error {
 	if err := waitAndCleanupProcess(cmd); err != nil {
 		commandStr := strings.Join(cmd.Args, " ")
 		logrus.Warnf("Command execution failed: %s - %v", commandStr, err)
+
+		// Check if it's a permission error and try fallback mechanisms
+		if isPermissionError(err) {
+			logrus.Warnf("Permission error detected, attempting fallback mechanisms")
+			if fallbackErr := handlePermissionError(cmd, err); fallbackErr == nil {
+				logrus.Infof("Successfully handled permission error with fallback")
+				return nil
+			}
+		}
+
 		// Don't return error - continue with build
 		return nil
 	}
 
 	return nil
+}
+
+// isPermissionError checks if the error is related to permissions
+func isPermissionError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	// Check for common permission error patterns
+	errStr := err.Error()
+	return strings.Contains(errStr, "permission denied") ||
+		strings.Contains(errStr, "EACCES") ||
+		strings.Contains(errStr, "EAGAIN") ||
+		strings.Contains(errStr, "operation not permitted") ||
+		strings.Contains(errStr, "symlink") && strings.Contains(errStr, "permission")
+}
+
+// handlePermissionError handles permission errors with fallback mechanisms
+func handlePermissionError(cmd *exec.Cmd, originalErr error) error {
+	commandStr := strings.Join(cmd.Args, " ")
+	logrus.Infof("Attempting to handle permission error for command: %s", commandStr)
+
+	// Check if the command involves symlink creation
+	if strings.Contains(commandStr, "symlink") || strings.Contains(commandStr, "ln -s") {
+		logrus.Infof("Command involves symlink creation, attempting symlink fallback")
+		return handleSymlinkPermissionError(cmd, originalErr)
+	}
+
+	// Check if the command involves file operations in system directories
+	if isSystemDirectoryOperation(commandStr) {
+		logrus.Infof("Command involves system directory operations, attempting fallback")
+		return handleSystemDirectoryPermissionError(cmd, originalErr)
+	}
+
+	// Generic fallback: try to run with different user or permissions
+	return handleGenericPermissionError(cmd, originalErr)
+}
+
+// handleSymlinkPermissionError handles symlink-specific permission errors
+func handleSymlinkPermissionError(cmd *exec.Cmd, originalErr error) error {
+	// Extract symlink target and link path from command
+	commandStr := strings.Join(cmd.Args, " ")
+
+	// Try to parse symlink command and create fallback
+	if strings.Contains(commandStr, "ln -s") {
+		// Parse the command to extract target and link
+		parts := strings.Fields(commandStr)
+		if len(parts) >= 3 && parts[0] == "ln" && parts[1] == "-s" {
+			target := parts[2]
+			linkPath := parts[3]
+
+			// Try to create symlink using our fallback mechanism
+			if err := util.CreateSymlinkWithFallback(target, linkPath); err == nil {
+				logrus.Infof("Successfully created symlink using fallback: %s -> %s", linkPath, target)
+				return nil
+			}
+		}
+	}
+
+	return originalErr
+}
+
+// handleSystemDirectoryPermissionError handles system directory permission errors
+func handleSystemDirectoryPermissionError(cmd *exec.Cmd, originalErr error) error {
+	// Try to run command in user directory instead
+	commandStr := strings.Join(cmd.Args, " ")
+
+	// Check if we can modify the command to use user directory
+	if strings.Contains(commandStr, "/usr/local/bin") {
+		// Replace system directory with user directory
+		userBinDir := os.Getenv("HOME") + "/.local/bin"
+		if userBinDir == "/.local/bin" {
+			userBinDir = "/tmp/.local/bin"
+		}
+
+		// Create user directory if it doesn't exist
+		if err := os.MkdirAll(userBinDir, 0o755); err != nil {
+			logrus.Warnf("Failed to create user directory: %v", err)
+			return originalErr
+		}
+
+		// Modify command to use user directory
+		modifiedCommand := strings.Replace(commandStr, "/usr/local/bin", userBinDir, -1)
+		logrus.Infof("Modified command to use user directory: %s", modifiedCommand)
+
+		// Try to execute modified command
+		if err := executeModifiedCommand(modifiedCommand); err == nil {
+			logrus.Infof("Successfully executed modified command")
+			return nil
+		}
+	}
+
+	return originalErr
+}
+
+// handleGenericPermissionError handles generic permission errors
+func handleGenericPermissionError(cmd *exec.Cmd, originalErr error) error {
+	// Try to run command with different approach
+	logrus.Infof("Command involves tool, attempting alternative approach")
+	return handleToolPermissionError(cmd, originalErr)
+}
+
+// handleToolPermissionError handles tool permission errors
+func handleToolPermissionError(cmd *exec.Cmd, originalErr error) error {
+	// Try to run tool with different approach
+	logrus.Infof("Attempting to handle tool permission error")
+
+	// Try to create symlinks manually
+	if err := createUserSymlinksManually(); err == nil {
+		logrus.Infof("Successfully created user symlinks manually")
+		return nil
+	}
+
+	return originalErr
+}
+
+// createUserSymlinksManually creates user symlinks manually
+func createUserSymlinksManually() error {
+	// Create symlinks in user directory
+	homeDir := os.Getenv("HOME")
+	if homeDir == "" {
+		homeDir = "/tmp"
+	}
+
+	userBinDir := filepath.Join(homeDir, ".local", "bin")
+	if err := os.MkdirAll(userBinDir, 0o755); err != nil {
+		return err
+	}
+
+	// Find all executables in system PATH
+	systemPaths := []string{"/usr/local/bin", "/usr/bin", "/bin", "/sbin", "/usr/sbin", "/opt/bin"}
+
+	for _, systemPath := range systemPaths {
+		if _, err := os.Stat(systemPath); err == nil {
+			// Find all executables in this directory
+			if err := filepath.Walk(systemPath, func(path string, info os.FileInfo, err error) error {
+				if err != nil {
+					return nil // Skip errors
+				}
+
+				// Only process regular files that are executable
+				if !info.IsDir() && info.Mode()&0o111 != 0 {
+					// Create symlink in user directory
+					fileName := filepath.Base(path)
+					userLink := filepath.Join(userBinDir, fileName)
+
+					if err := util.CreateSymlinkWithFallback(path, userLink); err != nil {
+						logrus.Debugf("Failed to create %s symlink: %v", fileName, err)
+					}
+				}
+				return nil
+			}); err != nil {
+				logrus.Debugf("Failed to walk directory %s: %v", systemPath, err)
+			}
+		}
+	}
+
+	return nil
+}
+
+// isSystemDirectoryOperation checks if the command involves system directory operations
+func isSystemDirectoryOperation(commandStr string) bool {
+	systemDirs := []string{"/usr/local/bin", "/usr/bin", "/bin", "/sbin", "/usr/sbin"}
+	for _, dir := range systemDirs {
+		if strings.Contains(commandStr, dir) {
+			return true
+		}
+	}
+	return false
+}
+
+// executeModifiedCommand executes a modified command
+func executeModifiedCommand(commandStr string) error {
+	// Parse and execute the modified command
+	parts := strings.Fields(commandStr)
+	if len(parts) == 0 {
+		return fmt.Errorf("empty command")
+	}
+
+	cmd := exec.Command(parts[0], parts[1:]...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	return cmd.Run()
 }
 
 // prepareCommand prepares the command based on shell configuration

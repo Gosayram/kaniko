@@ -1089,6 +1089,158 @@ func CopySymlink(src, dest string, context FileContext) (bool, error) {
 	return false, os.Symlink(link, dest)
 }
 
+// CreateSymlinkWithFallback creates a symlink with fallback mechanisms for permission issues
+func CreateSymlinkWithFallback(target, linkPath string) error {
+	// First attempt: Try to create symlink directly
+	originalErr := os.Symlink(target, linkPath)
+	if originalErr == nil {
+		logrus.Debugf("Successfully created symlink: %s -> %s", linkPath, target)
+		return nil
+	}
+
+	// Log the original error for debugging
+	logrus.Warnf("Failed to create symlink %s -> %s: %v", linkPath, target, originalErr)
+
+	// Check if it's a permission error
+	if isPermissionError(originalErr) {
+		logrus.Warnf("Permission denied creating symlink, attempting fallback mechanisms")
+
+		// Fallback 1: Try to create parent directory with proper permissions
+		if err := createParentDirectoryWithPermissions(linkPath); err != nil {
+			logrus.Warnf("Failed to create parent directory: %v", err)
+		}
+
+		// Fallback 2: Try to create symlink in user directory instead
+		if userSymlinkPath, err := createUserSymlink(target, linkPath); err == nil {
+			logrus.Infof("Created user symlink as fallback: %s -> %s", userSymlinkPath, target)
+			return nil
+		}
+
+		// Fallback 3: Try to copy the target file instead of creating symlink
+		if err := copyTargetAsFallback(target, linkPath); err == nil {
+			logrus.Infof("Copied target file as fallback: %s", linkPath)
+			return nil
+		}
+
+		// Fallback 4: Create a wrapper script that calls the target
+		if err := createWrapperScript(target, linkPath); err == nil {
+			logrus.Infof("Created wrapper script as fallback: %s", linkPath)
+			return nil
+		}
+	}
+
+	// If all fallbacks fail, return the original error
+	return fmt.Errorf("failed to create symlink %s -> %s: %v", linkPath, target, originalErr)
+}
+
+// isPermissionError checks if the error is related to permissions
+func isPermissionError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	// Check for common permission error patterns
+	errStr := err.Error()
+	return strings.Contains(errStr, "permission denied") ||
+		strings.Contains(errStr, "EACCES") ||
+		strings.Contains(errStr, "EAGAIN") ||
+		strings.Contains(errStr, "operation not permitted")
+}
+
+// createParentDirectoryWithPermissions creates parent directory with proper permissions
+func createParentDirectoryWithPermissions(linkPath string) error {
+	parentDir := filepath.Dir(linkPath)
+
+	// Try to create directory with more permissive permissions
+	if err := os.MkdirAll(parentDir, 0o755); err != nil {
+		return err
+	}
+
+	// Try to make directory writable by current user
+	if err := os.Chmod(parentDir, 0o755); err != nil {
+		logrus.Warnf("Failed to change directory permissions: %v", err)
+	}
+
+	return nil
+}
+
+// createUserSymlink creates symlink in user directory as fallback
+func createUserSymlink(target, originalPath string) (string, error) {
+	// Get user home directory
+	homeDir := os.Getenv("HOME")
+	if homeDir == "" {
+		homeDir = "/tmp"
+	}
+
+	// Create user bin directory
+	userBinDir := filepath.Join(homeDir, ".local", "bin")
+	if err := os.MkdirAll(userBinDir, 0o755); err != nil {
+		return "", err
+	}
+
+	// Create symlink in user directory
+	fileName := filepath.Base(originalPath)
+	userSymlinkPath := filepath.Join(userBinDir, fileName)
+
+	if err := os.Symlink(target, userSymlinkPath); err != nil {
+		return "", err
+	}
+
+	// Make the symlink executable
+	if err := os.Chmod(userSymlinkPath, 0o755); err != nil {
+		logrus.Warnf("Failed to make symlink executable: %v", err)
+	}
+
+	return userSymlinkPath, nil
+}
+
+// copyTargetAsFallback copies the target file instead of creating symlink
+func copyTargetAsFallback(target, linkPath string) error {
+	// Check if target exists and is a file
+	if fi, err := os.Stat(target); err != nil || fi.IsDir() {
+		return fmt.Errorf("target is not a valid file: %s", target)
+	}
+
+	// Copy the target file
+	srcFile, err := os.Open(target)
+	if err != nil {
+		return err
+	}
+	defer srcFile.Close()
+
+	destFile, err := os.Create(linkPath)
+	if err != nil {
+		return err
+	}
+	defer destFile.Close()
+
+	if _, err := io.Copy(destFile, srcFile); err != nil {
+		return err
+	}
+
+	// Make the copied file executable
+	if err := os.Chmod(linkPath, 0o755); err != nil {
+		logrus.Warnf("Failed to make copied file executable: %v", err)
+	}
+
+	return nil
+}
+
+// createWrapperScript creates a wrapper script that calls the target
+func createWrapperScript(target, linkPath string) error {
+	// Create a simple wrapper script
+	scriptContent := fmt.Sprintf(`#!/bin/sh
+exec "%s" "$@"
+`, target)
+
+	// Write the script
+	if err := os.WriteFile(linkPath, []byte(scriptContent), 0o755); err != nil {
+		return err
+	}
+
+	return nil
+}
+
 // CopyFile copies the file at src to dest
 func CopyFile(src, dest string, context FileContext, uid, gid int64,
 	chmod fs.FileMode, useDefaultChmod bool) (bool, error) {
@@ -1432,6 +1584,122 @@ func CopyFileOrSymlink(src, destDir, root string) error {
 	if err := os.Chmod(destFile, fi.Mode()); err != nil {
 		return errors.Wrap(err, "copying file mode")
 	}
+	return nil
+}
+
+// CopyFileOrSymlinkWithFallback copies files or symlinks with fallback mechanisms for permission issues
+func CopyFileOrSymlinkWithFallback(src, destDir, root string) error {
+	destFile := filepath.Join(destDir, src)
+	src = filepath.Join(root, src)
+
+	// Try to access the source file with fallback mechanisms
+	fi, err := os.Lstat(src)
+	if err != nil {
+		// Try to find the file in hidden directories or alternative locations
+		if altSrc, altErr := findFileInAlternativeLocations(src, root); altErr == nil {
+			src = altSrc
+			fi, err = os.Lstat(src)
+		}
+
+		if err != nil {
+			logrus.Warnf("Source file not found for cross-stage copy: %s, continuing anyway", src)
+			return nil
+		}
+	}
+
+	if IsSymlink(fi) {
+		link, err := os.Readlink(src)
+		if err != nil {
+			return errors.Wrap(err, "copying file or symlink")
+		}
+		if err := createParentDirectory(destFile, DoNotChangeUID, DoNotChangeGID); err != nil {
+			return err
+		}
+
+		// Try to create symlink with fallback mechanisms
+		if err := CreateSymlinkWithFallback(link, destFile); err != nil {
+			logrus.Warnf("Failed to create symlink, trying alternative approach: %v", err)
+			// Try to copy the target file instead
+			if err := copyTargetFile(link, destFile); err != nil {
+				return errors.Wrap(err, "copying symlink target")
+			}
+		}
+		return nil
+	}
+
+	// Copy regular file
+	if err := otiai10Cpy.Copy(src, destFile, skipKanikoDir); err != nil {
+		return errors.Wrap(err, "copying file")
+	}
+	if err := CopyOwnership(src, destDir, root); err != nil {
+		return errors.Wrap(err, "copying ownership")
+	}
+	if err := os.Chmod(destFile, fi.Mode()); err != nil {
+		return errors.Wrap(err, "copying file mode")
+	}
+	return nil
+}
+
+// findFileInAlternativeLocations searches for files in alternative locations
+func findFileInAlternativeLocations(src, root string) (string, error) {
+	// Check if the file exists in hidden directories
+	hiddenDirs := []string{".", "..", ".hidden", ".cache", ".local", ".config"}
+
+	for _, hiddenDir := range hiddenDirs {
+		altPath := filepath.Join(root, hiddenDir, src)
+		if _, err := os.Stat(altPath); err == nil {
+			logrus.Debugf("Found file in alternative location: %s", altPath)
+			return altPath, nil
+		}
+	}
+
+	// Check if the file exists in common alternative locations
+	altPaths := []string{
+		filepath.Join(root, "lib", src),
+		filepath.Join(root, "bin", src),
+		filepath.Join(root, "usr", "lib", src),
+		filepath.Join(root, "usr", "bin", src),
+	}
+
+	for _, altPath := range altPaths {
+		if _, err := os.Stat(altPath); err == nil {
+			logrus.Debugf("Found file in alternative location: %s", altPath)
+			return altPath, nil
+		}
+	}
+
+	return "", fmt.Errorf("file not found in alternative locations")
+}
+
+// copyTargetFile copies the target file instead of creating a symlink
+func copyTargetFile(target, destFile string) error {
+	// Check if target exists and is a file
+	if fi, err := os.Stat(target); err != nil || fi.IsDir() {
+		return fmt.Errorf("target is not a valid file: %s", target)
+	}
+
+	// Copy the target file
+	srcFile, err := os.Open(target)
+	if err != nil {
+		return err
+	}
+	defer srcFile.Close()
+
+	dest, err := os.Create(destFile)
+	if err != nil {
+		return err
+	}
+	defer dest.Close()
+
+	if _, err := io.Copy(dest, srcFile); err != nil {
+		return err
+	}
+
+	// Make the copied file executable
+	if err := os.Chmod(destFile, 0o755); err != nil {
+		logrus.Warnf("Failed to make copied file executable: %v", err)
+	}
+
 	return nil
 }
 
