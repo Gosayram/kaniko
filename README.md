@@ -4,8 +4,7 @@
 > This repository is a **modern fork** of the original [Gosayram/kaniko](https://github.com/Gosayram/kaniko) project, now maintained by [Gosayram](https://github.com/Gosayram). The original Google Kaniko repository was archived on Jun 3, 2025. This fork continues development and maintenance to ensure the container image building tool remains available and functional for the community, with **modern Go 1.24+ infrastructure, full OCI 1.1 compliance, and built-in multi-architecture support**.
 
 [![Go Report Card](https://goreportcard.com/badge/github.com/Gosayram/kaniko)](https://goreportcard.com/report/github.com/Gosayram/kaniko)
-[![OCI Compliance](https://img.shields.io/badge/OCI%20Compliance-1.1-10%2F10-brightgreen)](docs/oci-compliance.md)
-[![Version](https://img.shields.io/badge/Version-1.25.0-blue)](.release-version)
+[![Version](https://img.shields.io/badge/Version-1.25.1-blue)](.release-version)
 
 ![kaniko logo](logo/Kaniko-Logo.png)
 
