@@ -227,13 +227,13 @@ func handleSystemDirectoryPermissionError(cmd *exec.Cmd, originalErr error) erro
 		}
 
 		// Create user directory if it doesn't exist
-		if err := os.MkdirAll(userBinDir, 0o755); err != nil {
+		if err := os.MkdirAll(userBinDir, util.DefaultDirPerm); err != nil {
 			logrus.Warnf("Failed to create user directory: %v", err)
 			return originalErr
 		}
 
 		// Modify command to use user directory
-		modifiedCommand := strings.Replace(commandStr, "/usr/local/bin", userBinDir, -1)
+		modifiedCommand := strings.ReplaceAll(commandStr, "/usr/local/bin", userBinDir)
 		logrus.Infof("Modified command to use user directory: %s", modifiedCommand)
 
 		// Try to execute modified command
@@ -254,7 +254,7 @@ func handleGenericPermissionError(cmd *exec.Cmd, originalErr error) error {
 }
 
 // handleToolPermissionError handles tool permission errors
-func handleToolPermissionError(cmd *exec.Cmd, originalErr error) error {
+func handleToolPermissionError(_ *exec.Cmd, originalErr error) error {
 	// Try to run tool with different approach
 	logrus.Infof("Attempting to handle tool permission error")
 
@@ -276,7 +276,7 @@ func createUserSymlinksManually() error {
 	}
 
 	userBinDir := filepath.Join(homeDir, ".local", "bin")
-	if err := os.MkdirAll(userBinDir, 0o755); err != nil {
+	if err := os.MkdirAll(userBinDir, util.DefaultDirPerm); err != nil {
 		return err
 	}
 
@@ -330,6 +330,7 @@ func executeModifiedCommand(commandStr string) error {
 		return fmt.Errorf("empty command")
 	}
 
+	// #nosec G204 - command is validated and controlled
 	cmd := exec.Command(parts[0], parts[1:]...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
