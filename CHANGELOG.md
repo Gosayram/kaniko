@@ -1,3 +1,49 @@
+# v1.25.1 Release 2025-10-22
+The executor images in this release are:
+```
+gcr.io/Gosayram/kaniko/executor:v1.25.1
+gcr.io/Gosayram/kaniko/executor:latest
+```
+
+The debug images are available at:
+```
+gcr.io/Gosayram/kaniko/executor:debug
+gcr.io/Gosayram/kaniko/executor:v1.25.1-debug
+```
+
+The slim executor images which don't contain any authentication binaries are available at:
+```
+gcr.io/Gosayram/kaniko/executor:slim
+gcr.io/Gosayram/kaniko/executor:v1.25.1-slim
+```
+
+## Bug Fixes
+* Fix privileged permissions before secure building instead of rootless building due to low permissions with system binaries
+* Fix dynamic tools and folders access via builds
+* Fix file to save for hidden folders
+* Fix root dir for copying files and symlinks
+* Fix read filepath via safe method; ignore falling path into optimize file scanning
+* Fix cross-stage dependencies
+* Fix linters and some bugs with ARM architecture for builds
+* Fix vendor libs for fixing build in Darwin devices
+* Fix default kaniko user builds for unspecified USER arguments in Dockerfile (unsecured params) and through arguments
+* Fix move DockerHub hard error to warning state without stopping each building process
+* Fix concurrent layer mapping and racing; fix shared state secure method
+
+## Improvements
+* Update setting up env params for binary tools into container layer
+* Improve cross-stage dependency handling for hidden directories
+* Optimize work with cache and non-cache mode without stress
+* Switch to safeSnapshotOptimizer instead of walkfs (very slow and bugging way); added comprehensive docs for comparing
+* Improve logging for caching stage
+* Implement new logging mechanism into existing; fix some bugs and unused params
+* Implement comprehensive network optimization for kaniko
+
+Huge thank you for this release towards our contributors: 
+- Abdurakhman R.
+
+---
+
 # v1.25.0 Release 2025-10-20
 The executor images in this release are:
 ```
