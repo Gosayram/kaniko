@@ -93,10 +93,34 @@ func setupEnvironmentVariables(cmd *exec.Cmd, config *v1.Config, buildArgs *dock
 		return errors.Wrap(err, "adding default HOME variable")
 	}
 
+	// Set up basic PATH for user tools
+	setupUserPath(env)
+
 	// Set all environment variables from container
 	cmd.Env = env
 
 	return nil
+}
+
+// setupUserPath sets up PATH to include user bin directory
+func setupUserPath(env []string) {
+	// Get HOME directory for the user
+	homeDir := "/root" // default for containers
+	for _, envVar := range env {
+		if strings.HasPrefix(envVar, "HOME=") {
+			homeDir = strings.TrimPrefix(envVar, "HOME=")
+			break
+		}
+	}
+
+	// Add user bin directory to PATH
+	userBin := fmt.Sprintf("%s/.local/bin", homeDir)
+	path := fmt.Sprintf("PATH=%s:/usr/local/bin:/usr/bin:/bin", userBin)
+
+	// Set environment variable
+	if err := os.Setenv("PATH", path); err != nil {
+		logrus.Warnf("Failed to set PATH environment variable: %v", err)
+	}
 }
 
 func executeAndCleanupCommand(cmd *exec.Cmd) error {
