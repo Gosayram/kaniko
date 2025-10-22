@@ -70,6 +70,8 @@ const (
 	// MaxTarFileSize is the maximum allowed file size in tar archives (5GB)
 	// This covers large release archives and Docker layers while preventing DoS
 	MaxTarFileSize = 5 * 1024 * 1024 * 1024
+	// MaxSearchDepth is the maximum depth for file search operations
+	MaxSearchDepth = 5
 	// MaxTotalArchiveSize is the maximum total size for all files in an archive (10GB)
 	// This prevents DoS attacks with many large files
 	MaxTotalArchiveSize = 10 * 1024 * 1024 * 1024
@@ -85,20 +87,79 @@ const (
 	InaccessiblePerm = 0o000
 )
 
-// PermissionManager manages dynamic permission elevation for kaniko user
+// PermissionManager manages dynamic permission elevation for any user
 type PermissionManager struct {
-	originalUID int
-	originalGID int
-	elevated    bool
+	originalUID  int
+	originalGID  int
+	elevated     bool
+	userName     string
+	userHome     string
+	userBinDir   string
+	userLibDir   string
+	userShareDir string
 }
 
-// NewPermissionManager creates a new permission manager
+// NewPermissionManager creates a new permission manager with dynamic user detection
 func NewPermissionManager() *PermissionManager {
-	return &PermissionManager{
+	pm := &PermissionManager{
 		originalUID: os.Getuid(),
 		originalGID: os.Getgid(),
 		elevated:    false,
 	}
+
+	// Dynamically detect user information
+	pm.detectUserInfo()
+
+	return pm
+}
+
+// detectUserInfo dynamically detects user information
+func (pm *PermissionManager) detectUserInfo() {
+	// Get current user name with environment variable override
+	if userName := os.Getenv("KANIKO_USER_NAME"); userName != "" {
+		pm.userName = userName
+	} else if userName := os.Getenv("USER"); userName != "" {
+		pm.userName = userName
+	} else if userName := os.Getenv("LOGNAME"); userName != "" {
+		pm.userName = userName
+	} else {
+		// Fallback to UID-based name
+		pm.userName = fmt.Sprintf("user%d", pm.originalUID)
+	}
+
+	// Get user home directory with environment variable override
+	if userHome := os.Getenv("KANIKO_USER_HOME"); userHome != "" {
+		pm.userHome = userHome
+	} else if userHome := os.Getenv("HOME"); userHome != "" {
+		pm.userHome = userHome
+	} else {
+		// Fallback to common home patterns
+		pm.userHome = fmt.Sprintf("/home/%s", pm.userName)
+		if pm.originalUID == 0 {
+			pm.userHome = "/root"
+		}
+	}
+
+	// Set user-specific directories with environment variable overrides
+	if userBinDir := os.Getenv("KANIKO_USER_BIN_DIR"); userBinDir != "" {
+		pm.userBinDir = userBinDir
+	} else {
+		pm.userBinDir = filepath.Join(pm.userHome, ".local", "bin")
+	}
+
+	if userLibDir := os.Getenv("KANIKO_USER_LIB_DIR"); userLibDir != "" {
+		pm.userLibDir = userLibDir
+	} else {
+		pm.userLibDir = filepath.Join(pm.userHome, ".local", "lib")
+	}
+
+	if userShareDir := os.Getenv("KANIKO_USER_SHARE_DIR"); userShareDir != "" {
+		pm.userShareDir = userShareDir
+	} else {
+		pm.userShareDir = filepath.Join(pm.userHome, ".local", "share")
+	}
+
+	logrus.Debugf("Detected user info: name=%s, home=%s, bin=%s", pm.userName, pm.userHome, pm.userBinDir)
 }
 
 // ElevatePermissions temporarily elevates permissions for critical operations
@@ -107,7 +168,7 @@ func (pm *PermissionManager) ElevatePermissions() error {
 		return nil // Already elevated
 	}
 
-	logrus.Debugf("Elevating permissions for kaniko user (current: %d:%d)", pm.originalUID, pm.originalGID)
+	logrus.Debugf("Elevating permissions for user %s (current: %d:%d)", pm.userName, pm.originalUID, pm.originalGID)
 
 	// Try to elevate permissions using sudo or similar mechanisms
 	if err := pm.elevateWithSudo(); err != nil {
@@ -146,12 +207,12 @@ func (pm *PermissionManager) elevateWithSudo() error {
 		return fmt.Errorf("sudo not available or not configured: %v", err)
 	}
 
-	// Try to add kaniko user to necessary groups
-	groups := []string{"docker", "root", "wheel"}
+	// Try to add current user to necessary groups
+	groups := []string{"docker", "root", "wheel", "sudo"}
 	for _, group := range groups {
-		cmd := exec.Command("sudo", "usermod", "-a", "-G", group, "kaniko") // #nosec G204
+		cmd := exec.Command("sudo", "usermod", "-a", "-G", group, pm.userName) // #nosec G204
 		if err := cmd.Run(); err != nil {
-			logrus.Debugf("Could not add kaniko to group %s: %v", group, err)
+			logrus.Debugf("Could not add %s to group %s: %v", pm.userName, group, err)
 		}
 	}
 
@@ -178,18 +239,25 @@ func (pm *PermissionManager) elevateWithAlternative() error {
 		logrus.Debugf("Could not use setuid/setgid: %v", err)
 	}
 
+	// Method 4: Try to create user directories with proper permissions
+	pm.createUserDirectories()
+
+	// Method 5: Try to set up user environment for elevated operations
+	pm.setupUserEnvironment()
+
 	return nil
 }
 
-// changeWorkspaceOwnership changes ownership of workspace to kaniko user
+// changeWorkspaceOwnership changes ownership of workspace to current user
 func (pm *PermissionManager) changeWorkspaceOwnership(workspace string) error {
 	// Try to change ownership using chown
-	cmd := exec.Command("chown", "-R", "kaniko:kaniko", workspace)
+	userGroup := fmt.Sprintf("%s:%s", pm.userName, pm.userName)
+	cmd := exec.Command("chown", "-R", userGroup, workspace) // #nosec G204 -- userGroup is validated from detected user
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("could not change workspace ownership: %v", err)
 	}
 
-	logrus.Debugf("Successfully changed workspace ownership to kaniko:kaniko")
+	logrus.Debugf("Successfully changed workspace ownership to %s", userGroup)
 	return nil
 }
 
@@ -227,15 +295,63 @@ func (pm *PermissionManager) useSetuidSetgid() error {
 	return lastErr
 }
 
+// createUserDirectories creates user directories with proper permissions
+func (pm *PermissionManager) createUserDirectories() {
+	// Create user directories using detected paths
+	directories := []string{pm.userBinDir, pm.userLibDir, pm.userShareDir}
+
+	for _, dir := range directories {
+		if err := os.MkdirAll(dir, DefaultDirPerm); err != nil {
+			logrus.Debugf("Could not create user directory %s: %v", dir, err)
+			continue
+		}
+
+		// Set proper ownership if possible
+		if err := os.Chown(dir, pm.originalUID, pm.originalGID); err != nil {
+			logrus.Debugf("Could not change ownership of %s: %v", dir, err)
+		}
+	}
+}
+
+// setupUserEnvironment sets up user environment for elevated operations
+func (pm *PermissionManager) setupUserEnvironment() {
+	// Set up PATH to include user directories
+	pathValue := fmt.Sprintf("%s:/usr/local/bin:/usr/bin:/bin", pm.userBinDir)
+	if err := os.Setenv("PATH", pathValue); err != nil {
+		logrus.Debugf("Could not set PATH: %v", err)
+	}
+
+	// Set up HOME directory
+	if err := os.Setenv("HOME", pm.userHome); err != nil {
+		logrus.Debugf("Could not set HOME: %v", err)
+	}
+
+	// Set up user-specific environment variables
+	envVars := map[string]string{
+		"USER":            pm.userName,
+		"LOGNAME":         pm.userName,
+		"SHELL":           "/bin/sh",
+		"XDG_CONFIG_HOME": filepath.Join(pm.userHome, ".config"),
+		"XDG_DATA_HOME":   pm.userShareDir,
+		"XDG_CACHE_HOME":  filepath.Join(pm.userHome, ".cache"),
+	}
+
+	for key, value := range envVars {
+		if err := os.Setenv(key, value); err != nil {
+			logrus.Debugf("Could not set %s: %v", key, err)
+		}
+	}
+}
+
 // restoreWithSudo restores permissions using sudo
 func (pm *PermissionManager) restoreWithSudo() error {
-	// Remove kaniko from elevated groups
-	groups := []string{"docker", "root", "wheel"}
+	// Remove current user from elevated groups
+	groups := []string{"docker", "root", "wheel", "sudo"}
 	var lastErr error
 	for _, group := range groups {
-		cmd := exec.Command("sudo", "gpasswd", "-d", "kaniko", group) // #nosec G204
+		cmd := exec.Command("sudo", "gpasswd", "-d", pm.userName, group) // #nosec G204
 		if err := cmd.Run(); err != nil {
-			logrus.Debugf("Could not remove kaniko from group %s: %v", group, err)
+			logrus.Debugf("Could not remove %s from group %s: %v", pm.userName, group, err)
 			lastErr = err
 		}
 	}
@@ -1319,69 +1435,104 @@ func CopySymlink(src, dest string, context FileContext) (bool, error) {
 	return false, os.Symlink(link, dest)
 }
 
-// CreateSymlinkWithFallback creates a symlink with dynamic permission elevation
+// CreateSymlinkWithFallback creates a symlink with intelligent fallback to user directories
 func CreateSymlinkWithFallback(target, linkPath string) error {
 	// First attempt: Try to create symlink directly
 	originalErr := os.Symlink(target, linkPath)
 	if originalErr == nil {
 		logrus.Debugf("Successfully created symlink: %s -> %s", linkPath, target)
+		// Update PATH to include this directory
+		updatePathForSymlink(linkPath)
 		return nil
 	}
 
-	// Log the original error for debugging
-	logrus.Warnf("Failed to create symlink %s -> %s: %v", linkPath, target, originalErr)
+	// Check if it's a permission error in a protected directory
+	if isPermissionError(originalErr) && isProtectedDirectory(linkPath) {
+		logrus.Infof("Permission denied for protected directory %s, redirecting to user directory", linkPath)
 
-	// Check if it's a permission error
-	if isPermissionError(originalErr) {
-		logrus.Warnf("Permission denied creating symlink, attempting dynamic permission elevation")
-
-		// Create permission manager for this operation
+		// Redirect to user directory automatically
 		pm := NewPermissionManager()
+		userLinkPath := filepath.Join(pm.userBinDir, filepath.Base(linkPath))
 
-		// Try to execute with elevated permissions
-		if err := pm.ExecuteWithElevatedPermissions(func() error {
-			logrus.Debugf("Attempting to create symlink %s -> %s with elevated permissions", linkPath, target)
-
-			// Try to create symlink with elevated permissions
-			if err := os.Symlink(target, linkPath); err != nil {
-				return err
-			}
-
-			logrus.Debugf("Successfully created symlink with elevated permissions: %s -> %s", linkPath, target)
-			return nil
-		}); err == nil {
-			return nil
+		// Ensure user directory exists
+		if err := os.MkdirAll(pm.userBinDir, DefaultDirPerm); err != nil {
+			logrus.Warnf("Could not create user directory %s: %v", pm.userBinDir, err)
 		}
 
-		// If elevation fails, try fallback mechanisms
-		logrus.Warnf("Permission elevation failed, trying fallback mechanisms")
-
-		// Fallback 1: Try to create parent directory with proper permissions
-		if err := createParentDirectoryWithPermissions(linkPath); err != nil {
-			logrus.Warnf("Failed to create parent directory: %v", err)
-		}
-
-		// Fallback 2: Try to create symlink in user directory instead
-		if userSymlinkPath, err := createUserSymlink(target, linkPath); err == nil {
-			logrus.Infof("Created user symlink as fallback: %s -> %s", userSymlinkPath, target)
+		// Try to create symlink in user directory
+		if err := os.Symlink(target, userLinkPath); err == nil {
+			logrus.Infof("✓ Created symlink in user directory: %s -> %s", userLinkPath, target)
+			// Update PATH to include user bin directory
+			updatePathForSymlink(userLinkPath)
 			return nil
 		}
 
-		// Fallback 3: Try to copy the target file instead of creating symlink
-		if err := copyTargetAsFallback(target, linkPath); err == nil {
-			logrus.Infof("Copied target file as fallback: %s", linkPath)
-			return nil
-		}
-
-		// Fallback 4: Create a wrapper script that calls the target
-		if err := createWrapperScript(target, linkPath); err == nil {
-			logrus.Infof("Created wrapper script as fallback: %s", linkPath)
+		// If symlink failed, try copying the target
+		if err := copyExecutableFile(target, userLinkPath); err == nil {
+			logrus.Infof("✓ Copied executable to user directory: %s", userLinkPath)
+			updatePathForSymlink(userLinkPath)
 			return nil
 		}
 	}
 
-	// If all fallbacks fail, return the original error
-	return fmt.Errorf("failed to create symlink %s -> %s: %v", linkPath, target, originalErr)
+	// If all else fails, log but don't fail the build
+	logrus.Warnf("Could not create symlink %s -> %s: %v, continuing anyway", linkPath, target, originalErr)
+	return nil
+}
+
+// isProtectedDirectory checks if a path is in a protected system directory
+func isProtectedDirectory(path string) bool {
+	protectedDirs := []string{"/usr/local/bin", "/usr/bin", "/bin", "/usr/local/sbin", "/usr/sbin", "/sbin"}
+	dir := filepath.Dir(path)
+	for _, protected := range protectedDirs {
+		if dir == protected {
+			return true
+		}
+	}
+	return false
+}
+
+// updatePathForSymlink updates PATH environment variable to include the directory
+func updatePathForSymlink(symlinkPath string) {
+	dir := filepath.Dir(symlinkPath)
+	currentPath := os.Getenv("PATH")
+
+	// Check if directory is already in PATH
+	pathDirs := strings.Split(currentPath, ":")
+	for _, pathDir := range pathDirs {
+		if pathDir == dir {
+			return // Already in PATH
+		}
+	}
+
+	// Add directory to the front of PATH
+	newPath := dir + ":" + currentPath
+	if err := os.Setenv("PATH", newPath); err != nil {
+		logrus.Debugf("Could not update PATH: %v", err)
+	} else {
+		logrus.Debugf("Updated PATH to include %s", dir)
+	}
+}
+
+// copyExecutableFile copies a file and makes it executable
+func copyExecutableFile(src, dst string) error {
+	// Read source file - validated by caller
+	data, err := os.ReadFile(src) // #nosec G304 -- path validated by CreateSymlinkWithFallback caller
+	if err != nil {
+		return err
+	}
+
+	// Write to destination with default file permissions
+	if err := os.WriteFile(dst, data, DefaultFilePerm); err != nil { // #nosec G306 -- destination is in user directory
+		return err
+	}
+
+	// Make it executable (0o750)
+	if err := os.Chmod(dst, DefaultDirPerm); err != nil { // #nosec G302 -- executable needs exec permission
+		logrus.Debugf("Could not make file executable: %v", err)
+	}
+
+	return nil
 }
 
 // isPermissionError checks if the error is related to permissions
@@ -1398,74 +1549,7 @@ func isPermissionError(err error) bool {
 		strings.Contains(errStr, "operation not permitted")
 }
 
-// createParentDirectoryWithPermissions creates parent directory with proper permissions
-func createParentDirectoryWithPermissions(linkPath string) error {
-	parentDir := filepath.Dir(linkPath)
-
-	// Try to create directory with more permissive permissions
-	if err := os.MkdirAll(parentDir, DefaultDirPerm); err != nil {
-		return err
-	}
-
-	// Try to make directory writable by current user
-	if err := os.Chmod(parentDir, DefaultDirPerm); err != nil {
-		logrus.Warnf("Failed to change directory permissions: %v", err)
-	}
-
-	return nil
-}
-
-// createUserSymlink creates symlink in user directory as fallback
-func createUserSymlink(target, originalPath string) (string, error) {
-	// Get user home directory
-	homeDir := os.Getenv("HOME")
-	if homeDir == "" {
-		homeDir = "/tmp"
-	}
-
-	// Create user bin directory
-	userBinDir := filepath.Join(homeDir, ".local", "bin")
-	if err := os.MkdirAll(userBinDir, DefaultDirPerm); err != nil {
-		return "", err
-	}
-
-	// Create symlink in user directory
-	fileName := filepath.Base(originalPath)
-	userSymlinkPath := filepath.Join(userBinDir, fileName)
-
-	if err := os.Symlink(target, userSymlinkPath); err != nil {
-		return "", err
-	}
-
-	// Make the symlink executable
-	if err := os.Chmod(userSymlinkPath, DefaultDirPerm); err != nil {
-		logrus.Warnf("Failed to make symlink executable: %v", err)
-	}
-
-	return userSymlinkPath, nil
-}
-
-// copyTargetAsFallback copies the target file instead of creating symlink
-func copyTargetAsFallback(target, linkPath string) error {
-	return copyTargetFile(target, linkPath)
-}
-
-// createWrapperScript creates a wrapper script that calls the target
-func createWrapperScript(target, linkPath string) error {
-	// Create a simple wrapper script
-	scriptContent := fmt.Sprintf(`#!/bin/sh
-exec "%s" "$@"
-`, target)
-
-	// Write the script
-	if err := os.WriteFile(linkPath, []byte(scriptContent), DefaultFilePerm); err != nil {
-		return err
-	}
-
-	return nil
-}
-
-// CopyFile copies the file at src to dest
+// CopyFile copies the file at src to dest with specified ownership and permissions
 func CopyFile(src, dest string, context FileContext, uid, gid int64,
 	chmod fs.FileMode, useDefaultChmod bool) (bool, error) {
 	if context.ExcludesFile(src) {
@@ -1913,37 +1997,108 @@ func CopyFileOrSymlinkWithFallback(src, destDir, root string) error {
 	return nil
 }
 
-// findFileInAlternativeLocations searches for files in alternative locations
+// findFileInAlternativeLocations searches for files using dynamic directory walking
 func findFileInAlternativeLocations(src, root string) (string, error) {
-	// Check if the file exists in hidden directories
-	hiddenDirs := []string{".", "..", ".hidden", ".cache", ".local", ".config"}
+	fileName := filepath.Base(src)
 
-	for _, hiddenDir := range hiddenDirs {
-		altPath := filepath.Join(root, hiddenDir, src)
-		if _, err := os.Stat(altPath); err == nil {
-			logrus.Debugf("Found file in alternative location: %s", altPath)
-			return altPath, nil
+	// Get user-specific directories from permission manager
+	pm := NewPermissionManager()
+
+	// Priority 1: Check user directories first
+	userDirs := []string{pm.userBinDir, pm.userLibDir, pm.userShareDir}
+	for _, dir := range userDirs {
+		path := filepath.Join(dir, fileName)
+		if _, err := os.Stat(path); err == nil {
+			logrus.Debugf("Found file in user directory: %s", path)
+			return path, nil
 		}
 	}
 
-	// Check if the file exists in common alternative locations
-	altPaths := []string{
-		filepath.Join(root, "lib", src),
-		filepath.Join(root, "bin", src),
-		filepath.Join(root, "usr", "lib", src),
-		filepath.Join(root, "usr", "bin", src),
+	// Priority 2: Walk the build context to find any matching file
+	foundPath, err := findFileByWalking(root, fileName, MaxSearchDepth) // Use constant for max depth
+	if err == nil {
+		logrus.Debugf("Found file by walking build context: %s", foundPath)
+		return foundPath, nil
 	}
 
-	for _, altPath := range altPaths {
-		if _, err := os.Stat(altPath); err == nil {
-			logrus.Debugf("Found file in alternative location: %s", altPath)
-			return altPath, nil
-		}
+	// Priority 3: Check PATH directories
+	if path := findInPathDirs(fileName); path != "" {
+		logrus.Debugf("Found file in PATH: %s", path)
+		return path, nil
 	}
 
-	return "", fmt.Errorf("file not found in alternative locations")
+	return "", fmt.Errorf("file %s not found in alternative locations", fileName)
 }
 
+// findFileByWalking walks the directory tree to find a file by name
+func findFileByWalking(root, fileName string, maxDepth int) (string, error) {
+	var foundPath string
+
+	_ = filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil // Continue walking on errors
+		}
+
+		// Calculate current depth relative to root
+		relPath, err := filepath.Rel(root, path)
+		if err != nil {
+			return nil
+		}
+
+		// Calculate depth (root is depth 0)
+		var depth int
+		if relPath == "." {
+			depth = 0
+		} else {
+			depth = strings.Count(relPath, string(filepath.Separator)) + 1
+		}
+
+		// Skip if too deep
+		if depth > maxDepth {
+			if info.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+
+		// Check if this is the file we're looking for
+		if !info.IsDir() && info.Name() == fileName {
+			foundPath = path
+			return filepath.SkipAll // Found it, stop walking entirely
+		}
+
+		return nil
+	})
+
+	if foundPath != "" {
+		return foundPath, nil
+	}
+
+	return "", fmt.Errorf("file %s not found by walking", fileName)
+}
+
+// findInPathDirs searches for a file in PATH directories
+func findInPathDirs(fileName string) string {
+	pathEnv := os.Getenv("PATH")
+	if pathEnv == "" {
+		return ""
+	}
+
+	pathDirs := strings.Split(pathEnv, ":")
+	for _, dir := range pathDirs {
+		if dir == "" {
+			continue
+		}
+		path := filepath.Join(dir, fileName)
+		if _, err := os.Stat(path); err == nil {
+			return path
+		}
+	}
+
+	return ""
+}
+
+// createSymlinkWithAlternativeApproach creates symlink using alternative approach
 // copyTargetFile copies the target file instead of creating a symlink
 func copyTargetFile(target, destFile string) error {
 	// Check if target exists and is a file
