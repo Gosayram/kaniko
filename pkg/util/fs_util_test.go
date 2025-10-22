@@ -256,3 +256,61 @@ func TestCreateSymlinkWithFallback(t *testing.T) {
 		t.Errorf("Symlink was not created: %v", err)
 	}
 }
+
+func TestPrepareWritableOverlayForSystemDirs(t *testing.T) {
+	// Create temporary test directories
+	tmpDir := t.TempDir()
+
+	// Mock a "system" directory
+	sysDir := filepath.Join(tmpDir, "usr", "local", "bin")
+	if err := os.MkdirAll(sysDir, 0o755); err != nil {
+		t.Fatalf("Failed to create test system directory: %v", err)
+	}
+
+	// Create a test file in the system directory
+	testFile := filepath.Join(sysDir, "test-tool")
+	if err := os.WriteFile(testFile, []byte("#!/bin/sh\necho test"), 0o755); err != nil {
+		t.Fatalf("Failed to create test file: %v", err)
+	}
+
+	// Make the directory read-only
+	if err := os.Chmod(sysDir, 0o555); err != nil {
+		t.Fatalf("Failed to make directory read-only: %v", err)
+	}
+
+	// Restore permissions for cleanup
+	defer func() {
+		_ = os.Chmod(sysDir, 0o755)
+	}()
+
+	// Set up environment to use our test directory
+	oldHome := os.Getenv("HOME")
+	defer func() {
+		if oldHome != "" {
+			_ = os.Setenv("HOME", oldHome)
+		} else {
+			_ = os.Unsetenv("HOME")
+		}
+	}()
+	_ = os.Setenv("HOME", tmpDir)
+
+	// Override CommonSystemBinDirs for testing
+	oldDirs := CommonSystemBinDirs
+	CommonSystemBinDirs = []string{sysDir}
+	defer func() { CommonSystemBinDirs = oldDirs }()
+
+	// Run the function
+	PrepareWritableOverlayForSystemDirs()
+
+	// Verify overlay directory was created
+	overlayDir := filepath.Join(tmpDir, ".kaniko-overlay", "bin")
+	if _, err := os.Stat(overlayDir); os.IsNotExist(err) {
+		t.Errorf("Overlay directory was not created: %s", overlayDir)
+	}
+
+	// Verify PATH was updated
+	path := os.Getenv("PATH")
+	if !strings.Contains(path, overlayDir) {
+		t.Errorf("PATH does not contain overlay directory: %s", path)
+	}
+}

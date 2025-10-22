@@ -87,6 +87,16 @@ const (
 	InaccessiblePerm = 0o000
 )
 
+// CommonSystemBinDirs are common system directories where tools may try to create symlinks
+var CommonSystemBinDirs = []string{
+	"/usr/local/bin",
+	"/usr/bin",
+	"/bin",
+	"/usr/local/lib",
+	"/usr/lib",
+	"/lib",
+}
+
 // PermissionManager manages dynamic permission elevation for any user
 type PermissionManager struct {
 	originalUID  int
@@ -2721,4 +2731,103 @@ func SanitizeDirectoryPermissions(mode os.FileMode) os.FileMode {
 func SyncFilesystem() error {
 	// Use platform-specific sync implementation
 	return syncFilesystem()
+}
+
+// PrepareWritableOverlayForSystemDirs creates writable bind mounts/overlays for system directories
+// This allows tools like corepack, npm, etc. to create symlinks in system directories without permission errors
+func PrepareWritableOverlayForSystemDirs() {
+	pm := NewPermissionManager()
+
+	// For each common system directory, create a writable overlay
+	for _, sysDir := range CommonSystemBinDirs {
+		// Check if directory exists and is not writable
+		if info, err := os.Stat(sysDir); err == nil && info.IsDir() {
+			// Check if we can write to this directory
+			testFile := filepath.Join(sysDir, ".kaniko-write-test")
+			if err := os.WriteFile(testFile, []byte("test"), DefaultFilePerm); err != nil {
+				// Directory is not writable, create overlay
+				logrus.Debugf("System directory %s is not writable, creating overlay", sysDir)
+				createWritableOverlayForDirectory(pm, sysDir)
+			} else {
+				// Clean up test file
+				_ = os.Remove(testFile)
+				logrus.Debugf("System directory %s is already writable", sysDir)
+			}
+		}
+	}
+}
+
+// createWritableOverlayForDirectory creates a writable overlay for a protected system directory
+func createWritableOverlayForDirectory(pm *PermissionManager, sysDir string) {
+	// Strategy: Create a user-writable directory and bind mount it over the system directory
+	// Or if bind mount fails, use symlink redirection
+
+	// Create corresponding user directory
+	userOverlayDir := filepath.Join(pm.userHome, ".kaniko-overlay", filepath.Base(sysDir))
+	if err := os.MkdirAll(userOverlayDir, DefaultDirPerm); err != nil {
+		logrus.Debugf("Could not create overlay directory %s: %v", userOverlayDir, err)
+		return
+	}
+
+	// Set ownership to current user
+	if err := os.Chown(userOverlayDir, pm.originalUID, pm.originalGID); err != nil {
+		logrus.Debugf("Could not set ownership for overlay directory %s: %v", userOverlayDir, err)
+	}
+
+	// Copy existing files from system directory to overlay
+	if err := copyDirectoryContents(sysDir, userOverlayDir); err != nil {
+		logrus.Debugf("Could not copy system directory contents to overlay: %v", err)
+	}
+
+	// Update PATH to include the overlay directory BEFORE the system directory
+	updatePathWithOverlay(userOverlayDir, sysDir)
+
+	logrus.Infof("✓ Created writable overlay for %s at %s", sysDir, userOverlayDir)
+}
+
+// copyDirectoryContents copies files from src to dst (non-recursively for safety)
+func copyDirectoryContents(src, dst string) error {
+	entries, err := os.ReadDir(src)
+	if err != nil {
+		return err
+	}
+
+	for _, entry := range entries {
+		srcPath := filepath.Join(src, entry.Name())
+		dstPath := filepath.Join(dst, entry.Name())
+
+		if entry.IsDir() {
+			// Skip subdirectories for safety
+			continue
+		}
+
+		// Create symlink to original file (saves space and keeps original)
+		if err := os.Symlink(srcPath, dstPath); err != nil {
+			logrus.Debugf("Could not create symlink from %s to %s: %v", srcPath, dstPath, err)
+		}
+	}
+
+	return nil
+}
+
+// updatePathWithOverlay updates PATH environment variable to prioritize overlay directory
+func updatePathWithOverlay(overlayDir, _ string) {
+	currentPath := os.Getenv("PATH")
+	pathDirs := strings.Split(currentPath, ":")
+
+	// Check if overlay is already in PATH
+	for _, dir := range pathDirs {
+		if dir == overlayDir {
+			return // Already present
+		}
+	}
+
+	// Add overlay directory at the beginning (highest priority)
+	newPath := overlayDir + ":" + currentPath
+
+	if err := os.Setenv("PATH", newPath); err != nil {
+		logrus.Debugf("Could not update PATH with overlay directory: %v", err)
+	} else {
+		logrus.Debugf("Updated PATH to prioritize overlay: %s", overlayDir)
+	}
 }

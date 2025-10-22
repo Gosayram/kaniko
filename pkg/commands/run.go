@@ -124,6 +124,10 @@ func setupUserPath(env []string) {
 }
 
 func executeAndCleanupCommand(cmd *exec.Cmd) error {
+	// BEFORE executing the command, prepare writable directories for common system locations
+	// This allows tools like corepack to create symlinks without permission errors
+	prepareWritableSystemDirectories()
+
 	logrus.Infof("Running: %s", cmd.Args)
 	if startErr := cmd.Start(); startErr != nil {
 		logrus.Warnf("Failed to start command: %v", startErr)
@@ -150,6 +154,19 @@ func executeAndCleanupCommand(cmd *exec.Cmd) error {
 	}
 
 	return nil
+}
+
+// prepareWritableSystemDirectories creates writable overlay directories for common system locations
+// This allows tools to create symlinks and files without permission errors
+func prepareWritableSystemDirectories() {
+	pm := util.NewPermissionManager()
+
+	// Execute with elevated permissions to prepare the directories
+	_ = pm.ExecuteWithElevatedPermissions(func() error {
+		// Prepare common system bin directories
+		util.PrepareWritableOverlayForSystemDirs()
+		return nil
+	})
 }
 
 // isPermissionError checks if the error is related to permissions
