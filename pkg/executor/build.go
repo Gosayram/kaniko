@@ -94,6 +94,9 @@ const (
 	RetryDelaySec           = 2
 	DNSCacheTimeoutMin      = 10
 	ManifestCacheTimeoutMin = 30
+
+	// Filesystem sync constants
+	FilesystemSyncDelay = 100 * time.Millisecond
 )
 
 // for testing
@@ -1189,10 +1192,17 @@ func handleNonFinalStage(
 
 	// Log cross-stage dependencies for debugging
 	logrus.Debugf("Cross-stage dependencies for stage %d: %v", index, crossStageDependencies[index])
-	filesToSave, err := filesToSave(crossStageDependencies[index])
-	if err != nil {
-		return err
+
+	// Force filesystem sync to ensure all files are written before searching
+	logrus.Debugf("🔄 Syncing filesystem before searching for cross-stage dependencies")
+	if err := util.SyncFilesystem(); err != nil {
+		logrus.Warnf("Failed to sync filesystem: %v, continuing anyway", err)
 	}
+
+	// Add a small delay to ensure filesystem operations are complete
+	time.Sleep(FilesystemSyncDelay)
+
+	filesToSave := filesToSave(crossStageDependencies[index])
 
 	// If no files to save, log warning and continue
 	if len(filesToSave) == 0 {
@@ -1231,83 +1241,154 @@ func handleNonFinalStage(
 
 // filesToSave returns all the files matching the given pattern in deps.
 // If a file is a symlink, it also returns the target file.
-func filesToSave(deps []string) ([]string, error) {
+func filesToSave(deps []string) []string {
 	srcFiles := []string{}
 	for _, src := range deps {
-		// Use the current filesystem root (/) instead of config.RootDir for cross-stage dependencies
-		// This ensures we look in the actual container filesystem where files are created
-		// Clean the path to avoid double slashes
 		searchPath := filepath.Clean("/" + src)
-
-		var srcs []string
-		var err error
-
-		// Enhanced file search with better hidden directory support
 		logrus.Debugf("🔍 Searching for files: %s", searchPath)
 
-		// First try exact path (works for both files and directories)
-		if info, err := os.Stat(searchPath); err == nil {
-			if info.IsDir() {
-				logrus.Debugf("✅ Found directory: %s", searchPath)
-				// Walk the directory to get all files
-				err := filepath.Walk(searchPath, func(path string, info os.FileInfo, err error) error {
-					if err != nil {
-						return nil // Skip errors
-					}
+		files, err := findFilesForDependency(searchPath)
+		if err != nil {
+			logrus.Warnf("Failed to find files for %s: %v, continuing anyway", searchPath, err)
+			continue
+		}
+		srcFiles = append(srcFiles, files...)
+	}
+
+	// remove duplicates
+	return deduplicatePaths(srcFiles)
+}
+
+// findFilesForDependency finds files for a specific dependency path
+func findFilesForDependency(searchPath string) ([]string, error) {
+	// First try exact path (works for both files and directories)
+	if info, statErr := os.Stat(searchPath); statErr == nil {
+		return processExistingPath(searchPath, info)
+	}
+
+	// Path doesn't exist, try to find similar paths
+	return findSimilarPaths(searchPath)
+}
+
+// processExistingPath processes an existing file or directory
+func processExistingPath(searchPath string, info os.FileInfo) ([]string, error) {
+	var srcFiles []string
+
+	if info.IsDir() {
+		logrus.Debugf("✅ Found directory: %s", searchPath)
+		return walkDirectory(searchPath)
+	}
+
+	// It's a file, add it directly
+	relPath, err := filepath.Rel("/", searchPath)
+	if err == nil {
+		srcFiles = append(srcFiles, relPath)
+		logrus.Debugf("📁 Added file to cross-stage dependencies: %s", relPath)
+	}
+	return srcFiles, nil
+}
+
+// walkDirectory walks a directory and collects all files
+func walkDirectory(searchPath string) ([]string, error) {
+	var srcFiles []string
+
+	walkErr := filepath.Walk(searchPath, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			// Skip problematic paths but continue walking
+			logrus.Debugf("Skipping problematic path %s: %v", path, err)
+			return nil
+		}
+		if !info.IsDir() {
+			relPath, relErr := filepath.Rel("/", path)
+			if relErr == nil {
+				srcFiles = append(srcFiles, relPath)
+				logrus.Debugf("📁 Added file to cross-stage dependencies: %s", relPath)
+			}
+		}
+		return nil
+	})
+
+	if walkErr != nil {
+		logrus.Warnf("Failed to walk directory %s: %v", searchPath, walkErr)
+	}
+
+	return srcFiles, nil
+}
+
+// findSimilarPaths tries to find similar paths when the exact path doesn't exist
+func findSimilarPaths(searchPath string) ([]string, error) {
+	var srcFiles []string
+
+	logrus.Debugf("Path %s does not exist, trying to find similar paths", searchPath)
+
+	// Try to find parent directory and search within it
+	parentDir := filepath.Dir(searchPath)
+	baseName := filepath.Base(searchPath)
+
+	if parentDir != "/" && parentDir != "." {
+		if parentInfo, err := os.Stat(parentDir); err == nil && parentInfo.IsDir() {
+			logrus.Debugf("Searching in parent directory: %s for pattern: %s", parentDir, baseName)
+
+			// Search for files matching the base name pattern
+			err := filepath.Walk(parentDir, func(path string, info os.FileInfo, err error) error {
+				if err != nil {
+					return nil // Skip errors
+				}
+
+				// Check if this path matches our pattern
+				if strings.Contains(filepath.Base(path), baseName) ||
+					(strings.HasPrefix(baseName, ".") && strings.HasPrefix(filepath.Base(path), ".")) {
 					if !info.IsDir() {
 						relPath, err := filepath.Rel("/", path)
 						if err == nil {
 							srcFiles = append(srcFiles, relPath)
-							logrus.Debugf("📁 Added file to cross-stage dependencies: %s", relPath)
+							logrus.Debugf("📁 Found matching file: %s", relPath)
 						}
 					}
-					return nil
-				})
-				if err != nil {
-					logrus.Warnf("Failed to walk directory %s: %v", searchPath, err)
 				}
-				continue
-			} else {
-				// It's a file, add it directly
-				relPath, err := filepath.Rel("/", searchPath)
-				if err == nil {
-					srcFiles = append(srcFiles, relPath)
-					logrus.Debugf("📁 Added file to cross-stage dependencies: %s", relPath)
-				}
-				continue
+				return nil
+			})
+			if err != nil {
+				logrus.Debugf("Failed to search in parent directory %s: %v", parentDir, err)
 			}
+			return srcFiles, nil
 		}
+	}
 
-		// If exact path not found, try glob pattern
-		srcs, err = filepath.Glob(searchPath)
-		if err != nil {
-			logrus.Warnf("Failed to glob pattern %s: %v, continuing anyway", searchPath, err)
-			continue
-		}
-		if len(srcs) == 0 {
-			logrus.Warnf("No files found for pattern %s, continuing anyway", searchPath)
-			continue
-		}
+	// If exact path not found, try glob pattern
+	return findFilesWithGlob(searchPath)
+}
 
-		for _, f := range srcs {
-			if link, evalErr := util.EvalSymLink(f); evalErr == nil {
-				link, err = filepath.Rel("/", link)
-				if err != nil {
-					return nil, errors.Wrap(err, "could not find relative path to /")
-				}
-				srcFiles = append(srcFiles, link)
-			}
-			f, err = filepath.Rel("/", f)
+// findFilesWithGlob uses glob pattern to find files
+func findFilesWithGlob(searchPath string) ([]string, error) {
+	var srcFiles []string
+
+	srcs, err := filepath.Glob(searchPath)
+	if err != nil {
+		logrus.Warnf("Failed to glob pattern %s: %v, continuing anyway", searchPath, err)
+		return srcFiles, nil
+	}
+	if len(srcs) == 0 {
+		logrus.Warnf("No files found for pattern %s, continuing anyway", searchPath)
+		return srcFiles, nil
+	}
+
+	for _, f := range srcs {
+		if link, evalErr := util.EvalSymLink(f); evalErr == nil {
+			link, err = filepath.Rel("/", link)
 			if err != nil {
 				return nil, errors.Wrap(err, "could not find relative path to /")
 			}
-			srcFiles = append(srcFiles, f)
+			srcFiles = append(srcFiles, link)
 		}
+		f, err = filepath.Rel("/", f)
+		if err != nil {
+			return nil, errors.Wrap(err, "could not find relative path to /")
+		}
+		srcFiles = append(srcFiles, f)
 	}
-	// remove duplicates
-	deduped := deduplicatePaths(srcFiles)
 
-	return deduped, nil
+	return srcFiles, nil
 }
 
 // deduplicatePaths returns a deduplicated slice of shortest paths

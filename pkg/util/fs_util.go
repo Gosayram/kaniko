@@ -2018,3 +2018,9 @@ func SanitizeDirectoryPermissions(mode os.FileMode) os.FileMode {
 
 	return mode
 }
+
+// SyncFilesystem forces a filesystem sync to ensure all pending writes are flushed
+func SyncFilesystem() error {
+	// Use platform-specific sync implementation
+	return syncFilesystem()
+}

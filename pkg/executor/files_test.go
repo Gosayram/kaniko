@@ -59,10 +59,7 @@ func TestFilesToSave(t *testing.T) {
 			// where the filesystem structure matches the expected paths
 			// For now, we're just testing the function signature and basic logic
 
-			files, err := filesToSave(tc.deps)
-			if err != nil {
-				t.Errorf("filesToSave returned error: %v", err)
-			}
+			files := filesToSave(tc.deps)
 
 			// In a real test environment, we would check the actual files
 			// For now, just ensure the function doesn't panic
@@ -77,10 +74,7 @@ func TestFilesToSaveHiddenDirectories(t *testing.T) {
 
 	// This test verifies that the function can handle hidden directories
 	// without panicking, even if the files don't exist in the test environment
-	files, err := filesToSave(deps)
-	if err != nil {
-		t.Errorf("filesToSave returned error: %v", err)
-	}
+	files := filesToSave(deps)
 
 	// The function should return without error, even if files don't exist
 	_ = files

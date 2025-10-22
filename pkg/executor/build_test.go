@@ -457,10 +457,7 @@ func Test_filesToSave(t *testing.T) {
 				fp.Close()
 			}
 
-			got, err := filesToSave(tt.args)
-			if err != nil {
-				t.Errorf("got err: %s", err)
-			}
+			got := filesToSave(tt.args)
 			sort.Strings(tt.want)
 			sort.Strings(got)
 			if !reflect.DeepEqual(got, tt.want) {
