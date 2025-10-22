@@ -22,8 +22,10 @@ import (
 	"io"
 	"log"
 	"os"
+	"os/exec"
 	"os/user"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	v1 "github.com/google/go-containerregistry/pkg/v1"
@@ -372,6 +374,85 @@ func TestCreateCommand_ShellDuplication(t *testing.T) {
 						t.Errorf("Expected Args length %d, got %d", len(test.newCommand), len(cmd.Args))
 					}
 				}
+			}
+		})
+	}
+}
+
+func TestUpdateCommandEnvironmentWithCurrentPATH(t *testing.T) {
+	tests := []struct {
+		name          string
+		initialEnv    []string
+		currentPATH   string
+		expectedPATH  string
+		shouldContain bool
+	}{
+		{
+			name:          "Update existing PATH in cmd.Env",
+			initialEnv:    []string{"HOME=/root", "PATH=/usr/bin:/bin", "USER=root"},
+			currentPATH:   "/root/.kaniko-overlay/bin:/usr/local/bin:/usr/bin:/bin",
+			expectedPATH:  "PATH=/root/.kaniko-overlay/bin:/usr/local/bin:/usr/bin:/bin",
+			shouldContain: true,
+		},
+		{
+			name:          "Add PATH if not present in cmd.Env",
+			initialEnv:    []string{"HOME=/root", "USER=root"},
+			currentPATH:   "/root/.kaniko-overlay/bin:/usr/local/bin:/usr/bin:/bin",
+			expectedPATH:  "PATH=/root/.kaniko-overlay/bin:/usr/local/bin:/usr/bin:/bin",
+			shouldContain: true,
+		},
+		{
+			name:          "Empty PATH should not update",
+			initialEnv:    []string{"HOME=/root", "PATH=/usr/bin:/bin"},
+			currentPATH:   "",
+			expectedPATH:  "PATH=/usr/bin:/bin",
+			shouldContain: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			// Set up environment
+			oldPATH := os.Getenv("PATH")
+			defer func() {
+				if oldPATH != "" {
+					_ = os.Setenv("PATH", oldPATH)
+				} else {
+					_ = os.Unsetenv("PATH")
+				}
+			}()
+
+			if test.currentPATH != "" {
+				_ = os.Setenv("PATH", test.currentPATH)
+			} else {
+				_ = os.Unsetenv("PATH")
+			}
+
+			// Create command with initial env
+			cmd := &exec.Cmd{
+				Path: "/bin/sh",
+				Args: []string{"/bin/sh", "-c", "echo test"},
+				Env:  make([]string, len(test.initialEnv)),
+			}
+			copy(cmd.Env, test.initialEnv)
+
+			// Call the function
+			updateCommandEnvironmentWithCurrentPATH(cmd)
+
+			// Check if PATH is updated correctly
+			foundPATH := false
+			for _, env := range cmd.Env {
+				if strings.HasPrefix(env, "PATH=") {
+					foundPATH = true
+					if test.shouldContain && env != test.expectedPATH {
+						t.Errorf("Expected PATH to be %s, got %s", test.expectedPATH, env)
+					}
+					break
+				}
+			}
+
+			if test.shouldContain && !foundPATH {
+				t.Error("Expected PATH in cmd.Env, but not found")
 			}
 		})
 	}

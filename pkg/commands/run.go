@@ -128,6 +128,10 @@ func executeAndCleanupCommand(cmd *exec.Cmd) error {
 	// This allows tools like corepack to create symlinks without permission errors
 	prepareWritableSystemDirectories()
 
+	// CRITICAL: Update cmd.Env with new PATH from overlay preparation
+	// The overlay creation updates os.Getenv("PATH"), but cmd.Env needs explicit update
+	updateCommandEnvironmentWithCurrentPATH(cmd)
+
 	logrus.Infof("Running: %s", cmd.Args)
 	if startErr := cmd.Start(); startErr != nil {
 		logrus.Warnf("Failed to start command: %v", startErr)
@@ -167,6 +171,32 @@ func prepareWritableSystemDirectories() {
 		util.PrepareWritableOverlayForSystemDirs()
 		return nil
 	})
+}
+
+// updateCommandEnvironmentWithCurrentPATH updates cmd.Env with the current PATH
+// This ensures overlay directories are included in the command's environment
+func updateCommandEnvironmentWithCurrentPATH(cmd *exec.Cmd) {
+	currentPATH := os.Getenv("PATH")
+	if currentPATH == "" {
+		return // No PATH to update
+	}
+
+	// Find and replace PATH in cmd.Env
+	pathUpdated := false
+	for i, env := range cmd.Env {
+		if strings.HasPrefix(env, "PATH=") {
+			cmd.Env[i] = "PATH=" + currentPATH
+			pathUpdated = true
+			logrus.Debugf("Updated cmd.Env PATH to: %s", currentPATH)
+			break
+		}
+	}
+
+	// If PATH not found in cmd.Env, add it
+	if !pathUpdated {
+		cmd.Env = append(cmd.Env, "PATH="+currentPATH)
+		logrus.Debugf("Added PATH to cmd.Env: %s", currentPATH)
+	}
 }
 
 // isPermissionError checks if the error is related to permissions
