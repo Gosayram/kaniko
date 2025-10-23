@@ -125,6 +125,10 @@ func setupUserPath(env []string) {
 }
 
 func executeAndCleanupCommand(cmd *exec.Cmd) error {
+	// PROACTIVE: Make common system directories writable BEFORE running the command
+	// This ensures changes are included in the snapshot/cache
+	util.PrepareCommonSystemDirectoriesWritable()
+
 	// Capture stderr to detect permission errors
 	var stderrBuf strings.Builder
 	cmd.Stderr = io.MultiWriter(os.Stderr, &stderrBuf)
@@ -139,19 +143,26 @@ func executeAndCleanupCommand(cmd *exec.Cmd) error {
 	}
 
 	// Wait for command to complete
-	waitErr := waitAndCleanupProcess(cmd)
+	_ = waitAndCleanupProcess(cmd)
 
 	// Get stderr output
 	stderrOutput := stderrBuf.String()
 
-	// Check if there were permission errors
-	hasPermError := waitErr != nil && (isPermissionError(waitErr) ||
-		strings.Contains(stderrOutput, "EACCES") ||
-		strings.Contains(stderrOutput, "permission denied"))
+	// Debug: log stderr length
+	logrus.Debugf("📝 Captured stderr length: %d bytes", len(stderrOutput))
+	if stderrOutput != "" {
+		const stderrPreviewLength = 200
+		logrus.Debugf("📝 Stderr preview (first 200 chars): %s", truncateString(stderrOutput, stderrPreviewLength))
+	}
+
+	// Check if there were permission errors in stderr
+	// NOTE: Don't check waitErr - commands can succeed (exit 0) but still have EACCES errors internally
+	hasPermError := strings.Contains(stderrOutput, "EACCES") ||
+		strings.Contains(stderrOutput, "permission denied")
 
 	if hasPermError {
 		commandStr := strings.Join(cmd.Args, " ")
-		logrus.Warnf("Permission error detected in command: %s", commandStr)
+		logrus.Warnf("⚠️ Permission error detected in command output: %s", commandStr)
 
 		// Parse stderr and fix permission errors
 		fixedDirs := util.ParsePermissionErrorAndFix(stderrOutput)
@@ -190,22 +201,13 @@ func executeAndCleanupCommand(cmd *exec.Cmd) error {
 	return nil
 }
 
-// isPermissionError checks if the error is related to permissions
-func isPermissionError(err error) bool {
-	if err == nil {
-		return false
+// truncateString truncates a string to maxLen characters
+func truncateString(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
 	}
-
-	// Check for common permission error patterns
-	errStr := err.Error()
-	return strings.Contains(errStr, "permission denied") ||
-		strings.Contains(errStr, "EACCES") ||
-		strings.Contains(errStr, "EAGAIN") ||
-		strings.Contains(errStr, "operation not permitted") ||
-		strings.Contains(errStr, "symlink") && strings.Contains(errStr, "permission")
+	return s[:maxLen] + "..."
 }
-
-// handlePermissionErrorWithElevation removed - replaced with ParsePermissionErrorAndFix approach
 
 // prepareCommand prepares the command based on shell configuration
 // and handles PATH environment variable resolution for executables

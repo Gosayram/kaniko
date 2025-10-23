@@ -91,6 +91,14 @@ const (
 // This prevents repeated chmod operations on the same directories
 var writableDirectoriesCache = make(map[string]bool)
 
+// CommonSystemDirectories are common system directories that often need to be writable
+var CommonSystemDirectories = []string{
+	"/usr/local/bin",
+	"/usr/bin",
+	"/usr/local/lib",
+	"/usr/lib",
+}
+
 // PermissionManager manages dynamic permission elevation for any user
 type PermissionManager struct {
 	originalUID  int
@@ -2759,9 +2767,33 @@ func MakeDirectoryWritable(dirPath string) error {
 	return nil
 }
 
+// PrepareCommonSystemDirectoriesWritable makes common system directories writable proactively
+// This is called BEFORE running commands to ensure permissions are set in the snapshot/cache
+func PrepareCommonSystemDirectoriesWritable() {
+	for _, dir := range CommonSystemDirectories {
+		// Check if directory exists
+		if info, err := os.Stat(dir); err == nil && info.IsDir() {
+			// Make it writable (will use cache to avoid redundant operations)
+			if mkErr := MakeDirectoryWritable(dir); mkErr != nil {
+				logrus.Debugf("Could not make %s writable: %v", dir, mkErr)
+			}
+		}
+	}
+}
+
+// truncateLogString truncates a string for logging
+func truncateLogString(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
+}
+
 // ParsePermissionErrorAndFix parses permission errors from command output and fixes them
 // Returns the directory path that was fixed, or empty string if no fix was needed
 func ParsePermissionErrorAndFix(errorOutput string) []string {
+	logrus.Infof("🔍 Checking permission error output for paths to fix (length: %d bytes)", len(errorOutput))
+
 	var fixedDirs []string
 
 	// Parse EACCES errors from various tools
@@ -2771,11 +2803,16 @@ func ParsePermissionErrorAndFix(errorOutput string) []string {
 	// - "permission denied: /some/path"
 
 	lines := strings.Split(errorOutput, "\n")
+	logrus.Debugf("📄 Parsing %d lines from error output", len(lines))
+
 	for _, line := range lines {
 		// Look for EACCES or "permission denied"
 		if !strings.Contains(line, "EACCES") && !strings.Contains(line, "permission denied") {
 			continue
 		}
+
+		const maxErrorLineLength = 150
+		logrus.Debugf("🔎 Found permission error line: %s", truncateLogString(line, maxErrorLineLength))
 
 		// Extract directory paths from the error message
 		dirs := extractDirectoryPathsFromError(line)

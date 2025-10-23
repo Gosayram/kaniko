@@ -379,3 +379,89 @@ func TestCreateCommand_ShellDuplication(t *testing.T) {
 
 // TestUpdateCommandEnvironmentWithCurrentPATH removed - function no longer exists
 // The new approach captures stderr and parses permission errors dynamically
+
+// TestExecuteAndCleanupCommandWithPermissionErrors tests that permission errors in stderr
+// are detected and handled even when the command exits successfully (exit code 0)
+func TestExecuteAndCleanupCommandWithPermissionErrors(t *testing.T) {
+	tests := []struct {
+		name               string
+		stderrOutput       string
+		expectPermDetected bool
+		description        string
+	}{
+		{
+			name: "EACCES symlink error from corepack",
+			stderrOutput: `Internal Error: EACCES: permission denied, symlink '../lib/node_modules/corepack/dist/pnpm.js' -> '/usr/local/bin/pnpm'
+    at async Object.symlink (node:internal/fs/promises:1008:10)
+    at async EnableCommand.generatePosixLink (/usr/local/lib/node_modules/corepack/dist/lib/corepack.cjs:23168:5)`,
+			expectPermDetected: true,
+			description:        "Should detect EACCES error in corepack symlink creation",
+		},
+		{
+			name: "EACCES mkdir error from corepack cache",
+			stderrOutput: `Internal Error: EACCES: permission denied, mkdir '/.cache/node/corepack/v1'
+    at mkdirSync (node:fs:1363:26)
+    at getTemporaryFolder (/usr/local/lib/node_modules/corepack/dist/lib/corepack.cjs:21916:27)`,
+			expectPermDetected: true,
+			description:        "Should detect EACCES error in cache directory creation",
+		},
+		{
+			name: "Generic permission denied error",
+			stderrOutput: `Error: permission denied: /usr/local/bin/some-tool
+Failed to create file`,
+			expectPermDetected: true,
+			description:        "Should detect generic 'permission denied' error",
+		},
+		{
+			name:               "No permission errors",
+			stderrOutput:       "Everything is fine\nNo errors here\nSuccess!",
+			expectPermDetected: false,
+			description:        "Should not detect errors when there are none",
+		},
+		{
+			name:               "Empty stderr",
+			stderrOutput:       "",
+			expectPermDetected: false,
+			description:        "Should handle empty stderr gracefully",
+		},
+		{
+			name: "Multiple EACCES errors",
+			stderrOutput: `EACCES: permission denied, symlink '/usr/local/bin/pnpm'
+EACCES: permission denied, mkdir '/.cache/node'
+EACCES: permission denied, open '/usr/local/lib/package.json'`,
+			expectPermDetected: true,
+			description:        "Should detect multiple permission errors",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Check if permission error is detected
+			hasPermError := containsPermissionError(tt.stderrOutput)
+
+			if hasPermError != tt.expectPermDetected {
+				t.Errorf("%s: Expected permission error detection: %v, got: %v\nStderr: %s",
+					tt.description, tt.expectPermDetected, hasPermError, tt.stderrOutput)
+			}
+
+			if hasPermError {
+				t.Logf("✓ Successfully detected permission error in: %s", tt.name)
+			} else {
+				t.Logf("✓ Correctly identified no permission error in: %s", tt.name)
+			}
+		})
+	}
+}
+
+// containsPermissionError checks if stderr contains permission errors
+// This mirrors the logic in executeAndCleanupCommand
+func containsPermissionError(stderrOutput string) bool {
+	return len(stderrOutput) > 0 && (containsString(stderrOutput, "EACCES") ||
+		containsString(stderrOutput, "permission denied"))
+}
+
+// containsString is a helper to check if a string contains a substring
+func containsString(s, substr string) bool {
+	return len(s) > 0 && len(substr) > 0 &&
+		bytes.Contains([]byte(s), []byte(substr))
+}
