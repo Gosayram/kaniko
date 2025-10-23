@@ -1471,7 +1471,7 @@ func CreateSymlinkWithFallback(target, linkPath string) error {
 
 		// Try to create symlink in user directory
 		if err := os.Symlink(target, userLinkPath); err == nil {
-			logrus.Infof("✓ Created symlink in user directory: %s -> %s", userLinkPath, target)
+			logrus.Infof("✅ Created symlink in user directory: %s -> %s", userLinkPath, target)
 			// Update PATH to include user bin directory
 			updatePathForSymlink(userLinkPath)
 			return nil
@@ -1479,7 +1479,7 @@ func CreateSymlinkWithFallback(target, linkPath string) error {
 
 		// If symlink failed, try copying the target
 		if err := copyExecutableFile(target, userLinkPath); err == nil {
-			logrus.Infof("✓ Copied executable to user directory: %s", userLinkPath)
+			logrus.Infof("✅ Copied executable to user directory: %s", userLinkPath)
 			updatePathForSymlink(userLinkPath)
 			return nil
 		}
@@ -2754,80 +2754,38 @@ func PrepareWritableOverlayForSystemDirs() {
 
 // createWritableOverlayForDirectory creates a writable overlay for a protected system directory
 func createWritableOverlayForDirectory(_ *PermissionManager, sysDir string) {
-	// Strategy: Create a user-writable directory and bind mount it over the system directory
-	// Or if bind mount fails, use symlink redirection
+	// CRITICAL INSIGHT: Tools like corepack HARDCODE paths like /usr/local/bin/pnpm
+	// They DO NOT use PATH to determine where to create symlinks!
+	// Therefore, we MUST make the actual system directory writable, not create an alternative.
 
-	// Create overlay in /tmp instead of user HOME to ensure it's accessible by all users
-	// This is CRITICAL because Kaniko executor runs as root, but RUN commands execute as different users (kaniko/node)
-	// /tmp is world-writable and accessible by all users, unlike /root
-	tmpBase := filepath.Join(string(filepath.Separator), "tmp")
-	userOverlayDir := filepath.Join(tmpBase, ".kaniko-overlay", filepath.Base(sysDir))
-	// #nosec G301 - Overlay needs broad access for all users
-	if err := os.MkdirAll(userOverlayDir, DefaultDirPerm); err != nil {
-		logrus.Debugf("Could not create overlay directory %s: %v", userOverlayDir, err)
+	// Strategy: Change permissions on the ACTUAL system directory to make it world-writable
+	// This is safe in a container context as the filesystem is ephemeral
+
+	// Check if directory exists
+	if _, err := os.Stat(sysDir); err != nil {
+		logrus.Debugf("System directory %s does not exist: %v", sysDir, err)
 		return
 	}
 
-	// Set ownership to current user BUT with permissive permissions so RUN commands can access it
-	// Don't change ownership - keep it as root but world-readable/executable
-	// if err := os.Chown(userOverlayDir, pm.originalUID, pm.originalGID); err != nil {
-	// 	logrus.Debugf("Could not set ownership for overlay directory %s: %v", userOverlayDir, err)
-	// }
-
-	// Copy existing files from system directory to overlay
-	if err := copyDirectoryContents(sysDir, userOverlayDir); err != nil {
-		logrus.Debugf("Could not copy system directory contents to overlay: %v", err)
+	// Make the directory writable by all users
+	// #nosec G302 - This is intentional for container builds; filesystem is ephemeral
+	const worldWritablePerm = 0o777
+	if err := os.Chmod(sysDir, worldWritablePerm); err != nil {
+		logrus.Debugf("Could not change permissions for %s: %v", sysDir, err)
+		// Try alternative: create tmpfs mount (Linux-specific)
+		if err := mountTmpfsOver(sysDir); err != nil {
+			logrus.Warnf("Could not make %s writable: %v", sysDir, err)
+		}
+		return
 	}
 
-	// Update PATH to include the overlay directory BEFORE the system directory
-	updatePathWithOverlay(userOverlayDir, sysDir)
-
-	logrus.Infof("✓ Created writable overlay for %s at %s", sysDir, userOverlayDir)
+	logrus.Infof("✅ Made system directory %s writable for all users", sysDir)
 }
 
-// copyDirectoryContents copies files from src to dst (non-recursively for safety)
-func copyDirectoryContents(src, dst string) error {
-	entries, err := os.ReadDir(src)
-	if err != nil {
-		return err
-	}
-
-	for _, entry := range entries {
-		srcPath := filepath.Join(src, entry.Name())
-		dstPath := filepath.Join(dst, entry.Name())
-
-		if entry.IsDir() {
-			// Skip subdirectories for safety
-			continue
-		}
-
-		// Create symlink to original file (saves space and keeps original)
-		if err := os.Symlink(srcPath, dstPath); err != nil {
-			logrus.Debugf("Could not create symlink from %s to %s: %v", srcPath, dstPath, err)
-		}
-	}
-
-	return nil
-}
-
-// updatePathWithOverlay updates PATH environment variable to prioritize overlay directory
-func updatePathWithOverlay(overlayDir, _ string) {
-	currentPath := os.Getenv("PATH")
-	pathDirs := strings.Split(currentPath, ":")
-
-	// Check if overlay is already in PATH
-	for _, dir := range pathDirs {
-		if dir == overlayDir {
-			return // Already present
-		}
-	}
-
-	// Add overlay directory at the beginning (highest priority)
-	newPath := overlayDir + ":" + currentPath
-
-	if err := os.Setenv("PATH", newPath); err != nil {
-		logrus.Debugf("Could not update PATH with overlay directory: %v", err)
-	} else {
-		logrus.Debugf("Updated PATH to prioritize overlay: %s", overlayDir)
-	}
+// mountTmpfsOver attempts to mount a tmpfs filesystem over the specified directory
+// This is a Linux-specific approach to make a read-only directory writable
+func mountTmpfsOver(_ string) error {
+	// This requires syscall.Mount which is Linux-specific
+	// For now, just return an error indicating this is not supported
+	return fmt.Errorf("tmpfs mount not implemented; chmod should have worked")
 }

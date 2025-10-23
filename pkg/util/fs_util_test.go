@@ -302,21 +302,14 @@ func TestPrepareWritableOverlayForSystemDirs(t *testing.T) {
 	// Run the function
 	PrepareWritableOverlayForSystemDirs()
 
-	// Verify overlay directory was created in /tmp (not in tmpDir, because overlay is now global)
-	tmpBase := filepath.Join(string(filepath.Separator), "tmp")
-	overlayDir := filepath.Join(tmpBase, ".kaniko-overlay", "bin")
-	if _, err := os.Stat(overlayDir); os.IsNotExist(err) {
-		t.Errorf("Overlay directory was not created: %s", overlayDir)
-	}
-
-	// Clean up overlay directory
-	defer func() {
-		_ = os.RemoveAll(filepath.Join(tmpBase, ".kaniko-overlay"))
-	}()
-
-	// Verify PATH was updated
-	path := os.Getenv("PATH")
-	if !strings.Contains(path, overlayDir) {
-		t.Errorf("PATH does not contain overlay directory: %s", path)
+	// Verify the system directory is now writable
+	// Try to create a test file in it
+	testWriteFile := filepath.Join(sysDir, ".test-write")
+	if writeErr := os.WriteFile(testWriteFile, []byte("test"), 0o600); writeErr != nil {
+		t.Errorf("System directory %s is still not writable: %v", sysDir, writeErr)
+	} else {
+		// Clean up test file
+		_ = os.Remove(testWriteFile)
+		t.Logf("✅ System directory %s is now writable", sysDir)
 	}
 }
