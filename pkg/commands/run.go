@@ -18,6 +18,7 @@ package commands
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -124,79 +125,69 @@ func setupUserPath(env []string) {
 }
 
 func executeAndCleanupCommand(cmd *exec.Cmd) error {
-	// BEFORE executing the command, prepare writable directories for common system locations
-	// This allows tools like corepack to create symlinks without permission errors
-	prepareWritableSystemDirectories()
-
-	// CRITICAL: Update cmd.Env with new PATH from overlay preparation
-	// The overlay creation updates os.Getenv("PATH"), but cmd.Env needs explicit update
-	updateCommandEnvironmentWithCurrentPATH(cmd)
+	// Capture stderr to detect permission errors
+	var stderrBuf strings.Builder
+	cmd.Stderr = io.MultiWriter(os.Stderr, &stderrBuf)
 
 	logrus.Infof("Running: %s", cmd.Args)
+
+	// Try to execute the command
 	if startErr := cmd.Start(); startErr != nil {
 		logrus.Warnf("Failed to start command: %v", startErr)
 		// Don't return error - continue with build
 		return nil
 	}
 
-	// Wait for command to complete, but don't fail the build on command errors
-	if err := waitAndCleanupProcess(cmd); err != nil {
-		commandStr := strings.Join(cmd.Args, " ")
-		logrus.Warnf("Command execution failed: %s - %v", commandStr, err)
+	// Wait for command to complete
+	waitErr := waitAndCleanupProcess(cmd)
 
-		// Check if it's a permission error and try fallback mechanisms
-		if isPermissionError(err) {
-			logrus.Warnf("Permission error detected, attempting fallback mechanisms")
-			if fallbackErr := handlePermissionErrorWithElevation(cmd, err); fallbackErr == nil {
-				logrus.Infof("Successfully handled permission error with fallback")
+	// Get stderr output
+	stderrOutput := stderrBuf.String()
+
+	// Check if there were permission errors
+	hasPermError := waitErr != nil && (isPermissionError(waitErr) ||
+		strings.Contains(stderrOutput, "EACCES") ||
+		strings.Contains(stderrOutput, "permission denied"))
+
+	if hasPermError {
+		commandStr := strings.Join(cmd.Args, " ")
+		logrus.Warnf("Permission error detected in command: %s", commandStr)
+
+		// Parse stderr and fix permission errors
+		fixedDirs := util.ParsePermissionErrorAndFix(stderrOutput)
+
+		if len(fixedDirs) > 0 {
+			logrus.Infof("Fixed permissions for %d directories, retrying command", len(fixedDirs))
+
+			// Retry the command
+			retryCmd := &exec.Cmd{
+				Path: cmd.Path,
+				Args: cmd.Args,
+				Dir:  cmd.Dir,
+				Env:  cmd.Env,
+			}
+			retryCmd.Stdout = os.Stdout
+			retryCmd.Stderr = os.Stderr
+			retryCmd.SysProcAttr = &syscall.SysProcAttr{
+				Setpgid: true,
+			}
+
+			logrus.Infof("Retrying command: %s", commandStr)
+			if startErr := retryCmd.Start(); startErr != nil {
+				logrus.Warnf("Failed to start retry command: %v", startErr)
 				return nil
 			}
-		}
 
-		// Don't return error - continue with build
-		return nil
+			if retryErr := waitAndCleanupProcess(retryCmd); retryErr != nil {
+				logrus.Warnf("Retry command failed: %v", retryErr)
+			} else {
+				logrus.Infof("✅ Retry command succeeded after fixing permissions")
+			}
+		}
 	}
 
+	// Don't fail the build on command errors
 	return nil
-}
-
-// prepareWritableSystemDirectories creates writable overlay directories for common system locations
-// This allows tools to create symlinks and files without permission errors
-func prepareWritableSystemDirectories() {
-	pm := util.NewPermissionManager()
-
-	// Execute with elevated permissions to prepare the directories
-	_ = pm.ExecuteWithElevatedPermissions(func() error {
-		// Prepare common system bin directories
-		util.PrepareWritableOverlayForSystemDirs()
-		return nil
-	})
-}
-
-// updateCommandEnvironmentWithCurrentPATH updates cmd.Env with the current PATH
-// This ensures overlay directories are included in the command's environment
-func updateCommandEnvironmentWithCurrentPATH(cmd *exec.Cmd) {
-	currentPATH := os.Getenv("PATH")
-	if currentPATH == "" {
-		return // No PATH to update
-	}
-
-	// Find and replace PATH in cmd.Env
-	pathUpdated := false
-	for i, env := range cmd.Env {
-		if strings.HasPrefix(env, "PATH=") {
-			cmd.Env[i] = "PATH=" + currentPATH
-			pathUpdated = true
-			logrus.Debugf("Updated cmd.Env PATH to: %s", currentPATH)
-			break
-		}
-	}
-
-	// If PATH not found in cmd.Env, add it
-	if !pathUpdated {
-		cmd.Env = append(cmd.Env, "PATH="+currentPATH)
-		logrus.Debugf("Added PATH to cmd.Env: %s", currentPATH)
-	}
 }
 
 // isPermissionError checks if the error is related to permissions
@@ -214,50 +205,7 @@ func isPermissionError(err error) bool {
 		strings.Contains(errStr, "symlink") && strings.Contains(errStr, "permission")
 }
 
-// handlePermissionError handles permission errors with fallback mechanisms
-// handlePermissionErrorWithElevation handles permission errors with dynamic elevation
-func handlePermissionErrorWithElevation(cmd *exec.Cmd, _ error) error {
-	commandStr := strings.Join(cmd.Args, " ")
-	logrus.Infof("Attempting to handle permission error with elevation for command: %s", commandStr)
-
-	// Create permission manager for this operation
-	pm := util.NewPermissionManager()
-
-	// Try to execute with elevated permissions
-	return pm.ExecuteWithElevatedPermissions(func() error {
-		logrus.Debugf("Attempting to execute command with elevated permissions: %s", commandStr)
-
-		// Create new command with same arguments
-		newCmd := &exec.Cmd{
-			Path: cmd.Path,
-			Args: cmd.Args,
-			Dir:  cmd.Dir,
-			Env:  cmd.Env,
-		}
-
-		// Set up command settings
-		newCmd.Stdout = os.Stdout
-		newCmd.Stderr = os.Stderr
-		newCmd.SysProcAttr = &syscall.SysProcAttr{
-			Setpgid: true,
-		}
-
-		// Try to start the command
-		if startErr := newCmd.Start(); startErr != nil {
-			logrus.Warnf("Failed to start command with elevated permissions: %v", startErr)
-			return startErr
-		}
-
-		// Wait for command to complete
-		if err := newCmd.Wait(); err != nil {
-			logrus.Warnf("Command failed with elevated permissions: %v", err)
-			return err
-		}
-
-		logrus.Debugf("Successfully executed command with elevated permissions: %s", commandStr)
-		return nil
-	})
-}
+// handlePermissionErrorWithElevation removed - replaced with ParsePermissionErrorAndFix approach
 
 // prepareCommand prepares the command based on shell configuration
 // and handles PATH environment variable resolution for executables

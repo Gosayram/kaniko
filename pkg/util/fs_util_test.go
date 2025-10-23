@@ -17,6 +17,7 @@ limitations under the License.
 package util
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -283,33 +284,53 @@ func TestPrepareWritableOverlayForSystemDirs(t *testing.T) {
 		_ = os.Chmod(sysDir, 0o755)
 	}()
 
-	// Set up environment to use our test directory
-	oldHome := os.Getenv("HOME")
-	defer func() {
-		if oldHome != "" {
-			_ = os.Setenv("HOME", oldHome)
-		} else {
-			_ = os.Unsetenv("HOME")
-		}
-	}()
-	_ = os.Setenv("HOME", tmpDir)
+	// Test MakeDirectoryWritable
+	if err := MakeDirectoryWritable(sysDir); err != nil {
+		t.Fatalf("MakeDirectoryWritable failed: %v", err)
+	}
 
-	// Override CommonSystemBinDirs for testing
-	oldDirs := CommonSystemBinDirs
-	CommonSystemBinDirs = []string{sysDir}
-	defer func() { CommonSystemBinDirs = oldDirs }()
-
-	// Run the function
-	PrepareWritableOverlayForSystemDirs()
-
-	// Verify the system directory is now writable
-	// Try to create a test file in it
+	// Verify the directory is now writable
 	testWriteFile := filepath.Join(sysDir, ".test-write")
 	if writeErr := os.WriteFile(testWriteFile, []byte("test"), 0o600); writeErr != nil {
-		t.Errorf("System directory %s is still not writable: %v", sysDir, writeErr)
+		t.Errorf("Directory %s is still not writable: %v", sysDir, writeErr)
 	} else {
-		// Clean up test file
-		_ = os.Remove(testWriteFile)
-		t.Logf("✅ System directory %s is now writable", sysDir)
+		t.Logf("✅ Directory %s is now writable", sysDir)
+	}
+}
+
+func TestParsePermissionErrorAndFix(t *testing.T) {
+	// Create temporary test directory
+	tmpDir := t.TempDir()
+	testDir := filepath.Join(tmpDir, "cache", "node", "corepack", "v1")
+
+	if err := os.MkdirAll(filepath.Dir(testDir), 0o755); err != nil {
+		t.Fatalf("Failed to create test directory: %v", err)
+	}
+
+	// Make parent read-only
+	parentDir := filepath.Dir(testDir)
+	if err := os.Chmod(parentDir, 0o555); err != nil {
+		t.Fatalf("Failed to make directory read-only: %v", err)
+	}
+
+	// Restore permissions for cleanup
+	defer func() {
+		_ = os.Chmod(parentDir, 0o755)
+	}()
+
+	// Test error parsing with mkdir error
+	errorOutput := fmt.Sprintf("Internal Error: EACCES: permission denied, mkdir '%s'", testDir)
+	fixedDirs := ParsePermissionErrorAndFix(errorOutput)
+
+	if len(fixedDirs) == 0 {
+		t.Errorf("Expected to fix at least one directory, got none")
+	} else {
+		t.Logf("✅ Fixed %d directories: %v", len(fixedDirs), fixedDirs)
+
+		// Verify parent directory is now writable
+		testFile := filepath.Join(parentDir, "test-file")
+		if writeErr := os.WriteFile(testFile, []byte("test"), 0o600); writeErr != nil {
+			t.Errorf("Parent directory %s is still not writable: %v", parentDir, writeErr)
+		}
 	}
 }

@@ -87,15 +87,9 @@ const (
 	InaccessiblePerm = 0o000
 )
 
-// CommonSystemBinDirs are common system directories where tools may try to create symlinks
-var CommonSystemBinDirs = []string{
-	"/usr/local/bin",
-	"/usr/bin",
-	"/bin",
-	"/usr/local/lib",
-	"/usr/lib",
-	"/lib",
-}
+// writableDirectoriesCache stores directories that have been made writable during the build
+// This prevents repeated chmod operations on the same directories
+var writableDirectoriesCache = make(map[string]bool)
 
 // PermissionManager manages dynamic permission elevation for any user
 type PermissionManager struct {
@@ -2733,59 +2727,127 @@ func SyncFilesystem() error {
 	return syncFilesystem()
 }
 
-// PrepareWritableOverlayForSystemDirs creates writable bind mounts/overlays for system directories
-// This allows tools like corepack, npm, etc. to create symlinks in system directories without permission errors
-func PrepareWritableOverlayForSystemDirs() {
-	pm := NewPermissionManager()
-
-	// For each common system directory, create a writable overlay
-	// NOTE: We create overlay ALWAYS, even if current process (Kaniko executor) can write to it,
-	// because the RUN commands execute as different users (kaniko/node) who DON'T have write permissions
-	for _, sysDir := range CommonSystemBinDirs {
-		// Check if directory exists
-		if info, err := os.Stat(sysDir); err == nil && info.IsDir() {
-			logrus.Infof("Creating writable overlay for protected directory: %s", sysDir)
-			createWritableOverlayForDirectory(pm, sysDir)
-		} else if err != nil {
-			logrus.Debugf("System directory %s does not exist, skipping: %v", sysDir, err)
-		}
+// MakeDirectoryWritable makes a directory writable for all users
+// This is a universal solution that works for any directory without hardcoding
+func MakeDirectoryWritable(dirPath string) error {
+	// Check cache first - avoid repeated chmod on same directory
+	if writableDirectoriesCache[dirPath] {
+		logrus.Debugf("Directory %s already made writable, skipping", dirPath)
+		return nil
 	}
-}
-
-// createWritableOverlayForDirectory creates a writable overlay for a protected system directory
-func createWritableOverlayForDirectory(_ *PermissionManager, sysDir string) {
-	// CRITICAL INSIGHT: Tools like corepack HARDCODE paths like /usr/local/bin/pnpm
-	// They DO NOT use PATH to determine where to create symlinks!
-	// Therefore, we MUST make the actual system directory writable, not create an alternative.
-
-	// Strategy: Change permissions on the ACTUAL system directory to make it world-writable
-	// This is safe in a container context as the filesystem is ephemeral
 
 	// Check if directory exists
-	if _, err := os.Stat(sysDir); err != nil {
-		logrus.Debugf("System directory %s does not exist: %v", sysDir, err)
-		return
+	info, err := os.Stat(dirPath)
+	if err != nil {
+		return fmt.Errorf("directory %s does not exist: %v", dirPath, err)
+	}
+
+	if !info.IsDir() {
+		return fmt.Errorf("%s is not a directory", dirPath)
 	}
 
 	// Make the directory writable by all users
 	// #nosec G302 - This is intentional for container builds; filesystem is ephemeral
 	const worldWritablePerm = 0o777
-	if err := os.Chmod(sysDir, worldWritablePerm); err != nil {
-		logrus.Debugf("Could not change permissions for %s: %v", sysDir, err)
-		// Try alternative: create tmpfs mount (Linux-specific)
-		if err := mountTmpfsOver(sysDir); err != nil {
-			logrus.Warnf("Could not make %s writable: %v", sysDir, err)
-		}
-		return
+	if err := os.Chmod(dirPath, worldWritablePerm); err != nil {
+		return fmt.Errorf("could not change permissions for %s: %v", dirPath, err)
 	}
 
-	logrus.Infof("✅ Made system directory %s writable for all users", sysDir)
+	// Cache this directory as writable
+	writableDirectoriesCache[dirPath] = true
+	logrus.Infof("✅ Made directory %s writable for all users", dirPath)
+	return nil
 }
 
-// mountTmpfsOver attempts to mount a tmpfs filesystem over the specified directory
-// This is a Linux-specific approach to make a read-only directory writable
-func mountTmpfsOver(_ string) error {
-	// This requires syscall.Mount which is Linux-specific
-	// For now, just return an error indicating this is not supported
-	return fmt.Errorf("tmpfs mount not implemented; chmod should have worked")
+// ParsePermissionErrorAndFix parses permission errors from command output and fixes them
+// Returns the directory path that was fixed, or empty string if no fix was needed
+func ParsePermissionErrorAndFix(errorOutput string) []string {
+	var fixedDirs []string
+
+	// Parse EACCES errors from various tools
+	// Examples:
+	// - "EACCES: permission denied, mkdir '/.cache/node/corepack/v1'"
+	// - "EACCES: permission denied, symlink '...' -> '/usr/local/bin/pnpm'"
+	// - "permission denied: /some/path"
+
+	lines := strings.Split(errorOutput, "\n")
+	for _, line := range lines {
+		// Look for EACCES or "permission denied"
+		if !strings.Contains(line, "EACCES") && !strings.Contains(line, "permission denied") {
+			continue
+		}
+
+		// Extract directory paths from the error message
+		dirs := extractDirectoryPathsFromError(line)
+		for _, dir := range dirs {
+			if dir == "" {
+				continue
+			}
+
+			// Make the directory (and its parents) writable
+			if err := MakeDirectoryWritable(dir); err != nil {
+				logrus.Debugf("Could not make directory %s writable: %v", dir, err)
+				// Try parent directory
+				parentDir := filepath.Dir(dir)
+				if parentDir != dir && parentDir != "/" && parentDir != "." {
+					if err := MakeDirectoryWritable(parentDir); err != nil {
+						logrus.Debugf("Could not make parent directory %s writable: %v", parentDir, err)
+					} else {
+						fixedDirs = append(fixedDirs, parentDir)
+					}
+				}
+			} else {
+				fixedDirs = append(fixedDirs, dir)
+			}
+		}
+	}
+
+	return fixedDirs
+}
+
+// extractDirectoryPathsFromError extracts directory paths from error messages
+func extractDirectoryPathsFromError(errorLine string) []string {
+	var paths []string
+
+	// Pattern 1: mkdir 'path'
+	if strings.Contains(errorLine, "mkdir") {
+		if start := strings.Index(errorLine, "'"); start != -1 {
+			if end := strings.Index(errorLine[start+1:], "'"); end != -1 {
+				path := errorLine[start+1 : start+1+end]
+				paths = append(paths, filepath.Dir(path)) // Get parent directory
+			}
+		}
+	}
+
+	// Pattern 2: symlink ... -> 'target'
+	if strings.Contains(errorLine, "symlink") && strings.Contains(errorLine, "->") {
+		parts := strings.Split(errorLine, "->")
+		const minPartsForSymlink = 2
+		if len(parts) >= minPartsForSymlink {
+			target := strings.TrimSpace(parts[1])
+			target = strings.Trim(target, "'\"")
+			if target != "" {
+				paths = append(paths, filepath.Dir(target))
+			}
+		}
+	}
+
+	// Pattern 3: Direct path after "permission denied:"
+	if strings.Contains(errorLine, "permission denied:") {
+		parts := strings.Split(errorLine, "permission denied:")
+		const minPartsForPath = 2
+		if len(parts) >= minPartsForPath {
+			path := strings.TrimSpace(parts[1])
+			path = strings.Trim(path, "'\"")
+			if path != "" {
+				if info, err := os.Stat(path); err == nil && info.IsDir() {
+					paths = append(paths, path)
+				} else {
+					paths = append(paths, filepath.Dir(path))
+				}
+			}
+		}
+	}
+
+	return paths
 }
