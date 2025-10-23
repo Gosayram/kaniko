@@ -2739,40 +2739,40 @@ func PrepareWritableOverlayForSystemDirs() {
 	pm := NewPermissionManager()
 
 	// For each common system directory, create a writable overlay
+	// NOTE: We create overlay ALWAYS, even if current process (Kaniko executor) can write to it,
+	// because the RUN commands execute as different users (kaniko/node) who DON'T have write permissions
 	for _, sysDir := range CommonSystemBinDirs {
-		// Check if directory exists and is not writable
+		// Check if directory exists
 		if info, err := os.Stat(sysDir); err == nil && info.IsDir() {
-			// Check if we can write to this directory
-			testFile := filepath.Join(sysDir, ".kaniko-write-test")
-			if err := os.WriteFile(testFile, []byte("test"), DefaultFilePerm); err != nil {
-				// Directory is not writable, create overlay
-				logrus.Debugf("System directory %s is not writable, creating overlay", sysDir)
-				createWritableOverlayForDirectory(pm, sysDir)
-			} else {
-				// Clean up test file
-				_ = os.Remove(testFile)
-				logrus.Debugf("System directory %s is already writable", sysDir)
-			}
+			logrus.Infof("Creating writable overlay for protected directory: %s", sysDir)
+			createWritableOverlayForDirectory(pm, sysDir)
+		} else if err != nil {
+			logrus.Debugf("System directory %s does not exist, skipping: %v", sysDir, err)
 		}
 	}
 }
 
 // createWritableOverlayForDirectory creates a writable overlay for a protected system directory
-func createWritableOverlayForDirectory(pm *PermissionManager, sysDir string) {
+func createWritableOverlayForDirectory(_ *PermissionManager, sysDir string) {
 	// Strategy: Create a user-writable directory and bind mount it over the system directory
 	// Or if bind mount fails, use symlink redirection
 
-	// Create corresponding user directory
-	userOverlayDir := filepath.Join(pm.userHome, ".kaniko-overlay", filepath.Base(sysDir))
+	// Create overlay in /tmp instead of user HOME to ensure it's accessible by all users
+	// This is CRITICAL because Kaniko executor runs as root, but RUN commands execute as different users (kaniko/node)
+	// /tmp is world-writable and accessible by all users, unlike /root
+	tmpBase := filepath.Join(string(filepath.Separator), "tmp")
+	userOverlayDir := filepath.Join(tmpBase, ".kaniko-overlay", filepath.Base(sysDir))
+	// #nosec G301 - Overlay needs broad access for all users
 	if err := os.MkdirAll(userOverlayDir, DefaultDirPerm); err != nil {
 		logrus.Debugf("Could not create overlay directory %s: %v", userOverlayDir, err)
 		return
 	}
 
-	// Set ownership to current user
-	if err := os.Chown(userOverlayDir, pm.originalUID, pm.originalGID); err != nil {
-		logrus.Debugf("Could not set ownership for overlay directory %s: %v", userOverlayDir, err)
-	}
+	// Set ownership to current user BUT with permissive permissions so RUN commands can access it
+	// Don't change ownership - keep it as root but world-readable/executable
+	// if err := os.Chown(userOverlayDir, pm.originalUID, pm.originalGID); err != nil {
+	// 	logrus.Debugf("Could not set ownership for overlay directory %s: %v", userOverlayDir, err)
+	// }
 
 	// Copy existing files from system directory to overlay
 	if err := copyDirectoryContents(sysDir, userOverlayDir); err != nil {

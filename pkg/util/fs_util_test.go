@@ -302,11 +302,17 @@ func TestPrepareWritableOverlayForSystemDirs(t *testing.T) {
 	// Run the function
 	PrepareWritableOverlayForSystemDirs()
 
-	// Verify overlay directory was created
-	overlayDir := filepath.Join(tmpDir, ".kaniko-overlay", "bin")
+	// Verify overlay directory was created in /tmp (not in tmpDir, because overlay is now global)
+	tmpBase := filepath.Join(string(filepath.Separator), "tmp")
+	overlayDir := filepath.Join(tmpBase, ".kaniko-overlay", "bin")
 	if _, err := os.Stat(overlayDir); os.IsNotExist(err) {
 		t.Errorf("Overlay directory was not created: %s", overlayDir)
 	}
+
+	// Clean up overlay directory
+	defer func() {
+		_ = os.RemoveAll(filepath.Join(tmpBase, ".kaniko-overlay"))
+	}()
 
 	// Verify PATH was updated
 	path := os.Getenv("PATH")
