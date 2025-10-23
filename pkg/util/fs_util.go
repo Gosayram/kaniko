@@ -28,6 +28,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"syscall"
@@ -97,6 +98,22 @@ var CommonSystemDirectories = []string{
 	"/usr/bin",
 	"/usr/local/lib",
 	"/usr/lib",
+	"/.cache",
+	"/tmp",
+	"/var/tmp",
+	"/var/cache",
+}
+
+// DirectoryPatterns are regex patterns to match directories that might need write access
+var DirectoryPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`^/\.cache(/.*)?$`),       // /.cache and subdirectories
+	regexp.MustCompile(`^/var/cache(/.*)?$`),     // /var/cache and subdirectories
+	regexp.MustCompile(`^/tmp(/.*)?$`),           // /tmp and subdirectories
+	regexp.MustCompile(`^/var/tmp(/.*)?$`),       // /var/tmp and subdirectories
+	regexp.MustCompile(`^/usr/local/bin(/.*)?$`), // /usr/local/bin and subdirectories
+	regexp.MustCompile(`^/usr/bin(/.*)?$`),       // /usr/bin and subdirectories
+	regexp.MustCompile(`^/usr/local/lib(/.*)?$`), // /usr/local/lib and subdirectories
+	regexp.MustCompile(`^/usr/lib(/.*)?$`),       // /usr/lib and subdirectories
 }
 
 // PermissionManager manages dynamic permission elevation for any user
@@ -2770,6 +2787,7 @@ func MakeDirectoryWritable(dirPath string) error {
 // PrepareCommonSystemDirectoriesWritable makes common system directories writable proactively
 // This is called BEFORE running commands to ensure permissions are set in the snapshot/cache
 func PrepareCommonSystemDirectoriesWritable() {
+	// Make common system directories writable
 	for _, dir := range CommonSystemDirectories {
 		// Check if directory exists
 		if info, err := os.Stat(dir); err == nil && info.IsDir() {
@@ -2777,8 +2795,42 @@ func PrepareCommonSystemDirectoriesWritable() {
 			if mkErr := MakeDirectoryWritable(dir); mkErr != nil {
 				logrus.Debugf("Could not make %s writable: %v", dir, mkErr)
 			}
+		} else if err != nil {
+			logrus.Debugf("Directory %s does not exist: %v", dir, err)
 		}
 	}
+
+	// Also make parent directories of common paths writable
+	// This handles cases like /.cache, /var/cache, etc.
+	additionalPaths := []string{
+		"/",    // Root directory (for /.cache)
+		"/var", // For /var/cache, /var/tmp
+	}
+
+	for _, path := range additionalPaths {
+		if info, err := os.Stat(path); err == nil && info.IsDir() {
+			if mkErr := MakeDirectoryWritable(path); mkErr != nil {
+				logrus.Debugf("Could not make parent directory %s writable: %v", path, mkErr)
+			}
+		}
+	}
+}
+
+// MakeDirectoryWritableByPattern makes a directory writable if it matches any of our patterns
+// This is called when we detect permission errors to dynamically fix directories
+func MakeDirectoryWritableByPattern(dirPath string) bool {
+	// Check if directory matches any of our patterns
+	for _, pattern := range DirectoryPatterns {
+		if pattern.MatchString(dirPath) {
+			logrus.Debugf("🔍 Directory %s matches pattern %s, making writable", dirPath, pattern.String())
+			if err := MakeDirectoryWritable(dirPath); err != nil {
+				logrus.Debugf("Could not make %s writable: %v", dirPath, err)
+				return false
+			}
+			return true
+		}
+	}
+	return false
 }
 
 // truncateLogString truncates a string for logging
@@ -2821,7 +2873,13 @@ func ParsePermissionErrorAndFix(errorOutput string) []string {
 				continue
 			}
 
-			// Make the directory (and its parents) writable
+			// First try to make directory writable by pattern matching (more intelligent)
+			if MakeDirectoryWritableByPattern(dir) {
+				fixedDirs = append(fixedDirs, dir)
+				continue
+			}
+
+			// Fallback: Make the directory (and its parents) writable
 			if err := MakeDirectoryWritable(dir); err != nil {
 				logrus.Debugf("Could not make directory %s writable: %v", dir, err)
 				// Try parent directory
