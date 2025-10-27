@@ -38,7 +38,7 @@ func DefaultErrorHandler() CommonErrorHandler {
 }
 
 // HandleFileOperationError handles errors from file operations with common patterns
-func HandleFileOperationError(err error, handler CommonErrorHandler, operation string, path string) error {
+func HandleFileOperationError(err error, handler CommonErrorHandler, operation, path string) error {
 	if err == nil {
 		return nil
 	}
