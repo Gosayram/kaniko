@@ -9,6 +9,13 @@ spec:
     args: ["--dockerfile=<path to Dockerfile within the build context>",
             "--context=https://myaccount.blob.core.windows.net/container/path/to/context.tar.gz",
             "--destination=<registry for image push>"]
+    resources:
+      requests:
+        memory: "1Gi"
+        cpu: "500m"
+      limits:
+        memory: "2Gi"
+        cpu: "1000m"
 ...
  env:
       - name: AZURE_STORAGE_ACCESS_KEY
@@ -18,6 +25,6 @@ spec:
             key: azure-storage-access-key
 ...
   volumes:
-   - name: azure-storage-access-key
+  - name: azure-storage-access-key
     secret:
       secretName: azure-storage-access-key
