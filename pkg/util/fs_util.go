@@ -2314,17 +2314,15 @@ func gowalkDir(dir string, existingPaths map[string]struct{}, changeFunc func(st
 	foundPaths := make([]string, 0)
 	deletedFiles := existingPaths // Make a reference.
 
-	callback := func(path string, ent *godirwalk.Dirent) error {
+	// Use common ignore handling for walk operations
+	ignoreHandling := DefaultIgnoreHandling()
+	ignoreHandling.UseCleanedPath = false // WalkFS uses IsInIgnoreList, not CheckCleanedPathAgainstIgnoreList
+	ignoreHandling.LogIgnored = false     // WalkFS doesn't log ignored files
+
+	// Create callback using common pattern
+	callback := CreateIgnoreCallback(ignoreHandling, func(path string, ent *godirwalk.Dirent) error {
 		_ = ent // unused parameter
 		logrus.Tracef("Analyzing path '%s'", path)
-
-		if IsInIgnoreList(path) {
-			if IsDestDir(path) {
-				logrus.Tracef("Skipping paths under '%s', as it is an ignored directory", path)
-				return filepath.SkipDir
-			}
-			return nil
-		}
 
 		// File is existing on disk, remove it from deleted files.
 		delete(deletedFiles, path)
@@ -2336,13 +2334,13 @@ func gowalkDir(dir string, existingPaths map[string]struct{}, changeFunc func(st
 		}
 
 		return nil
-	}
+	})
 
-	if err := godirwalk.Walk(dir,
-		&godirwalk.Options{
-			Callback: callback,
-			Unsorted: true,
-		}); err != nil {
+	// Use common walk options
+	walkOpts := DefaultWalkOptions()
+	walkOpts.Callback = callback
+
+	if err := godirwalk.Walk(dir, CreateWalkOptions(walkOpts)); err != nil {
 		return walkFSResult{nil, deletedFiles}
 	}
 
@@ -2354,49 +2352,45 @@ func GetFSInfoMap(dir string, existing map[string]os.FileInfo) (fileMap map[stri
 	fileMap = map[string]os.FileInfo{}
 	foundPaths = []string{}
 	timer := timing.Start("Walking filesystem with Stat")
-	if err := godirwalk.Walk(dir, &godirwalk.Options{
-		Callback: func(path string, ent *godirwalk.Dirent) error {
-			_ = ent // unused parameter
-			if CheckCleanedPathAgainstIgnoreList(path) {
-				if IsDestDir(path) {
-					logrus.Tracef("Skipping paths under %s, as it is a ignored directory", path)
-					return filepath.SkipDir
-				}
-				return nil
-			}
-			if fi, err := os.Lstat(path); err == nil {
-				if fiPrevious, ok := existing[path]; ok {
-					// check if file changed
-					if !isSame(fiPrevious, fi) {
-						fileMap[path] = fi
-						foundPaths = append(foundPaths, path)
-					}
-				} else {
-					// new path
+
+	// Use common ignore handling for stat operations
+	ignoreHandling := GetProcessorIgnoreHandling(FileProcessorTypeStat)
+
+	// Create callback using common pattern
+	callback := CreateIgnoreCallback(ignoreHandling, func(path string, ent *godirwalk.Dirent) error {
+		_ = ent // unused parameter
+
+		if fi, err := os.Lstat(path); err == nil {
+			if fiPrevious, ok := existing[path]; ok {
+				// check if file changed
+				if !isSame(fiPrevious, fi) {
 					fileMap[path] = fi
 					foundPaths = append(foundPaths, path)
 				}
+			} else {
+				// new path
+				fileMap[path] = fi
+				foundPaths = append(foundPaths, path)
 			}
-			return nil
-		},
-		Unsorted: true,
-	}); err != nil {
+		}
+		return nil
+	})
+
+	// Use common walk options
+	walkOpts := DefaultWalkOptions()
+	walkOpts.Callback = callback
+
+	if err := godirwalk.Walk(dir, CreateWalkOptions(walkOpts)); err != nil {
 		return fileMap, foundPaths
 	}
 	timing.DefaultRun.Stop(timer)
 	return fileMap, foundPaths
 }
 
+// isSame is now implemented using the common IsFileInfoSame function
+// This maintains backward compatibility while using the shared implementation
 func isSame(fi1, fi2 os.FileInfo) bool {
-	return fi1.Mode() == fi2.Mode() &&
-		// file modification time
-		fi1.ModTime().Equal(fi2.ModTime()) &&
-		// file size
-		fi1.Size() == fi2.Size() &&
-		// file user id
-		uint64(fi1.Sys().(*syscall.Stat_t).Uid) == uint64(fi2.Sys().(*syscall.Stat_t).Uid) &&
-		// file group id is
-		uint64(fi1.Sys().(*syscall.Stat_t).Gid) == uint64(fi2.Sys().(*syscall.Stat_t).Gid)
+	return IsFileInfoSame(fi1, fi2)
 }
 
 // ValidateFilePath validates a file path to prevent directory traversal attacks
