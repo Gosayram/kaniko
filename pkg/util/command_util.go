@@ -22,7 +22,6 @@ import (
 	"io/fs"
 	"net/url"
 	"os"
-	"os/exec"
 	"os/user"
 	"path/filepath"
 	"strconv"
@@ -692,44 +691,23 @@ func getSafeFallbackUID(userStr string) uint32 {
 
 // createUserInSystem attempts to create a user in the system if possible
 // This is a best-effort approach that may not work in all environments
+// Uses secure command building to prevent command injection
 func createUserInSystem(userStr string, uid uint32) {
-	// Validate user string to prevent command injection
-	if !isValidUsername(userStr) {
-		logrus.Debugf("Invalid username %s, skipping user creation", userStr)
+	// Use secure command creation
+	cmd, err := CreateSecureUserCommand(userStr, uid, "/bin/bash")
+	if err != nil {
+		logrus.Debugf("Failed to create secure command for user %s: %v", userStr, err)
 		return
 	}
 
-	// Try to create user using useradd command with validated inputs
-	// #nosec G204 - userStr is validated and uid is controlled
-	cmd := exec.Command("useradd", "-u", fmt.Sprint(uid), "-m", "-s", "/bin/bash", userStr)
+	// Execute the secure command
 	if err := cmd.Run(); err != nil {
 		logrus.Debugf("Failed to create user %s with useradd: %v", userStr, err)
 		// This is not a critical error - we'll use the fallback user
 		return
 	}
 
-	logrus.Infof("Successfully created user %s with UID %d", userStr, uid)
-}
-
-// isValidUsername validates that a username is safe for system commands
-func isValidUsername(userStr string) bool {
-	// Check for basic security: no spaces, no special characters that could be dangerous
-	if userStr == "" || len(userStr) > 32 {
-		return false
-	}
-
-	for _, c := range userStr {
-		if !isValidUsernameChar(c) {
-			return false
-		}
-	}
-
-	return true
-}
-
-// isValidUsernameChar checks if a character is valid for a username
-func isValidUsernameChar(c rune) bool {
-	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-'
+	logrus.Infof("Successfully created user %s with UID %d using secure command", userStr, uid)
 }
 
 // tryCreateUserInSystem attempts to create a user in the system if it doesn't exist
