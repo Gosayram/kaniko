@@ -42,15 +42,15 @@ echo "Processing (takes some time)..."
 DATE=$(date +'%Y-%m-%d')
 
 # you can pass your github token with --token here if you run out of requests
-# Capture output and replace newline characters with a placeholder
-PULL_REQS=$(go run ${DIR}/release_notes/listpullreqs.go | tr '\n' '|')
+# Capture only the actual pull request data, redirect debug output to stderr
+PULL_REQS=$(go run ${DIR}/release_notes/listpullreqs.go 2>/dev/null | tr '\n' '|')
 # Get contributors - handle case when no tags exist
 if git describe --tags --abbrev=0 >/dev/null 2>&1; then
     LATEST_TAG=$(git describe --tags --abbrev=0)
-    CONTRIBUTORS=$(git log --format="%aN" --reverse "$LATEST_TAG"..HEAD | sort | uniq | awk '{printf "- %s\n", $0 }' | tr '\n' '|')
+    CONTRIBUTORS=$(git log --format="%aN" --reverse "$LATEST_TAG"..HEAD | sort | uniq | grep -v "^--show-origin$" | awk '{printf "- %s\n", $0 }' | tr '\n' '|')
 else
     # If no tags exist, get all contributors from beginning
-    CONTRIBUTORS=$(git log --format="%aN" --reverse | sort | uniq | awk '{printf "- %s\n", $0 }' | tr '\n' '|')
+    CONTRIBUTORS=$(git log --format="%aN" --reverse | sort | uniq | grep -v "^--show-origin$" | awk '{printf "- %s\n", $0 }' | tr '\n' '|')
 fi
 
 # Substitute placeholders with actual data in the template
