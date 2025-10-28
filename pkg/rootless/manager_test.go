@@ -149,6 +149,10 @@ func TestValidateTargetUser(t *testing.T) {
 func TestValidateCommandPermissions(t *testing.T) {
 	manager := NewManager()
 
+	// Set rootless mode for testing
+	manager.isRootlessMode = true
+	manager.targetUID = 1000 // Non-root user
+
 	tests := []struct {
 		name    string
 		cmd     string
@@ -157,7 +161,7 @@ func TestValidateCommandPermissions(t *testing.T) {
 		{
 			name:    "empty command",
 			cmd:     "",
-			wantErr: false,
+			wantErr: true, // Empty command should fail validation
 		},
 		{
 			name:    "RUN command",

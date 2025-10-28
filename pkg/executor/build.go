@@ -294,6 +294,13 @@ func initConfig(img partial.WithConfigFile, opts *config.KanikoOptions) (*v1.Con
 		return nil, err
 	}
 
+	// Update rootless manager with user from Dockerfile if different from config
+	if imageConfig.Config.User != "" {
+		if err := rootlessManager.SetTargetUserFromConfig(imageConfig.Config.User); err != nil {
+			logrus.Warnf("Failed to update rootless manager with Dockerfile user: %v", err)
+		}
+	}
+
 	if l := len(opts.Labels); l > 0 {
 		if imageConfig.Config.Labels == nil {
 			imageConfig.Config.Labels = make(map[string]string)

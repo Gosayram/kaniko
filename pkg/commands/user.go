@@ -56,7 +56,7 @@ func (r *UserCommand) ExecuteCommand(config *v1.Config, buildArgs *dockerfile.Bu
 	config.User = userStr
 
 	// Rootless: update target user in rootless manager
-	if err := rootlessManager.ValidateTargetUser(userStr); err != nil {
+	if err := rootlessManager.SetTargetUserFromConfig(userStr); err != nil {
 		return err
 	}
 

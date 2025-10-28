@@ -267,6 +267,11 @@ var RootCmd = &cobra.Command{
 		logrus.Infof("Initializing rootless mode...")
 		rootlessManager := rootless.NewManager()
 
+		// Set target user from configuration
+		if err := rootlessManager.SetTargetUserFromConfig(opts.DefaultUser); err != nil {
+			exit(errors.Wrap(err, "failed to set target user from config"))
+		}
+
 		// Phase 1: Automatic mode determination and setup under root
 		if err := rootlessManager.Initialize(); err != nil {
 			exit(errors.Wrap(err, "failed to initialize rootless manager"))
