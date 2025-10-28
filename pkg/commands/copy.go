@@ -30,6 +30,7 @@ import (
 
 	kConfig "github.com/Gosayram/kaniko/pkg/config"
 	"github.com/Gosayram/kaniko/pkg/dockerfile"
+	"github.com/Gosayram/kaniko/pkg/rootless"
 	"github.com/Gosayram/kaniko/pkg/util"
 )
 
@@ -49,6 +50,14 @@ type CopyCommand struct {
 
 // ExecuteCommand executes the COPY command by copying files from source to destination.
 func (c *CopyCommand) ExecuteCommand(config *v1.Config, buildArgs *dockerfile.BuildArgs) error {
+	// Rootless: automatic permission validation before execution
+	rootlessManager := rootless.GetManager()
+	if rootlessManager.IsRootlessMode() {
+		if err := rootlessManager.ValidateCommandPermissions("COPY"); err != nil {
+			return err
+		}
+	}
+
 	// Use common helper for setup
 	helper := NewCommonCommandHelper()
 

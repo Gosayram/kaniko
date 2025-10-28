@@ -29,9 +29,9 @@ import (
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 
-	kConfig "github.com/Gosayram/kaniko/pkg/config"
 	"github.com/Gosayram/kaniko/pkg/constants"
 	"github.com/Gosayram/kaniko/pkg/dockerfile"
+	"github.com/Gosayram/kaniko/pkg/rootless"
 	"github.com/Gosayram/kaniko/pkg/util"
 )
 
@@ -57,6 +57,14 @@ func (r *RunCommand) IsArgsEnvsRequiredInCache() bool {
 // ExecuteCommand executes the RUN instruction by preparing and running the command
 // with proper environment setup and security validation
 func (r *RunCommand) ExecuteCommand(config *v1.Config, buildArgs *dockerfile.BuildArgs) error {
+	// Rootless: automatic permission validation before execution
+	rootlessManager := rootless.GetManager()
+	if rootlessManager.IsRootlessMode() {
+		if err := rootlessManager.ValidateCommandPermissions(r.cmd.String()); err != nil {
+			return err
+		}
+	}
+
 	return runCommandInExec(config, buildArgs, r.cmd)
 }
 
@@ -549,7 +557,7 @@ func (cr *CachingRunCommand) ExecuteCommand(_ *v1.Config, _ *dockerfile.BuildArg
 	cr.layer = layers[0]
 
 	cr.extractedFiles, err = util.GetFSFromLayers(
-		kConfig.RootDir,
+		"/",
 		layers,
 		util.ExtractFunc(cr.extractFn),
 		util.IncludeWhiteout(),
