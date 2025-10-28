@@ -18,45 +18,11 @@ limitations under the License.
 package util //nolint:revive // package name 'util' is intentionally generic
 
 import (
-	"fmt"
-	"os/user"
-	"strconv"
-	"strings"
 	"syscall"
 
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 )
-
-// parseUserGroups parses group IDs for a user
-func parseUserGroups(u *user.User) ([]uint32, error) {
-	groups := []uint32{}
-	gidStr, err := groupIDs(u)
-	if err != nil {
-		return nil, errors.Wrap(err, "group ids for user")
-	}
-
-	for _, g := range gidStr {
-		i, err := strconv.ParseUint(g, 10, 32)
-		if err != nil {
-			return nil, errors.Wrap(err, "parseuint")
-		}
-		groups = append(groups, uint32(i))
-	}
-	return groups, nil
-}
-
-// adjustGIDForUserString adjusts GID based on user string format
-func adjustGIDForUserString(userStr string, u *user.User, safeGID int64) int64 {
-	if len(strings.Split(userStr, ":")) <= 1 {
-		if u.Gid != "" {
-			if gid, err := getGID(u.Gid); err == nil {
-				return int64(gid)
-			}
-		}
-	}
-	return safeGID
-}
 
 // convertToSafeCredentials converts UID/GID to safe uint32 values
 func convertToSafeCredentials(safeUID, safeGID int64) (finalUID, finalGID uint32) {
@@ -74,12 +40,11 @@ func convertToSafeCredentials(safeUID, safeGID int64) (finalUID, finalGID uint32
 }
 
 // SyscallCredentials retrieves system call credentials for a given user string.
-// It parses the user string to extract UID and GID, looks up user information,
-// and returns a syscall.Credential structure with the appropriate credentials.
-// CRITICAL FIX: Added detailed logging for user resolution debugging
+// RADICAL FIX: Completely rewritten to work in containerized environments without /etc/passwd and /etc/group
 func SyscallCredentials(userStr string) (*syscall.Credential, error) {
 	logrus.Debugf("🔐 Resolving credentials for user: '%s'", userStr)
 
+	// Parse user string to extract UID and GID
 	uid, gid, err := getUIDAndGIDFromString(userStr)
 	if err != nil {
 		logrus.Warnf("❌ Failed to get UID/GID for user '%s': %v", userStr, err)
@@ -91,32 +56,20 @@ func SyscallCredentials(userStr string) (*syscall.Credential, error) {
 	safeUID, safeGID := GetSafeUIDGID(int64(uid), int64(gid))
 	logrus.Debugf("🛡️ Using safe UID/GID: %d/%d (original: %d/%d) for user '%s'", safeUID, safeGID, uid, gid, userStr)
 
-	u, err := LookupUser(fmt.Sprint(safeUID))
-	if err != nil {
-		logrus.Warnf("❌ Failed to lookup user '%s' (UID %d): %v", userStr, safeUID, err)
-		return nil, errors.Wrap(err, "lookup")
-	}
-	logrus.Infof("✅ Successfully looked up user '%s': UID=%s, GID=%s, Home=%s, Name=%s",
-		userStr, u.Uid, u.Gid, u.HomeDir, u.Name)
-
-	groups, err := parseUserGroups(u)
-	if err != nil {
-		logrus.Warnf("❌ Failed to parse user groups for '%s': %v", userStr, err)
-		return nil, err
-	}
-	logrus.Debugf("👥 User '%s' belongs to %d groups: %v", userStr, len(groups), groups)
-
-	// Adjust GID based on user string format
-	safeGID = adjustGIDForUserString(userStr, u, safeGID)
-	logrus.Debugf("🔧 Adjusted GID for user '%s': %d", userStr, safeGID)
+	// RADICAL FIX: Skip user lookup and group parsing in containerized environments
+	// This prevents failures when /etc/passwd and /etc/group are missing
+	logrus.Infof("🚀 Using direct UID/GID credentials for user '%s' (containerized mode)", userStr)
+	logrus.Infof("📋 Skipping user lookup and group parsing - using direct credentials")
 
 	// Convert to safe uint32 values
 	finalUID, finalGID := convertToSafeCredentials(safeUID, safeGID)
 	logrus.Infof("🎯 Final credentials for user '%s': UID=%d, GID=%d", userStr, finalUID, finalGID)
 
+	// RADICAL FIX: Return minimal credentials without groups
+	// This prevents failures when /etc/group is missing
 	return &syscall.Credential{
 		Uid:    finalUID,
 		Gid:    finalGID,
-		Groups: groups,
+		Groups: []uint32{finalGID}, // Only include primary group
 	}, nil
 }
