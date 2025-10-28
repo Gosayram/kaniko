@@ -1031,7 +1031,7 @@ func DoBuild(opts *config.KanikoOptions) (v1.Image, error) {
 			return handleFinalImage(sourceImage, opts, timer)
 		}
 
-		if err := handleNonFinalStage(index, stage, sourceImage, crossStageDependencies); err != nil {
+		if err := handleNonFinalStage(index, stage, sourceImage, crossStageDependencies, args); err != nil {
 			// Log build failure
 			buildDuration := time.Since(buildStartTime).Milliseconds()
 			globalLogger.LogBuildComplete(buildID, buildDuration, false)
@@ -1197,6 +1197,7 @@ func handleNonFinalStage(
 	stage *config.KanikoStage,
 	sourceImage v1.Image,
 	crossStageDependencies map[int][]string,
+	buildArgs *dockerfile.BuildArgs,
 ) error {
 	if stage.SaveStage {
 		if err := saveStageAsTarball(strconv.Itoa(index), sourceImage); err != nil {
@@ -1216,7 +1217,7 @@ func handleNonFinalStage(
 	// Add a small delay to ensure filesystem operations are complete
 	time.Sleep(FilesystemSyncDelay)
 
-	filesToSave := filesToSave(crossStageDependencies[index])
+	filesToSave := filesToSaveWithArgs(crossStageDependencies[index], buildArgs)
 
 	// If no files to save, log warning and continue
 	if len(filesToSave) == 0 {
@@ -1256,12 +1257,18 @@ func handleNonFinalStage(
 // filesToSave returns all the files matching the given pattern in deps.
 // If a file is a symlink, it also returns the target file.
 func filesToSave(deps []string) []string {
+	return filesToSaveWithArgs(deps, nil)
+}
+
+// filesToSaveWithArgs returns all the files matching the given pattern in deps with build args support.
+// If a file is a symlink, it also returns the target file.
+func filesToSaveWithArgs(deps []string, buildArgs *dockerfile.BuildArgs) []string {
 	srcFiles := []string{}
 	for _, src := range deps {
 		searchPath := filepath.Clean("/" + src)
 		logrus.Debugf("🔍 Searching for files: %s", searchPath)
 
-		files, err := findFilesForDependency(searchPath)
+		files, err := findFilesForDependencyWithArgs(searchPath, buildArgs)
 		if err != nil {
 			logrus.Warnf("Failed to find files for %s: %v, continuing anyway", searchPath, err)
 			continue
@@ -1275,10 +1282,28 @@ func filesToSave(deps []string) []string {
 
 // findFilesForDependency finds files for a specific dependency path
 func findFilesForDependency(searchPath string) ([]string, error) {
+	return findFilesForDependencyWithArgs(searchPath, nil)
+}
+
+// findFilesForDependencyWithArgs finds files for a specific dependency path with build args support
+func findFilesForDependencyWithArgs(searchPath string, buildArgs *dockerfile.BuildArgs) ([]string, error) {
+	logrus.Debugf("🔍 Searching for files: %s", searchPath)
+
+	// CRITICAL FIX: Handle variable substitution in paths using build args
+	// For example: /app/apps/${APP_TYPE}/.output should be resolved to /app/apps/webview/.output
+	resolvedPath := resolvePathVariablesWithArgs(searchPath, buildArgs)
+	if resolvedPath != searchPath {
+		logrus.Debugf("🔄 Resolved path variables: %s -> %s", searchPath, resolvedPath)
+		searchPath = resolvedPath
+	}
+
 	// First try exact path (works for both files and directories)
 	if info, statErr := os.Stat(searchPath); statErr == nil {
+		logrus.Debugf("✅ Found exact path: %s", searchPath)
 		return processExistingPath(searchPath, info)
 	}
+
+	logrus.Debugf("⚠️ Exact path not found: %s", searchPath)
 
 	// Path doesn't exist, try to find similar paths
 	return findSimilarPaths(searchPath)
@@ -1333,15 +1358,52 @@ func walkDirectory(searchPath string) ([]string, error) {
 func findSimilarPaths(searchPath string) ([]string, error) {
 	var srcFiles []string
 
-	logrus.Debugf("Path %s does not exist, trying to find similar paths", searchPath)
+	logrus.Debugf("🔍 Path %s does not exist, trying to find similar paths", searchPath)
+
+	// CRITICAL FIX: Try to find build output directories dynamically
+	// Instead of hardcoded paths, search for common build output patterns
+	buildOutputPatterns := []string{
+		".output", "dist", "build", "out", "target", "bin", "lib",
+	}
 
 	// Try to find parent directory and search within it
 	parentDir := filepath.Dir(searchPath)
 	baseName := filepath.Base(searchPath)
 
+	// Search in parent directory for common build output patterns
 	if parentDir != "/" && parentDir != "." {
 		if parentInfo, err := os.Stat(parentDir); err == nil && parentInfo.IsDir() {
-			logrus.Debugf("Searching in parent directory: %s for pattern: %s", parentDir, baseName)
+			logrus.Debugf("🔍 Searching for build output patterns in: %s", parentDir)
+
+			err := filepath.Walk(parentDir, func(path string, info os.FileInfo, err error) error {
+				if err != nil {
+					return nil // Skip errors
+				}
+
+				// Check if this directory matches common build output patterns
+				dirName := filepath.Base(path)
+				for _, pattern := range buildOutputPatterns {
+					if dirName == pattern && info.IsDir() {
+						logrus.Debugf("✅ Found build output directory: %s", path)
+						files, err := walkDirectory(path)
+						if err == nil {
+							srcFiles = append(srcFiles, files...)
+						}
+						return nil // Don't walk into subdirectories of build outputs
+					}
+				}
+				return nil
+			})
+			if err != nil {
+				logrus.Debugf("Failed to search for build output patterns in %s: %v", parentDir, err)
+			}
+		}
+	}
+
+	// Also search for files matching the base name pattern
+	if parentDir != "/" && parentDir != "." {
+		if parentInfo, err := os.Stat(parentDir); err == nil && parentInfo.IsDir() {
+			logrus.Debugf("🔍 Searching in parent directory: %s for pattern: %s", parentDir, baseName)
 
 			// Search for files matching the base name pattern
 			err := filepath.Walk(parentDir, func(path string, info os.FileInfo, err error) error {
@@ -1365,8 +1427,13 @@ func findSimilarPaths(searchPath string) ([]string, error) {
 			if err != nil {
 				logrus.Debugf("Failed to search in parent directory %s: %v", parentDir, err)
 			}
-			return srcFiles, nil
 		}
+	}
+
+	// If we found files in common directories, return them
+	if len(srcFiles) > 0 {
+		logrus.Debugf("✅ Found %d files in similar paths", len(srcFiles))
+		return srcFiles, nil
 	}
 
 	// If exact path not found, try glob pattern
@@ -1403,6 +1470,39 @@ func findFilesWithGlob(searchPath string) ([]string, error) {
 	}
 
 	return srcFiles, nil
+}
+
+// resolvePathVariables resolves environment variables in file paths
+// This is critical for multi-stage builds where paths contain variables like ${APP_TYPE}
+func resolvePathVariables(path string) string {
+	return resolvePathVariablesWithArgs(path, nil)
+}
+
+// resolvePathVariablesWithArgs resolves environment variables in file paths using build args
+// This is critical for multi-stage builds where paths contain variables like ${APP_TYPE}
+func resolvePathVariablesWithArgs(path string, buildArgs *dockerfile.BuildArgs) string {
+	// Get environment variables from the current environment
+	envVars := os.Environ()
+
+	// If build args are provided, use them for variable resolution
+	if buildArgs != nil {
+		// Get build args as environment variables
+		buildArgVars := buildArgs.GetAllAllowed()
+		envVars = append(envVars, buildArgVars...)
+		logrus.Debugf("Using %d build args for variable resolution", len(buildArgVars))
+	}
+
+	resolved, err := util.ResolveEnvironmentReplacement(path, envVars, false)
+	if err != nil {
+		logrus.Debugf("Failed to resolve environment variables in path %s: %v, using original path", path, err)
+		return path
+	}
+
+	if resolved != path {
+		logrus.Debugf("🔄 Resolved path variables: %s -> %s", path, resolved)
+	}
+
+	return resolved
 }
 
 // deduplicatePaths returns a deduplicated slice of shortest paths

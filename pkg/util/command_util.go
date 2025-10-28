@@ -529,8 +529,12 @@ func getUIDAndGID(userStr, groupStr string) (uid, gid uint32, err error) {
 
 	logrus.Debugf("🔍 Resolving UID/GID for user: '%s', group: '%s'", userStr, groupStr)
 
-	// Try to parse userStr as numeric UID first
-	if uidNum, parseErr := getUID(userStr); parseErr == nil {
+	// CRITICAL FIX: Handle root user correctly
+	if userStr == "root" {
+		logrus.Debugf("✅ Detected root user, using UID 0")
+		uid = 0
+	} else if uidNum, parseErr := getUID(userStr); parseErr == nil {
+		// Try to parse userStr as numeric UID first
 		logrus.Debugf("✅ Parsed user '%s' as numeric UID: %d", userStr, uidNum)
 		uid = uidNum
 	} else {
@@ -541,8 +545,12 @@ func getUIDAndGID(userStr, groupStr string) (uid, gid uint32, err error) {
 
 	// Handle group string
 	if groupStr != "" {
-		// Try to parse groupStr as numeric GID first
-		if gidNum, parseErr := getGID(groupStr); parseErr == nil {
+		// CRITICAL FIX: Handle root group correctly
+		if groupStr == "root" {
+			logrus.Debugf("✅ Detected root group, using GID 0")
+			gid = 0
+		} else if gidNum, parseErr := getGID(groupStr); parseErr == nil {
+			// Try to parse groupStr as numeric GID first
 			logrus.Debugf("✅ Parsed group '%s' as numeric GID: %d", groupStr, gidNum)
 			gid = gidNum
 		} else {
@@ -572,6 +580,18 @@ func getGID(groupStr string) (uint32, error) {
 // RADICAL FIX: Completely rewritten to work without system user lookups
 func LookupUser(userStr string) (*user.User, error) {
 	logrus.Debugf("🔍 Looking up user: '%s'", userStr)
+
+	// CRITICAL FIX: Handle root user correctly
+	if userStr == "root" {
+		logrus.Debugf("✅ Detected root user, using UID 0")
+		return &user.User{
+			Uid:      "0",
+			Gid:      "0",
+			Username: "root",
+			Name:     "root",
+			HomeDir:  "/root",
+		}, nil
+	}
 
 	// Try to parse as numeric UID first
 	if uid, parseErr := getUID(userStr); parseErr == nil {
