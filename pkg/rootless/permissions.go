@@ -20,7 +20,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"os/user"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -58,20 +57,14 @@ func (ps *PermissionSetup) SetupCriticalDirectories() error {
 func (ps *PermissionSetup) CreateUserIfNeeded() error {
 	logrus.Infof("Creating user if needed: %s", ps.manager.targetUser)
 
-	// Check if user already exists
-	if _, err := user.Lookup(ps.manager.targetUser); err == nil {
-		logrus.Debugf("User %s already exists", ps.manager.targetUser)
-		return nil
-	}
+	// IMPORTANT: In containerized environments, we don't create system users
+	// The target user will be used for process spawning via SysProcAttr.Credential
+	// This avoids issues with missing useradd/groupadd commands and /etc/passwd
 
-	// Try to create user
-	if err := ps.createUser(ps.manager.targetUser, ps.manager.targetUID); err != nil {
-		logrus.Warnf("Failed to create user %s: %v", ps.manager.targetUser, err)
-		// Don't fail - continue with fallback
-		return nil
-	}
+	logrus.Infof("Skipping user creation - will use target user %s (UID: %d) for process spawning",
+		ps.manager.targetUser, ps.manager.targetUID)
+	logrus.Infof("Process spawning will use SysProcAttr.Credential for user %s", ps.manager.targetUser)
 
-	logrus.Infof("User %s created successfully", ps.manager.targetUser)
 	return nil
 }
 

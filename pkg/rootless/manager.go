@@ -25,7 +25,6 @@ import (
 	"os/user"
 	"strconv"
 	"strings"
-	"syscall"
 
 	"github.com/sirupsen/logrus"
 )
@@ -172,33 +171,32 @@ func (rm *Manager) SwitchToTargetUser() error {
 
 	logrus.Infof("Switching to target user: %s (UID: %d)", rm.targetUser, rm.targetUID)
 
+	// IMPORTANT: In containerized environments, we don't actually switch the process user
+	// Instead, we configure the system to use the target user for spawned processes
+	// This is handled by SysProcAttr.Credential in command execution
+
 	// 1. Validate user switch capability
 	if err := rm.validateUserSwitch(); err != nil {
 		return err
 	}
 
-	// 2. Setup user groups
+	// 2. Setup user groups (for process spawning)
 	if err := rm.setupUserGroups(); err != nil {
 		return err
 	}
 
-	// 3. Switch UID/GID
-	if err := syscall.Setuid(rm.targetUID); err != nil {
-		return err
-	}
-
-	if err := syscall.Setgid(rm.targetGID); err != nil {
-		return err
-	}
-
-	// 4. Update environment variables
+	// 3. Update environment variables for the target user
 	if err := rm.updateEnvironment(); err != nil {
 		return err
 	}
 
+	// 4. Mark as rootless mode (process spawning will use target user)
 	rm.isRootlessMode = true
-	logrus.Infof("Successfully switched to target user: %s (UID: %d)",
+
+	logrus.Infof("Successfully configured for target user: %s (UID: %d)",
 		rm.targetUser, rm.targetUID)
+	logrus.Infof("Process spawning will use target user credentials")
+
 	return nil
 }
 
@@ -353,28 +351,14 @@ func (rm *Manager) createUserIfNeeded() error {
 		return nil
 	}
 
-	// Check if user already exists
-	if _, err := user.LookupId(strconv.Itoa(rm.targetUID)); err == nil {
-		logrus.Debugf("User with UID %d already exists", rm.targetUID)
-		return nil
-	}
+	// IMPORTANT: In containerized environments, we don't create system users
+	// The target user will be used for process spawning via SysProcAttr.Credential
+	// This avoids issues with missing useradd/groupadd commands and /etc/passwd
 
-	// Parse username from target user string
-	userParts := strings.Split(rm.targetUser, ":")
-	username := userParts[0]
+	logrus.Infof("Skipping user creation - will use target user %s (UID: %d) for process spawning",
+		rm.targetUser, rm.targetUID)
+	logrus.Infof("Process spawning will use SysProcAttr.Credential for user %s", rm.targetUser)
 
-	// Check if user exists by name
-	if _, err := user.Lookup(username); err == nil {
-		logrus.Debugf("User %s already exists", username)
-		return nil
-	}
-
-	// Create user using PermissionSetup
-	if err := rm.permissionSetup.CreateUserIfNeeded(); err != nil {
-		return fmt.Errorf("failed to create user %s: %w", username, err)
-	}
-
-	logrus.Infof("User %s created successfully with UID %d", username, rm.targetUID)
 	return nil
 }
 
@@ -488,40 +472,17 @@ func (rm *Manager) validateUserSwitch() error {
 	if rm.targetUID != 0 {
 		if _, err := user.LookupId(strconv.Itoa(rm.targetUID)); err != nil {
 			logrus.Warnf("Target user %d not found in system: %v", rm.targetUID, err)
-			// Don't fail - user might be created dynamically
+			logrus.Infof("This is expected in containerized environments - will use UID/GID for process spawning")
+			// Don't fail - user will be used for process spawning via SysProcAttr.Credential
 		}
 	}
 
-	// 4. Validate home directory access
-	if err := rm.validateHomeDirectory(); err != nil {
-		return fmt.Errorf("home directory validation failed: %w", err)
-	}
-
-	// 5. Check if we can switch to the target user
+	// 4. Check if we can switch to the target user
 	if err := rm.validateUserSwitchCapability(); err != nil {
 		return fmt.Errorf("user switch capability validation failed: %w", err)
 	}
 
 	logrus.Debugf("User switch validation passed for: %s", rm.targetUser)
-	return nil
-}
-
-// validateHomeDirectory validates that the home directory is accessible
-func (rm *Manager) validateHomeDirectory() error {
-	homeDir := rm.getUserHomeDir()
-
-	// Check if home directory exists
-	if _, err := os.Stat(homeDir); os.IsNotExist(err) {
-		logrus.Warnf("Home directory %s does not exist", homeDir)
-		// Don't fail - directory might be created later
-		return nil
-	}
-
-	// Check if we can access the home directory
-	if _, err := os.Stat(homeDir); err != nil {
-		return fmt.Errorf("cannot access home directory %s: %w", homeDir, err)
-	}
-
 	return nil
 }
 
@@ -548,47 +509,12 @@ func (rm *Manager) setupUserGroups() error {
 		return nil
 	}
 
-	// Parse username from target user string
-	userParts := strings.Split(rm.targetUser, ":")
-	username := userParts[0]
+	// IMPORTANT: In containerized environments, we don't setup system groups
+	// The target user GID will be used for process spawning via SysProcAttr.Credential
 
-	// Check if user exists
-	userInfo, err := user.Lookup(username)
-	if err != nil {
-		logrus.Warnf("User %s not found, skipping group setup: %v", username, err)
-		return nil
-	}
+	logrus.Infof("Skipping user groups setup - will use target GID %d for process spawning", rm.targetGID)
+	logrus.Infof("Process spawning will use SysProcAttr.Credential for user %s", rm.targetUser)
 
-	// Get user's groups
-	groups, err := userInfo.GroupIds()
-	if err != nil {
-		logrus.Warnf("Failed to get groups for user %s: %v", username, err)
-		return nil
-	}
-
-	// Log user's groups
-	logrus.Debugf("User %s belongs to %d groups", username, len(groups))
-	for _, gid := range groups {
-		if group, err := user.LookupGroupId(gid); err == nil {
-			logrus.Debugf("  - Group: %s (GID: %s)", group.Name, gid)
-		}
-	}
-
-	// Ensure user is in their primary group
-	primaryGID := strconv.Itoa(rm.targetGID)
-	found := false
-	for _, gid := range groups {
-		if gid == primaryGID {
-			found = true
-			break
-		}
-	}
-
-	if !found {
-		logrus.Debugf("User %s not in primary group %d, this is normal for new users", username, rm.targetGID)
-	}
-
-	logrus.Debugf("User groups setup completed for: %s", username)
 	return nil
 }
 
