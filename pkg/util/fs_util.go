@@ -2900,7 +2900,20 @@ func extractDirectoryPathsFromError(errorLine string) []string {
 
 	logrus.Debugf("🔍 Extracting paths from error: %s", errorLine)
 
-	// Pattern 1: mkdir 'path' - Corepack cache directory creation
+	// Extract paths using different patterns
+	paths = append(paths, extractMkdirPaths(errorLine)...)
+	paths = append(paths, extractSymlinkPaths(errorLine)...)
+	paths = append(paths, extractOpendirPaths(errorLine)...)
+	paths = append(paths, extractPermissionDeniedPaths(errorLine)...)
+	paths = append(paths, extractCorepackPaths(errorLine)...)
+
+	logrus.Debugf("🎯 Extracted %d paths from error", len(paths))
+	return paths
+}
+
+// extractMkdirPaths extracts paths from mkdir errors
+func extractMkdirPaths(errorLine string) []string {
+	var paths []string
 	if strings.Contains(errorLine, "mkdir") {
 		if start := strings.Index(errorLine, "'"); start != -1 {
 			if end := strings.Index(errorLine[start+1:], "'"); end != -1 {
@@ -2910,8 +2923,12 @@ func extractDirectoryPathsFromError(errorLine string) []string {
 			}
 		}
 	}
+	return paths
+}
 
-	// Pattern 2: symlink ... -> 'target' - Corepack binary symlink creation
+// extractSymlinkPaths extracts paths from symlink errors
+func extractSymlinkPaths(errorLine string) []string {
+	var paths []string
 	if strings.Contains(errorLine, "symlink") && strings.Contains(errorLine, "->") {
 		parts := strings.Split(errorLine, "->")
 		const minPartsForSymlink = 2
@@ -2924,8 +2941,12 @@ func extractDirectoryPathsFromError(errorLine string) []string {
 			}
 		}
 	}
+	return paths
+}
 
-	// Pattern 3: opendir 'path' - Corepack directory access
+// extractOpendirPaths extracts paths from opendir errors
+func extractOpendirPaths(errorLine string) []string {
+	var paths []string
 	if strings.Contains(errorLine, "opendir") {
 		if start := strings.Index(errorLine, "'"); start != -1 {
 			if end := strings.Index(errorLine[start+1:], "'"); end != -1 {
@@ -2935,8 +2956,12 @@ func extractDirectoryPathsFromError(errorLine string) []string {
 			}
 		}
 	}
+	return paths
+}
 
-	// Pattern 4: Direct path after "permission denied:"
+// extractPermissionDeniedPaths extracts paths from permission denied errors
+func extractPermissionDeniedPaths(errorLine string) []string {
+	var paths []string
 	if strings.Contains(errorLine, "permission denied:") {
 		parts := strings.Split(errorLine, "permission denied:")
 		const minPartsForPath = 2
@@ -2953,11 +2978,14 @@ func extractDirectoryPathsFromError(errorLine string) []string {
 			}
 		}
 	}
+	return paths
+}
 
-	// Pattern 5: Corepack-specific patterns - use dynamic detection only
+// extractCorepackPaths extracts paths from Corepack-specific errors
+func extractCorepackPaths(errorLine string) []string {
+	var paths []string
 	if strings.Contains(errorLine, "corepack") {
 		// Extract the actual path from the error message
-		// This ensures we fix the actual problematic directory
 		if start := strings.Index(errorLine, "'"); start != -1 {
 			if end := strings.Index(errorLine[start+1:], "'"); end != -1 {
 				path := errorLine[start+1 : start+1+end]
@@ -2967,7 +2995,6 @@ func extractDirectoryPathsFromError(errorLine string) []string {
 		}
 
 		// Also try to fix parent directories dynamically
-		// Walk up the directory tree to find writable parent directories
 		if len(paths) > 0 {
 			lastPath := paths[len(paths)-1]
 			parentDir := filepath.Dir(lastPath)
@@ -2978,7 +3005,5 @@ func extractDirectoryPathsFromError(errorLine string) []string {
 			}
 		}
 	}
-
-	logrus.Debugf("🎯 Extracted %d paths from error", len(paths))
 	return paths
 }

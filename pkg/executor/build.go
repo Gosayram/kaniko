@@ -1280,11 +1280,6 @@ func filesToSaveWithArgs(deps []string, buildArgs *dockerfile.BuildArgs) []strin
 	return deduplicatePaths(srcFiles)
 }
 
-// findFilesForDependency finds files for a specific dependency path
-func findFilesForDependency(searchPath string) ([]string, error) {
-	return findFilesForDependencyWithArgs(searchPath, nil)
-}
-
 // findFilesForDependencyWithArgs finds files for a specific dependency path with build args support
 func findFilesForDependencyWithArgs(searchPath string, buildArgs *dockerfile.BuildArgs) ([]string, error) {
 	logrus.Debugf("🔍 Searching for files: %s", searchPath)
@@ -1360,17 +1355,34 @@ func findSimilarPaths(searchPath string) ([]string, error) {
 
 	logrus.Debugf("🔍 Path %s does not exist, trying to find similar paths", searchPath)
 
-	// CRITICAL FIX: Try to find build output directories dynamically
-	// Instead of hardcoded paths, search for common build output patterns
+	// Try to find build output directories dynamically
+	buildOutputFiles := findBuildOutputDirectories(searchPath)
+	srcFiles = append(srcFiles, buildOutputFiles...)
+
+	// Try to find files matching the base name pattern
+	patternFiles := findFilesByPattern(searchPath)
+	srcFiles = append(srcFiles, patternFiles...)
+
+	// If we found files, return them
+	if len(srcFiles) > 0 {
+		logrus.Debugf("✅ Found %d files in similar paths", len(srcFiles))
+		return srcFiles, nil
+	}
+
+	// If exact path not found, try glob pattern
+	return findFilesWithGlob(searchPath)
+}
+
+// findBuildOutputDirectories searches for common build output directories
+func findBuildOutputDirectories(searchPath string) []string {
+	var srcFiles []string
+
 	buildOutputPatterns := []string{
 		".output", "dist", "build", "out", "target", "bin", "lib",
 	}
 
-	// Try to find parent directory and search within it
 	parentDir := filepath.Dir(searchPath)
-	baseName := filepath.Base(searchPath)
 
-	// Search in parent directory for common build output patterns
 	if parentDir != "/" && parentDir != "." {
 		if parentInfo, err := os.Stat(parentDir); err == nil && parentInfo.IsDir() {
 			logrus.Debugf("🔍 Searching for build output patterns in: %s", parentDir)
@@ -1400,7 +1412,16 @@ func findSimilarPaths(searchPath string) ([]string, error) {
 		}
 	}
 
-	// Also search for files matching the base name pattern
+	return srcFiles
+}
+
+// findFilesByPattern searches for files matching the base name pattern
+func findFilesByPattern(searchPath string) []string {
+	var srcFiles []string
+
+	parentDir := filepath.Dir(searchPath)
+	baseName := filepath.Base(searchPath)
+
 	if parentDir != "/" && parentDir != "." {
 		if parentInfo, err := os.Stat(parentDir); err == nil && parentInfo.IsDir() {
 			logrus.Debugf("🔍 Searching in parent directory: %s for pattern: %s", parentDir, baseName)
@@ -1430,14 +1451,7 @@ func findSimilarPaths(searchPath string) ([]string, error) {
 		}
 	}
 
-	// If we found files in common directories, return them
-	if len(srcFiles) > 0 {
-		logrus.Debugf("✅ Found %d files in similar paths", len(srcFiles))
-		return srcFiles, nil
-	}
-
-	// If exact path not found, try glob pattern
-	return findFilesWithGlob(searchPath)
+	return srcFiles
 }
 
 // findFilesWithGlob uses glob pattern to find files
@@ -1470,12 +1484,6 @@ func findFilesWithGlob(searchPath string) ([]string, error) {
 	}
 
 	return srcFiles, nil
-}
-
-// resolvePathVariables resolves environment variables in file paths
-// This is critical for multi-stage builds where paths contain variables like ${APP_TYPE}
-func resolvePathVariables(path string) string {
-	return resolvePathVariablesWithArgs(path, nil)
 }
 
 // resolvePathVariablesWithArgs resolves environment variables in file paths using build args

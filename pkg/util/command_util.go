@@ -530,7 +530,7 @@ func getUIDAndGID(userStr, groupStr string) (uid, gid uint32, err error) {
 	logrus.Debugf("🔍 Resolving UID/GID for user: '%s', group: '%s'", userStr, groupStr)
 
 	// CRITICAL FIX: Handle root user correctly
-	if userStr == "root" {
+	if userStr == rootUser {
 		logrus.Debugf("✅ Detected root user, using UID 0")
 		uid = 0
 	} else if uidNum, parseErr := getUID(userStr); parseErr == nil {
@@ -546,7 +546,7 @@ func getUIDAndGID(userStr, groupStr string) (uid, gid uint32, err error) {
 	// Handle group string
 	if groupStr != "" {
 		// CRITICAL FIX: Handle root group correctly
-		if groupStr == "root" {
+		if groupStr == rootUser {
 			logrus.Debugf("✅ Detected root group, using GID 0")
 			gid = 0
 		} else if gidNum, parseErr := getGID(groupStr); parseErr == nil {
@@ -582,13 +582,13 @@ func LookupUser(userStr string) (*user.User, error) {
 	logrus.Debugf("🔍 Looking up user: '%s'", userStr)
 
 	// CRITICAL FIX: Handle root user correctly
-	if userStr == "root" {
+	if userStr == rootUser {
 		logrus.Debugf("✅ Detected root user, using UID 0")
 		return &user.User{
 			Uid:      "0",
 			Gid:      "0",
-			Username: "root",
-			Name:     "root",
+			Username: rootUser,
+			Name:     rootUser,
 			HomeDir:  "/root",
 		}, nil
 	}
@@ -632,6 +632,7 @@ const (
 	minSafeUID     = 1000
 	maxSafeUID     = 65534
 	uidRange       = maxSafeUID - minSafeUID
+	rootUser       = "root" // Constant for root user string
 )
 
 // getSafeFallbackUID generates a safe UID for non-existing users
