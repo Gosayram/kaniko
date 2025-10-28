@@ -44,6 +44,7 @@ import (
 	"github.com/Gosayram/kaniko/pkg/logging"
 	"github.com/Gosayram/kaniko/pkg/multiplatform"
 	"github.com/Gosayram/kaniko/pkg/oci"
+	"github.com/Gosayram/kaniko/pkg/rootless"
 	"github.com/Gosayram/kaniko/pkg/timing"
 	"github.com/Gosayram/kaniko/pkg/util"
 	"github.com/Gosayram/kaniko/pkg/util/proc"
@@ -261,6 +262,38 @@ var RootCmd = &cobra.Command{
 			}
 			logrus.Warn("Kaniko is being run outside of a container. This can have dangerous effects on your system")
 		}
+
+		// Initialize rootless manager (enabled by default)
+		logrus.Infof("Initializing rootless mode...")
+		rootlessManager := rootless.NewManager()
+
+		// Set target user from configuration
+		if err := rootlessManager.SetTargetUserFromConfig(opts.DefaultUser); err != nil {
+			exit(errors.Wrap(err, "failed to set target user from config"))
+		}
+
+		// Phase 1: Automatic mode determination and setup under root
+		if err := rootlessManager.Initialize(); err != nil {
+			exit(errors.Wrap(err, "failed to initialize rootless manager"))
+		}
+
+		// Automatic determination of security mode based on target user
+		if err := rootlessManager.DetermineMode(); err != nil {
+			exit(errors.Wrap(err, "failed to determine security mode"))
+		}
+
+		// Log security warnings
+		if err := rootlessManager.LogSecurityWarnings(); err != nil {
+			exit(errors.Wrap(err, "failed to log security warnings"))
+		}
+
+		// Phase 2: Switch to target user (only in secure mode)
+		if rootlessManager.IsSecureMode() {
+			if err := rootlessManager.SwitchToTargetUser(); err != nil {
+				exit(errors.Wrap(err, "failed to switch to target user"))
+			}
+		}
+
 		if !opts.NoPush || opts.CacheRepo != "" {
 			if err := executor.CheckPushPermissions(opts); err != nil {
 				exit(errors.Wrap(err, "error checking push permissions -- "+

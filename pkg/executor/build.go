@@ -50,6 +50,7 @@ import (
 	"github.com/Gosayram/kaniko/pkg/logging"
 	"github.com/Gosayram/kaniko/pkg/multiplatform"
 	"github.com/Gosayram/kaniko/pkg/network"
+	"github.com/Gosayram/kaniko/pkg/rootless"
 	"github.com/Gosayram/kaniko/pkg/snapshot"
 	"github.com/Gosayram/kaniko/pkg/timing"
 	"github.com/Gosayram/kaniko/pkg/util"
@@ -273,7 +274,7 @@ func initConfig(img partial.WithConfigFile, opts *config.KanikoOptions) (*v1.Con
 		if opts.DefaultUser != "" {
 			// User explicitly specified via --default-user flag
 			if opts.DefaultUser == "root" {
-				logrus.Warnf("⚠️ SECURITY WARNING: Using --default-user=root is unsafe and prohibited in production!")
+				logrus.Warnf("SECURITY WARNING: Using --default-user=root is unsafe and prohibited in production!")
 				logrus.Warnf("Consider specifying a non-root user in your Dockerfile with USER instruction instead.")
 			}
 			logrus.Infof("Setting default user to: %s", opts.DefaultUser)
@@ -284,6 +285,19 @@ func initConfig(img partial.WithConfigFile, opts *config.KanikoOptions) (*v1.Con
 			const defaultSecureUser = "kaniko:kaniko"
 			logrus.Infof("No user specified. Setting secure default user: %s", defaultSecureUser)
 			imageConfig.Config.User = defaultSecureUser
+		}
+	}
+
+	// Rootless: automatic validation and setup of user
+	rootlessManager := rootless.GetManager()
+	if err := rootlessManager.ValidateTargetUser(imageConfig.Config.User); err != nil {
+		return nil, err
+	}
+
+	// Update rootless manager with user from Dockerfile if different from config
+	if imageConfig.Config.User != "" {
+		if err := rootlessManager.SetTargetUserFromConfig(imageConfig.Config.User); err != nil {
+			logrus.Warnf("Failed to update rootless manager with Dockerfile user: %v", err)
 		}
 	}
 

@@ -1,16 +1,16 @@
 # kaniko - Build Images In Kubernetes
 
 > [!IMPORTANT]
-> This repository is a **modern fork** of the original [Gosayram/kaniko](https://github.com/Gosayram/kaniko) project, now maintained by [Gosayram](https://github.com/Gosayram). The original Google Kaniko repository was archived on Jun 3, 2025. This fork continues development and maintenance to ensure the container image building tool remains available and functional for the community, with **modern Go 1.24+ infrastructure, full OCI 1.1 compliance, and built-in multi-architecture support**.
+> This repository is a **modern fork** of the original [Gosayram/kaniko](https://github.com/Gosayram/kaniko) project, now maintained by [Gosayram](https://github.com/Gosayram). The original Google Kaniko repository was archived on Jun 3, 2025. This fork continues development and maintenance to ensure the container image building tool remains available and functional for the community, with **modern Go 1.24+ infrastructure, full OCI 1.1 compliance, built-in multi-architecture support, secure rootless execution by default, advanced caching capabilities, enhanced logging and monitoring, and intelligent registry optimization**.
 
 [![Go Report Card](https://goreportcard.com/badge/github.com/Gosayram/kaniko)](https://goreportcard.com/report/github.com/Gosayram/kaniko)
 [![Version](https://img.shields.io/badge/Version-1.25.1-blue)](.release-version)
 
 ![kaniko logo](logo/Kaniko-Logo.png)
 
-kaniko is a modern tool to build container images from a Dockerfile, inside a container or Kubernetes cluster, featuring **built-in multi-architecture support, full OCI 1.1 compliance, and enhanced registry compatibility**.
+kaniko is a modern tool to build container images from a Dockerfile, inside a container or Kubernetes cluster, featuring **built-in multi-architecture support, full OCI 1.1 compliance, enhanced registry compatibility, and secure rootless execution by default**.
 
-kaniko doesn't depend on a Docker daemon and executes each command within a Dockerfile completely in userspace. This enables building container images in environments that can't easily or securely run a Docker daemon, such as a standard Kubernetes cluster. The modern implementation includes **native multi-platform coordination without privileged operations** and **excellent OCI compliance**.
+kaniko doesn't depend on a Docker daemon and executes each command within a Dockerfile completely in userspace. This enables building container images in environments that can't easily or securely run a Docker daemon, such as a standard Kubernetes cluster. The modern implementation includes **native multi-platform coordination without privileged operations**, **excellent OCI compliance**, and **automatic rootless security mode** for enhanced safety.
 
 kaniko is meant to be run as an image: `ghcr.io/gosayram/kaniko`. We do **not** recommend running the kaniko executor binary in another image, as it might not work as you expect - see [Known Issues](#known-issues).
 
@@ -160,6 +160,61 @@ CMD ["node", "app.js"]
 - ✅ **Use minimal base images**
 - ✅ **Regular security updates**
 
+## 🔐 Rootless Security Mode (Default)
+
+Kaniko now runs in **secure rootless mode by default**, providing enhanced security without requiring additional configuration. This modern security implementation automatically determines the optimal execution mode based on your Dockerfile and configuration.
+
+### Automatic Security Mode Detection
+
+Kaniko automatically determines the security mode based on the target user:
+
+#### Secure Mode (Rootless) - Default
+- **Target User**: Non-root user (e.g., `kaniko:kaniko`, `node:node`)
+- **Execution**: Runs in rootless mode after initialization
+- **Security**: Enhanced isolation and minimal privileges
+- **Activation**: Automatic when target user is non-root
+
+#### Legacy Mode (Root) - Only When Necessary
+- **Target User**: Root user (explicitly specified)
+- **Execution**: Runs with root privileges
+- **Security**: Traditional mode with security warnings
+- **Activation**: Automatic when target user is root (with warnings)
+
+### Security Mode Examples
+
+```bash
+# Secure rootless mode (default) - no additional flags needed
+docker run -v $(pwd):/workspace \
+  ghcr.io/gosayram/kaniko:latest \
+  --dockerfile=/workspace/Dockerfile \
+  --destination=myimage:latest \
+  --context=dir:///workspace
+
+# Automatic detection based on Dockerfile USER instruction
+# Dockerfile: USER node → Secure rootless mode
+# Dockerfile: USER root → Legacy mode with warnings
+```
+
+### Rootless Mode Benefits
+
+- **Enhanced Security**: Runs with minimal privileges after initialization
+- **Automatic Configuration**: No manual setup required
+- **Backward Compatibility**: Existing Dockerfiles work without changes
+- **Intelligent Fallback**: Automatically switches to root mode only when necessary
+- **Security Warnings**: Clear warnings when running in legacy root mode
+
+### Configuration Options
+
+```bash
+# Explicitly specify target user (affects security mode)
+--default-user=myuser:mygroup
+
+# Security mode is automatically determined based on:
+# 1. USER instruction in Dockerfile
+# 2. --default-user flag
+# 3. Default kaniko user (kaniko:kaniko)
+```
+
 ## 📋 Table of Contents
 
 - [kaniko - Build Images In Kubernetes](#kaniko---build-images-in-kubernetes)
@@ -172,6 +227,13 @@ CMD ["node", "app.js"]
     - [User Security](#user-security)
     - [Recommended Dockerfile Pattern](#recommended-dockerfile-pattern)
     - [Production Security Checklist](#production-security-checklist)
+  - [🔐 Rootless Security Mode (Default)](#-rootless-security-mode-default)
+    - [Automatic Security Mode Detection](#automatic-security-mode-detection)
+      - [Secure Mode (Rootless) - Default](#secure-mode-rootless---default)
+      - [Legacy Mode (Root) - Only When Necessary](#legacy-mode-root---only-when-necessary)
+    - [Security Mode Examples](#security-mode-examples)
+    - [Rootless Mode Benefits](#rootless-mode-benefits)
+    - [Configuration Options](#configuration-options)
   - [📋 Table of Contents](#-table-of-contents)
   - [🔧 How does kaniko work?](#-how-does-kaniko-work)
     - [🚀 **MODERN ARCHITECTURE** - Advanced Features](#-modern-architecture---advanced-features)
@@ -293,6 +355,15 @@ CMD ["node", "app.js"]
       - [Flag `--max-preload-size`](#flag---max-preload-size)
       - [Flag `--preload-timeout`](#flag---preload-timeout)
       - [Flag `--enable-smart-cache`](#flag---enable-smart-cache)
+      - [Flag `--max-cache-entries`](#flag---max-cache-entries-1)
+      - [Flag `--max-preload-size`](#flag---max-preload-size-1)
+      - [Flag `--preload-timeout`](#flag---preload-timeout-1)
+      - [Flag `--memory-monitoring`](#flag---memory-monitoring-1)
+      - [Flag `--gc-threshold`](#flag---gc-threshold-1)
+      - [Flag `--monitoring-interval`](#flag---monitoring-interval-1)
+      - [Flag `--max-parallel-commands`](#flag---max-parallel-commands-1)
+      - [Flag `--command-timeout`](#flag---command-timeout-1)
+      - [Flag `--enable-parallel-exec`](#flag---enable-parallel-exec-1)
     - [Debug Image](#debug-image)
   - [🔒 Security](#-security)
     - [Verifying Signed Kaniko Images](#verifying-signed-kaniko-images)
@@ -411,19 +482,24 @@ Kaniko's modern implementation includes several advanced subsystems:
 - **Build Optimization** - Pattern detection and automated suggestions
 
 #### **🌐 Network & Registry Intelligence**
-- **Connection Pooling** - Optimized HTTP connection management
-- **Parallel Layer Pulling** - Concurrent image layer downloads
+- **Connection Pooling** - Optimized HTTP connection management with configurable limits
+- **Parallel Layer Pulling** - Concurrent image layer downloads with intelligent batching
 - **Registry Compatibility** - Enhanced support for Docker Hub, GCR, ECR, ACR, JFrog
-- **Retry Mechanisms** - Exponential backoff for reliable operations
-- **DNS Optimization** - Caching and connection reuse
-- **Manifest Caching** - Intelligent manifest caching for performance
+- **Registry Intelligence** - Automatic capability detection and optimization per registry
+- **Retry Mechanisms** - Exponential backoff with configurable retry policies
+- **DNS Optimization** - Caching and connection reuse for improved performance
+- **Manifest Caching** - Intelligent manifest caching with TTL and invalidation
+- **Rate Limiting** - Automatic rate limit detection and compliance
 
 #### **📊 Monitoring & Profiling**
-- **Structured Logging** - JSON, text, color, and custom kaniko formats
+- **Structured Logging** - JSON, text, color, and custom kaniko formats with context
 - **Performance Metrics** - Build timing, memory usage, and throughput tracking
-- **Progress Tracking** - Real-time build progress with emoji indicators
-- **Error Analysis** - Detailed error reporting with context
-- **Build Profiling** - Integration with Slow Jam for performance analysis
+- **Progress Tracking** - Real-time build progress with emoji indicators and grouping
+- **Error Analysis** - Detailed error reporting with context and stack traces
+- **Build Profiling** - Integration with performance analysis tools
+- **Memory Monitoring** - Real-time memory usage tracking and garbage collection metrics
+- **Cache Analytics** - Hit rates, miss rates, and cache performance statistics
+- **Network Metrics** - Connection pool usage, retry statistics, and latency tracking
 
 ## 🚨 Known Issues
 
@@ -734,8 +810,10 @@ Kaniko includes advanced caching capabilities for enterprise-scale builds:
 ##### **Smart Cache with LRU Eviction**
 - **Automatic Preloading** - Popular base images preloaded for faster builds
 - **LRU Eviction Policy** - Intelligent cache management with configurable limits
+- **Predictive Caching** - Machine learning-based cache optimization
 - **Cache Statistics** - Hit rates, miss rates, and performance metrics
 - **Multi-Platform Cache** - Separate cache repositories per architecture
+- **Background Workers** - Asynchronous cache operations for better performance
 
 ##### **Advanced Cache Configuration**
 ```bash
@@ -754,6 +832,9 @@ Kaniko includes advanced caching capabilities for enterprise-scale builds:
 - **Intelligent Cache Policies** based on build patterns
 - **Memory-Efficient Caching** with configurable limits
 - **Cache Integrity Checks** to ensure data consistency
+- **Parallel Cache Operations** for improved throughput
+- **Cache Compression** with multiple algorithms (gzip, zstd)
+- **Cache Validation** with checksums and integrity verification
 
 ##### **Multi-Platform Cache Support**
 ```bash
@@ -767,6 +848,10 @@ Kaniko includes advanced caching capabilities for enterprise-scale builds:
 - **Cache Size Monitoring** - Automatic cleanup when limits exceeded
 - **Build Performance Tracking** - Cache impact on build times
 - **Optimization Recommendations** - Automated cache tuning suggestions
+- **Cache Health Monitoring** - Proactive cache maintenance and cleanup
+- **Performance Dashboards** - Visual cache performance metrics
+- **Cache Usage Patterns** - Analysis of cache access patterns
+- **Automated Cache Optimization** - Self-tuning cache parameters
 
 ### Pushing to Different Registries
 
@@ -1420,6 +1505,42 @@ Set this flag to specify the timeout for preload operations. Supports formats li
 
 Set this flag to `true` to enable smart cache with LRU eviction and automatic preloading capabilities. The smart cache provides 40-60% better cache utilization compared to the basic cache. Defaults to `true`.
 
+#### Flag `--max-cache-entries`
+
+Set the maximum number of cache entries to store in memory. This controls the size of the LRU cache. Defaults to `1000`. Higher values provide better cache hit rates but use more memory.
+
+#### Flag `--max-preload-size`
+
+Set the maximum number of images to preload in the background. Preloading improves build performance by having popular base images ready in cache. Defaults to `50`.
+
+#### Flag `--preload-timeout`
+
+Set the timeout for preload operations. If preloading takes longer than this duration, it will be cancelled. Defaults to `5m`.
+
+#### Flag `--memory-monitoring`
+
+Enable real-time memory monitoring and automatic garbage collection. When enabled, Kaniko will monitor memory usage and trigger garbage collection when thresholds are reached. Defaults to `true`.
+
+#### Flag `--gc-threshold`
+
+Set the memory threshold percentage for triggering garbage collection. When memory usage exceeds this percentage, garbage collection will be triggered. Defaults to `80`.
+
+#### Flag `--monitoring-interval`
+
+Set the interval for performance monitoring and metrics collection. Defaults to `30s`.
+
+#### Flag `--max-parallel-commands`
+
+Set the maximum number of commands that can run in parallel during multi-stage builds. Defaults to `4`.
+
+#### Flag `--command-timeout`
+
+Set the timeout for individual command execution. Commands that take longer than this duration will be cancelled. Defaults to `10m`.
+
+#### Flag `--enable-parallel-exec`
+
+Enable parallel execution of independent commands in multi-stage builds. This can significantly improve build performance. Defaults to `true`.
+
 ### Debug Image
 
 The kaniko executor image is based on scratch and doesn't contain a shell. We provide `ghcr.io/gosayram/kaniko:debug`, a debug image which consists of the kaniko executor image along with a busybox shell to enter.
@@ -1599,6 +1720,9 @@ Kaniko provides comprehensive logging and monitoring capabilities:
 - **Compact Mode** - Minimal logging for CI/CD environments
 - **Color-coded Output** - Visual distinction between log levels
 - **Timestamp Control** - Configurable timestamp formatting
+- **Context-aware Logging** - Rich context information for debugging
+- **Log Grouping** - Related log messages grouped for better readability
+- **Performance Logging** - Detailed performance metrics and timing information
 
 #### **Logging Configuration**
 ```bash
@@ -1625,6 +1749,9 @@ Kaniko provides comprehensive logging and monitoring capabilities:
 - **Memory Profiling** - Memory usage patterns and optimization suggestions
 - **Network Monitoring** - Registry communication and transfer statistics
 - **Cache Analytics** - Cache hit rates and performance metrics
+- **Real-time Metrics** - Live performance monitoring during builds
+- **Resource Alerts** - Automatic alerts for resource usage thresholds
+- **Build Health Monitoring** - Proactive monitoring of build health
 
 #### **Integration & Observability**
 - **Prometheus Metrics** - Export metrics for Prometheus monitoring
@@ -2112,10 +2239,13 @@ Kaniko provides sophisticated network and registry capabilities:
 
 #### **Registry Intelligence**
 - **Multi-Registry Support** - Enhanced support for Docker Hub, GCR, ECR, ACR, JFrog
+- **Automatic Capability Detection** - Dynamic detection of registry features and limitations
 - **Registry Mapping** - Flexible registry remapping for air-gapped environments
 - **Mirror Support** - Registry mirroring with fallback mechanisms
 - **Authentication** - Comprehensive authentication support for all major registries
 - **TLS Configuration** - Custom certificates and mutual TLS support
+- **Rate Limit Detection** - Automatic detection and compliance with registry rate limits
+- **Optimization Recommendations** - Registry-specific optimization suggestions
 
 #### **Registry Features**
 - **Credential Helpers** - Built-in support for Docker credential helpers
@@ -2151,6 +2281,9 @@ Kaniko provides comprehensive OCI compliance and standards support:
 - **Media Type Support** - Comprehensive support for all OCI media types
 - **Manifest Validation** - Built-in validation using crane and oras tools
 - **Index Support** - Full support for OCI Image Index with platform descriptors
+- **Automatic Validation** - Real-time validation during image creation
+- **Compliance Reporting** - Detailed compliance reports and validation results
+- **Standards Testing** - Continuous compliance testing with OCI test suite
 
 #### **OCI Features**
 - **Image Layout Support** - Native OCI image layout support

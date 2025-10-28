@@ -21,6 +21,7 @@ import (
 	"github.com/moby/buildkit/frontend/dockerfile/instructions"
 
 	"github.com/Gosayram/kaniko/pkg/dockerfile"
+	"github.com/Gosayram/kaniko/pkg/rootless"
 )
 
 // UserCommand implements the Dockerfile USER instruction
@@ -31,6 +32,14 @@ type UserCommand struct {
 
 // ExecuteCommand processes the USER instruction by setting the user/group for subsequent commands
 func (r *UserCommand) ExecuteCommand(config *v1.Config, buildArgs *dockerfile.BuildArgs) error {
+	// Rootless: automatic permission validation before execution
+	rootlessManager := rootless.GetManager()
+	if rootlessManager.IsRootlessMode() {
+		if err := rootlessManager.ValidateCommandPermissions("USER"); err != nil {
+			return err
+		}
+	}
+
 	// Use common helper for setup
 	helper := NewCommonCommandHelper()
 	helper.LogCommandExecution("USER")
@@ -45,6 +54,12 @@ func (r *UserCommand) ExecuteCommand(config *v1.Config, buildArgs *dockerfile.Bu
 	}
 
 	config.User = userStr
+
+	// Rootless: update target user in rootless manager
+	if err := rootlessManager.SetTargetUserFromConfig(userStr); err != nil {
+		return err
+	}
+
 	return nil
 }
 
