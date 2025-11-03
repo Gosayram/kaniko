@@ -196,12 +196,17 @@ func (c *CopyCommand) copySingleSource(
 
 	fi, err := os.Lstat(fullPath)
 	if err != nil {
-		// For cross-stage copies (--from), missing files might be acceptable in some cases
-		// But for regular COPY from context, missing files should fail the build
+		// For cross-stage copies (--from), missing files indicate a problem with the source stage
+		// This usually means commands in the source stage failed but were not properly detected
 		if c.cmd.From != "" {
-			// Cross-stage copy - warn but don't fail to allow flexible dependency handling
-			logrus.Warnf("Source file not found for cross-stage copy (--from=%s): %s, continuing anyway", c.cmd.From, fullPath)
-			return nil
+			// Cross-stage copy - log error and fail to prevent empty layers
+			logrus.Errorf("❌ Source file not found for cross-stage copy (--from=%s): %s", c.cmd.From, fullPath)
+			logrus.Errorf("   This usually means commands in stage %s failed "+
+				"(e.g., missing dependencies, failed downloads)", c.cmd.From)
+			logrus.Errorf("   Check the logs for the source stage to identify the root cause")
+			return errors.Wrapf(err,
+				"failed to copy %s from stage %s: file not found (likely due to failed commands in source stage)",
+				src, c.cmd.From)
 		}
 		// Regular COPY from context - this is an error as the file should exist
 		logrus.Errorf("COPY: Source file %s not found in build context (root: %s) - "+

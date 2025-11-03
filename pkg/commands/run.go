@@ -150,8 +150,8 @@ func executeAndCleanupCommand(cmd *exec.Cmd) error {
 		return nil
 	}
 
-	// Wait for command to complete
-	_ = waitAndCleanupProcess(cmd)
+	// Wait for command to complete and check for errors
+	waitErr := waitAndCleanupProcess(cmd)
 
 	// Get stderr output
 	stderrOutput := stderrBuf.String()
@@ -194,18 +194,36 @@ func executeAndCleanupCommand(cmd *exec.Cmd) error {
 			logrus.Infof("Retrying command: %s", commandStr)
 			if startErr := retryCmd.Start(); startErr != nil {
 				logrus.Warnf("Failed to start retry command: %v", startErr)
-				return nil
+				return errors.Wrapf(startErr, "command failed: %s", commandStr)
 			}
 
 			if retryErr := waitAndCleanupProcess(retryCmd); retryErr != nil {
-				logrus.Warnf("Retry command failed: %v", retryErr)
-			} else {
-				logrus.Infof("✅ Retry command succeeded after fixing permissions")
+				logrus.Errorf("Retry command failed: %v", retryErr)
+				return errors.Wrapf(retryErr, "command failed after retry: %s", commandStr)
 			}
+			logrus.Infof("✅ Retry command succeeded after fixing permissions")
 		}
 	}
 
-	// Don't fail the build on command errors
+	// Check for command execution errors
+	// Important: Don't ignore waitErr - commands that fail should fail the build
+	if waitErr != nil {
+		commandStr := strings.Join(cmd.Args, " ")
+		// Check if error is due to missing command (like "curl: not found")
+		if strings.Contains(stderrOutput, "not found") || strings.Contains(stderrOutput, "No such file") {
+			logrus.Errorf("❌ Command failed: command or file not found - %s", commandStr)
+			return errors.Wrapf(waitErr, "command failed: %s (output: %s)", commandStr, stderrOutput)
+		}
+		// Check for other common error patterns
+		if strings.Contains(stderrOutput, "Unable to locate package") || strings.Contains(stderrOutput, "Failed to") {
+			logrus.Errorf("❌ Command failed: %s", commandStr)
+			return errors.Wrapf(waitErr, "command failed: %s (output: %s)", commandStr, stderrOutput)
+		}
+		// For other errors, log and fail
+		logrus.Errorf("❌ Command execution failed: %s", commandStr)
+		return errors.Wrapf(waitErr, "command failed: %s (output: %s)", commandStr, stderrOutput)
+	}
+
 	return nil
 }
 
