@@ -168,9 +168,15 @@ func (c *CopyCommand) copySingleSource(
 
 	fi, err := os.Lstat(fullPath)
 	if err != nil {
-		// Don't fail on missing files - log warning and continue
-		logrus.Warnf("Source file not found: %s, continuing anyway", fullPath)
-		return nil
+		// For cross-stage copies (--from), missing files might be acceptable in some cases
+		// But for regular COPY from context, missing files should fail the build
+		if c.cmd.From != "" {
+			// Cross-stage copy - warn but don't fail to allow flexible dependency handling
+			logrus.Warnf("Source file not found for cross-stage copy (--from=%s): %s, continuing anyway", c.cmd.From, fullPath)
+			return nil
+		}
+		// Regular COPY from context - this is an error as the file should exist
+		return errors.Wrapf(err, "failed to copy %s: file not found in build context or image", src)
 	}
 	if fi.IsDir() && !strings.HasSuffix(fullPath, string(os.PathSeparator)) {
 		fullPath += "/"

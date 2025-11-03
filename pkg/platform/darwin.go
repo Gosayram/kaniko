@@ -1,5 +1,4 @@
 //go:build darwin
-// +build darwin
 
 // Package platform provides platform-specific utilities for Darwin/macOS systems.
 package platform
