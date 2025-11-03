@@ -118,14 +118,17 @@ var DirectoryPatterns = []*regexp.Regexp{
 
 // PermissionManager manages dynamic permission elevation for any user
 type PermissionManager struct {
-	originalUID  int
-	originalGID  int
-	elevated     bool
-	userName     string
-	userHome     string
-	userBinDir   string
-	userLibDir   string
-	userShareDir string
+	originalUID   int
+	originalGID   int
+	elevated      bool
+	userName      string
+	userHome      string
+	userBinDir    string
+	userLibDir    string
+	userShareDir  string
+	sudoChecked   bool
+	sudoAvailable bool
+	sudoCheckErr  error
 }
 
 // NewPermissionManager creates a new permission manager with dynamic user detection
@@ -199,15 +202,24 @@ func (pm *PermissionManager) ElevatePermissions() error {
 
 	logrus.Debugf("Elevating permissions for user %s (current: %d:%d)", pm.userName, pm.originalUID, pm.originalGID)
 
-	// Try to elevate permissions using sudo or similar mechanisms
-	if err := pm.elevateWithSudo(); err != nil {
-		logrus.Warnf("Could not elevate with sudo: %v, trying alternative methods", err)
-		return pm.elevateWithAlternative()
+	// Check sudo availability only once and cache the result
+	if !pm.sudoChecked {
+		pm.checkSudoAvailability()
 	}
 
-	pm.elevated = true
-	logrus.Debugf("Successfully elevated permissions")
-	return nil
+	// Try to elevate permissions using sudo or similar mechanisms
+	if pm.sudoAvailable {
+		if err := pm.elevateWithSudo(); err != nil {
+			logrus.Debugf("Could not elevate with sudo: %v, trying alternative methods", err)
+			return pm.elevateWithAlternative()
+		}
+		pm.elevated = true
+		logrus.Debugf("Successfully elevated permissions")
+		return nil
+	}
+
+	// Sudo not available - skip warning and go directly to alternatives
+	return pm.elevateWithAlternative()
 }
 
 // RestorePermissions restores original permissions
@@ -228,12 +240,29 @@ func (pm *PermissionManager) RestorePermissions() error {
 	return nil
 }
 
-// elevateWithSudo attempts to elevate permissions using sudo
-func (pm *PermissionManager) elevateWithSudo() error {
-	// Check if we can use sudo
+// checkSudoAvailability checks if sudo is available and caches the result
+func (pm *PermissionManager) checkSudoAvailability() {
+	pm.sudoChecked = true
 	cmd := exec.Command("sudo", "-n", "true")
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("sudo not available or not configured: %v", err)
+		pm.sudoAvailable = false
+		pm.sudoCheckErr = err
+		logrus.Debugf("Sudo not available: %v (this is normal in containers)", err)
+	} else {
+		pm.sudoAvailable = true
+		pm.sudoCheckErr = nil
+		logrus.Debugf("Sudo is available")
+	}
+}
+
+// elevateWithSudo attempts to elevate permissions using sudo
+func (pm *PermissionManager) elevateWithSudo() error {
+	// Check if we can use sudo (should already be checked)
+	if !pm.sudoAvailable {
+		if pm.sudoCheckErr != nil {
+			return pm.sudoCheckErr
+		}
+		return fmt.Errorf("sudo not available")
 	}
 
 	// Try to add current user to necessary groups
@@ -550,19 +579,27 @@ func GetFSFromLayers(root string, layers []v1.Layer, opts ...FSOpt) ([]string, e
 
 func extractLayers(root string, layers []v1.Layer, cfg *FSConfig) ([]string, error) {
 	var extractedFiles []string
-	logrus.Debugf("Starting extraction of %d layers to %s", len(layers), root)
+	logrus.Infof("Starting extraction of %d layers to %s", len(layers), root)
 
 	for i, l := range layers {
 		logrus.Debugf("Extracting layer %d/%d", i+1, len(layers))
 		layerFiles, err := extractSingleLayer(root, l, i, cfg)
 		if err != nil {
+			logrus.Warnf("Failed to extract layer %d/%d: %v", i+1, len(layers), err)
 			return nil, err
 		}
 		logrus.Debugf("Layer %d extracted %d files", i+1, len(layerFiles))
 		extractedFiles = append(extractedFiles, layerFiles...)
 	}
 
-	logrus.Debugf("Total extracted %d files from %d layers", len(extractedFiles), len(layers))
+	logrus.Infof("Total extracted %d files from %d layers to %s", len(extractedFiles), len(layers), root)
+	if len(extractedFiles) == 0 {
+		logrus.Warnf("⚠️ No files extracted! This might indicate all files were ignored or layers are empty")
+		// Check if directory exists
+		if entries, listErr := os.ReadDir(root); listErr == nil {
+			logrus.Infof("   However, extraction directory %s contains %d entries", root, len(entries))
+		}
+	}
 	return extractedFiles, nil
 }
 
@@ -800,18 +837,30 @@ func ExtractFile(dest string, hdr *tar.Header, cleanedName string, tr io.Reader)
 	logrus.Debugf("Image attempting to extract: %s (type: %c, size: %d, uid: %d, gid: %d)",
 		path, hdr.Typeflag, hdr.Size, hdr.Uid, hdr.Gid)
 
-	// Skip system directories that are read-only or should not be modified
-	for _, sysDir := range SystemDirectories {
-		if strings.HasPrefix(abs, sysDir) {
-			logrus.Debugf("Skipping system directory %s (protected by SystemDirectories)", path)
-			return nil
+	// CRITICAL: For cross-stage dependency extraction, we should NOT skip system directories
+	// because we're extracting to a temporary directory, not modifying the actual system
+	// Check if we're extracting to a temporary directory (contains "_extract")
+	if !strings.Contains(dest, "_extract") {
+		// Only skip system directories if NOT extracting to temp directory
+		for _, sysDir := range SystemDirectories {
+			if strings.HasPrefix(abs, sysDir) {
+				logrus.Debugf("Skipping system directory %s (protected by SystemDirectories)", path)
+				return nil
+			}
 		}
+	} else {
+		logrus.Debugf("Extracting to temporary directory, allowing system paths: %s", path)
 	}
 
 	// Keep original ignore list check for other paths
-	if CheckCleanedPathAgainstIgnoreList(abs) && !checkIgnoreListRoot(dest) {
-		logrus.Debugf("Skipping %s because it is in ignore list", path)
-		return nil
+	// But also skip this for temp extraction directories
+	if !strings.Contains(dest, "_extract") {
+		if CheckCleanedPathAgainstIgnoreList(abs) && !checkIgnoreListRoot(dest) {
+			logrus.Debugf("Skipping %s because it is in ignore list", path)
+			return nil
+		}
+	} else {
+		logrus.Debugf("Extracting to temporary directory, skipping ignore list check for: %s", path)
 	}
 
 	switch hdr.Typeflag {

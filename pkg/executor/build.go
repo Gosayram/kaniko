@@ -1211,9 +1211,12 @@ func extractStageImage(index int, sourceImage v1.Image) string {
 
 	// Extract the image to get all files from layers
 	logrus.Infof("📦 Extracting stage %d image to search for cross-stage dependencies", index)
+	logrus.Infof("   Extraction directory: %s", tempExtractDir)
+
 	extractedFiles, err := util.GetFSFromImage(tempExtractDir, sourceImage, util.ExtractFile)
 	if err != nil {
-		logrus.Warnf("Failed to extract image for stage %d: %v, will search in current filesystem", index, err)
+		logrus.Warnf("❌ Failed to extract image for stage %d: %v, will search in current filesystem", index, err)
+		logrus.Warnf("   Error details: %+v", err)
 		return "/" // Fallback to current filesystem
 	}
 
@@ -1224,8 +1227,22 @@ func extractStageImage(index int, sourceImage v1.Image) string {
 // logExtractionResults logs information about extracted files for debugging.
 func logExtractionResults(index int, tempExtractDir string, extractedFiles []string) {
 	logrus.Infof("✅ Extracted %d files from stage %d image to %s", len(extractedFiles), index, tempExtractDir)
+
 	if len(extractedFiles) == 0 {
 		logrus.Warnf("⚠️ No files extracted from stage %d image, files might not exist in image layers", index)
+		// Verify extraction directory exists
+		if entries, listErr := os.ReadDir(tempExtractDir); listErr == nil {
+			logrus.Infof("   Directory %s exists with %d entries "+
+				"(but extraction returned 0 files)", tempExtractDir, len(entries))
+			for i, entry := range entries {
+				if i >= maxSampleEntries {
+					break
+				}
+				logrus.Infof("   Entry %d: %s (dir: %v)", i, entry.Name(), entry.IsDir())
+			}
+		} else {
+			logrus.Warnf("   Directory %s does not exist or is not readable: %v", tempExtractDir, listErr)
+		}
 		return
 	}
 
@@ -1234,20 +1251,25 @@ func logExtractionResults(index int, tempExtractDir string, extractedFiles []str
 	if len(extractedFiles) < sampleSize {
 		actualSampleSize = len(extractedFiles)
 	}
-	logrus.Debugf("Sample extracted files (first %d): %v", actualSampleSize, extractedFiles[:actualSampleSize])
+	logrus.Infof("   Sample extracted files (first %d): %v", actualSampleSize, extractedFiles[:actualSampleSize])
 
 	// Check if extraction directory exists and list some files
 	entries, listErr := os.ReadDir(tempExtractDir)
 	if listErr != nil {
+		logrus.Warnf("   ⚠️ Cannot read extraction directory %s: %v", tempExtractDir, listErr)
 		return
 	}
 
-	logrus.Debugf("Extraction directory %s contains %d entries", tempExtractDir, len(entries))
-	for i, entry := range entries {
-		if i >= maxSampleEntries {
+	logrus.Infof("   Directory %s contains %d entries", tempExtractDir, len(entries))
+	// Show first few entries for debugging
+	shownCount := 0
+	for _, entry := range entries {
+		if shownCount >= maxSampleEntries {
 			break
 		}
-		logrus.Debugf("  Entry %d: %s (dir: %v)", i, entry.Name(), entry.IsDir())
+		entryPath := filepath.Join(tempExtractDir, entry.Name())
+		logrus.Infof("   Entry %d: %s (dir: %v, path: %s)", shownCount, entry.Name(), entry.IsDir(), entryPath)
+		shownCount++
 	}
 }
 
@@ -1263,13 +1285,27 @@ func saveCrossStageFiles(index int, filesToSave []string, tempExtractDir string)
 		copyRoot = "/"
 	}
 
-	for _, p := range filesToSave {
-		logrus.Infof("Saving file %s for later use", p)
-		if err := util.CopyFileOrSymlink(p, dstDir, copyRoot); err != nil {
-			logrus.Warnf("Failed to save file %s for cross-stage dependency: %v, continuing anyway", p, err)
+	logrus.Infof("💾 Saving %d cross-stage dependency files to %s (copy root: %s)", len(filesToSave), dstDir, copyRoot)
+	for i, p := range filesToSave {
+		logrus.Infof("   [%d/%d] Saving file: %s (relative path)", i+1, len(filesToSave), p)
+
+		// Build absolute source path for logging
+		absSrcPath := filepath.Join(copyRoot, p)
+		logrus.Infof("      Source: %s (absolute)", absSrcPath)
+
+		// Check if source exists before copying
+		if _, statErr := os.Stat(absSrcPath); statErr != nil {
+			logrus.Warnf("      ⚠️ Source file does not exist: %s (error: %v)", absSrcPath, statErr)
 			continue
 		}
-		logrus.Debugf("✅ Successfully saved file %s for cross-stage dependency", p)
+
+		if err := util.CopyFileOrSymlink(p, dstDir, copyRoot); err != nil {
+			logrus.Warnf("      ❌ Failed to save file %s: %v, continuing anyway", p, err)
+			continue
+		}
+
+		destPath := filepath.Join(dstDir, p)
+		logrus.Infof("      ✅ Successfully saved file %s -> %s", p, destPath)
 	}
 
 	return nil
@@ -1357,13 +1393,24 @@ func filesToSaveWithArgs(deps []string, buildArgs *dockerfile.BuildArgs) []strin
 // searching from the specified root directory. This is critical for finding files in extracted image layers.
 func filesToSaveWithArgsFromRoot(deps []string, buildArgs *dockerfile.BuildArgs, searchRoot string) []string {
 	srcFiles := []string{}
-	logrus.Infof("🔍 Searching for cross-stage dependencies in root: %s, patterns: %v", searchRoot, deps)
+	logrus.Infof("🔍 Searching for cross-stage dependencies in root: %s", searchRoot)
+	logrus.Infof("   Patterns to search: %v", deps)
+
+	// First, verify that searchRoot exists and is accessible
+	if searchRoot != "/" {
+		if rootInfo, rootErr := os.Stat(searchRoot); rootErr != nil {
+			logrus.Warnf("   ⚠️ Search root %s does not exist or is not accessible: %v", searchRoot, rootErr)
+		} else {
+			logrus.Infof("   ✓ Search root %s exists (dir: %v, mode: %v)", searchRoot, rootInfo.IsDir(), rootInfo.Mode())
+		}
+	}
+
 	for _, src := range deps {
 		// Build search path relative to the search root
 		// If src starts with /, we need to remove it before joining
 		cleanSrc := strings.TrimPrefix(src, "/")
 		searchPath := filepath.Join(searchRoot, cleanSrc)
-		logrus.Infof("🔍 Searching for file: %s (src: %s, root: %s)", searchPath, src, searchRoot)
+		logrus.Infof("🔍 Searching for file: %s (original: %s, clean: %s, root: %s)", searchPath, src, cleanSrc, searchRoot)
 
 		files, err := findFilesForDependencyWithArgsFromRoot(searchPath, buildArgs, searchRoot)
 		if err != nil {
@@ -1395,15 +1442,73 @@ func findFilesForDependencyWithArgsFromRoot(
 	}
 
 	// First try exact path (works for both files and directories)
-	if info, statErr := os.Stat(searchPath); statErr == nil {
-		logrus.Debugf("✅ Found exact path: %s", searchPath)
+	info, statErr := os.Stat(searchPath)
+	if statErr == nil {
+		logrus.Infof("   ✅ Found exact path: %s (dir: %v, size: %d)", searchPath, info.IsDir(), info.Size())
 		return processExistingPathFromRoot(searchPath, info, searchRoot)
 	}
 
-	logrus.Debugf("⚠️ Exact path not found: %s", searchPath)
+	logrus.Infof("   ⚠️ Exact path not found: %s (error: %v)", searchPath, statErr)
+
+	// Try to check parent directory
+	parentDir := filepath.Dir(searchPath)
+	parentInfo, parentErr := os.Stat(parentDir)
+	if parentErr == nil {
+		logrus.Infof("   ℹ️ Parent directory exists: %s (dir: %v)", parentDir, parentInfo.IsDir())
+		// List contents of parent directory for debugging
+		entries, listErr := os.ReadDir(parentDir)
+		if listErr == nil {
+			logrus.Infof("   Parent directory contains %d entries", len(entries))
+			for i, entry := range entries {
+				if i >= maxSampleEntries {
+					break
+				}
+				logrus.Infof("     - %s (dir: %v)", entry.Name(), entry.IsDir())
+			}
+		}
+	} else {
+		logrus.Infof("   ⚠️ Parent directory does not exist: %s (error: %v)", parentDir, parentErr)
+	}
 
 	// Path doesn't exist, try to find similar paths
 	return findSimilarPathsFromRoot(searchPath, searchRoot)
+}
+
+// calculateRelativePath calculates relative path from searchRoot to the given absolute path.
+// Returns empty string if calculation fails.
+func calculateRelativePath(absolutePath, searchRoot string) string {
+	var relPath string
+	var err error
+	if searchRoot == "/" {
+		// For root, remove leading "/" to get relative path
+		relPath = strings.TrimPrefix(absolutePath, "/")
+		if relPath == "" {
+			relPath = "."
+		}
+	} else {
+		// Ensure both paths are clean and absolute for Rel to work correctly
+		cleanRoot := filepath.Clean(searchRoot)
+		cleanPath := filepath.Clean(absolutePath)
+		relPath, err = filepath.Rel(cleanRoot, cleanPath)
+		if err != nil {
+			// Fallback: if Rel fails, try manual calculation
+			if strings.HasPrefix(cleanPath, cleanRoot) {
+				relPath = strings.TrimPrefix(strings.TrimPrefix(cleanPath, cleanRoot), "/")
+				if relPath == "" {
+					relPath = "."
+				}
+				err = nil
+			}
+		}
+	}
+	if err != nil {
+		return ""
+	}
+	// Normalize the relative path
+	if relPath != "." && strings.HasPrefix(relPath, "./") {
+		relPath = strings.TrimPrefix(relPath, "./")
+	}
+	return relPath
 }
 
 // processExistingPathFromRoot processes an existing file or directory, returning paths relative to search root
@@ -1411,22 +1516,19 @@ func processExistingPathFromRoot(searchPath string, info os.FileInfo, searchRoot
 	var srcFiles []string
 
 	if info.IsDir() {
-		logrus.Debugf("✅ Found directory: %s", searchPath)
+		logrus.Infof("   ✅ Found directory: %s", searchPath)
 		return walkDirectoryFromRoot(searchPath, searchRoot)
 	}
 
 	// It's a file, add it directly
-	// If searchRoot is not "/", we need to calculate relative path from searchRoot
-	var relPath string
-	var err error
-	if searchRoot == "/" {
-		relPath, err = filepath.Rel("/", searchPath)
-	} else {
-		relPath, err = filepath.Rel(searchRoot, searchPath)
-	}
-	if err == nil {
+	relPath := calculateRelativePath(searchPath, searchRoot)
+	if relPath != "" {
 		srcFiles = append(srcFiles, relPath)
-		logrus.Debugf("📁 Added file to cross-stage dependencies: %s (from root: %s)", relPath, searchRoot)
+		logrus.Infof("   📁 Added file to cross-stage dependencies: %s "+
+			"(absolute: %s, root: %s)", relPath, searchPath, searchRoot)
+	} else {
+		logrus.Warnf("   ⚠️ Failed to calculate relative path from %s to %s",
+			searchRoot, searchPath)
 	}
 	return srcFiles, nil
 }
@@ -1442,14 +1544,8 @@ func walkDirectoryFromRoot(searchPath, searchRoot string) ([]string, error) {
 			return nil
 		}
 		if !info.IsDir() {
-			var relPath string
-			var relErr error
-			if searchRoot == "/" {
-				relPath, relErr = filepath.Rel("/", path)
-			} else {
-				relPath, relErr = filepath.Rel(searchRoot, path)
-			}
-			if relErr == nil {
+			relPath := calculateRelativePath(path, searchRoot)
+			if relPath != "" {
 				srcFiles = append(srcFiles, relPath)
 				logrus.Debugf("📁 Added file to cross-stage dependencies: %s (from root: %s)", relPath, searchRoot)
 			}
@@ -1530,49 +1626,102 @@ func findBuildOutputDirectoriesFromRoot(searchPath, searchRoot string) []string 
 	return srcFiles
 }
 
-// findFilesByPatternFromRoot searches for files matching the base name pattern from specified root
-func findFilesByPatternFromRoot(searchPath, searchRoot string) []string {
+// processMatchingFile adds a matching file to the results with relative path calculation
+func processMatchingFile(path string, info os.FileInfo, searchRoot string, srcFiles []string) []string {
+	if info.IsDir() {
+		return srcFiles
+	}
+
+	relPath := calculateRelativePath(path, searchRoot)
+	if relPath != "" {
+		srcFiles = append(srcFiles, relPath)
+		logrus.Debugf("📁 Found matching file: %s (from root: %s)", relPath, searchRoot)
+	}
+	return srcFiles
+}
+
+// matchPattern checks if a file path matches the given pattern
+func matchPattern(path, baseName string) bool {
+	return strings.Contains(filepath.Base(path), baseName) ||
+		(strings.HasPrefix(baseName, ".") && strings.HasPrefix(filepath.Base(path), "."))
+}
+
+// walkPatternDirectory walks a directory searching for files matching the pattern
+func walkPatternDirectory(parentDir, baseName, searchRoot string) []string {
 	var srcFiles []string
 
-	parentDir := filepath.Dir(searchPath)
-	baseName := filepath.Base(searchPath)
+	logrus.Debugf("🔍 Searching in parent directory: %s for pattern: %s (root: %s)",
+		parentDir, baseName, searchRoot)
 
-	if parentDir != "/" && parentDir != "." {
-		if parentInfo, err := os.Stat(parentDir); err == nil && parentInfo.IsDir() {
-			logrus.Debugf("🔍 Searching in parent directory: %s for pattern: %s (root: %s)", parentDir, baseName, searchRoot)
-
-			// Search for files matching the base name pattern
-			err := filepath.Walk(parentDir, func(path string, info os.FileInfo, err error) error {
-				if err != nil {
-					return nil // Skip errors
-				}
-
-				// Check if this path matches our pattern
-				if strings.Contains(filepath.Base(path), baseName) ||
-					(strings.HasPrefix(baseName, ".") && strings.HasPrefix(filepath.Base(path), ".")) {
-					if !info.IsDir() {
-						var relPath string
-						var relErr error
-						if searchRoot == "/" {
-							relPath, relErr = filepath.Rel("/", path)
-						} else {
-							relPath, relErr = filepath.Rel(searchRoot, path)
-						}
-						if relErr == nil {
-							srcFiles = append(srcFiles, relPath)
-							logrus.Debugf("📁 Found matching file: %s (from root: %s)", relPath, searchRoot)
-						}
-					}
-				}
-				return nil
-			})
-			if err != nil {
-				logrus.Debugf("Failed to search in parent directory %s: %v", parentDir, err)
-			}
+	// Search for files matching the base name pattern
+	err := filepath.Walk(parentDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil // Skip errors
 		}
+
+		if matchPattern(path, baseName) {
+			srcFiles = processMatchingFile(path, info, searchRoot, srcFiles)
+		}
+		return nil
+	})
+
+	if err != nil {
+		logrus.Debugf("Failed to search in parent directory %s: %v", parentDir, err)
 	}
 
 	return srcFiles
+}
+
+// findFilesByPatternFromRoot finds files matching a pattern by searching in parent directory
+func findFilesByPatternFromRoot(searchPath, searchRoot string) []string {
+	parentDir := filepath.Dir(searchPath)
+	baseName := filepath.Base(searchPath)
+
+	if parentDir == "/" || parentDir == "." {
+		return []string{}
+	}
+
+	parentInfo, err := os.Stat(parentDir)
+	if err != nil || !parentInfo.IsDir() {
+		return []string{}
+	}
+
+	return walkPatternDirectory(parentDir, baseName, searchRoot)
+}
+
+// processGlobSymlink processes a symlink found via glob pattern
+func processGlobSymlink(src, searchRoot string, srcFiles []string) []string {
+	link, evalErr := util.EvalSymLink(src)
+	if evalErr != nil {
+		return srcFiles
+	}
+
+	linkRelPath := calculateRelativePath(link, searchRoot)
+	if linkRelPath != "" {
+		srcFiles = append(srcFiles, linkRelPath)
+		logrus.Debugf("📁 Found symlink target via glob: %s (from root: %s)", linkRelPath, searchRoot)
+	}
+	return srcFiles
+}
+
+// processGlobFile processes a regular file found via glob pattern
+func processGlobFile(src, searchRoot string, srcFiles []string) []string {
+	relPath := calculateRelativePath(src, searchRoot)
+	if relPath != "" {
+		srcFiles = append(srcFiles, relPath)
+		logrus.Debugf("📁 Found file via glob: %s (from root: %s)", relPath, searchRoot)
+	}
+	return srcFiles
+}
+
+// checkGlobDirectory checks if the glob search directory exists for debugging
+func checkGlobDirectory(searchPath string) {
+	searchDir := filepath.Dir(searchPath)
+	if _, dirErr := os.Stat(searchDir); dirErr == nil {
+		logrus.Debugf("Directory %s exists but pattern %s matches no files", searchDir, searchPath)
+	} else {
+		logrus.Debugf("Directory %s does not exist for pattern %s", searchDir, searchPath)
+	}
 }
 
 // findFilesWithGlobFromRoot uses glob pattern to find files from specified root
@@ -1584,14 +1733,9 @@ func findFilesWithGlobFromRoot(searchPath, searchRoot string) ([]string, error) 
 		logrus.Warnf("Failed to glob pattern %s: %v, continuing anyway", searchPath, err)
 		return srcFiles, nil
 	}
+
 	if len(srcs) == 0 {
-		// Check if the search path directory exists for better debugging
-		searchDir := filepath.Dir(searchPath)
-		if _, dirErr := os.Stat(searchDir); dirErr == nil {
-			logrus.Debugf("Directory %s exists but pattern %s matches no files", searchDir, searchPath)
-		} else {
-			logrus.Debugf("Directory %s does not exist for pattern %s", searchDir, searchPath)
-		}
+		checkGlobDirectory(searchPath)
 		logrus.Warnf("No files found for pattern %s, continuing anyway", searchPath)
 		return srcFiles, nil
 	}
@@ -1599,32 +1743,10 @@ func findFilesWithGlobFromRoot(searchPath, searchRoot string) ([]string, error) 
 	// Convert absolute paths to relative paths from searchRoot
 	for _, src := range srcs {
 		// Handle symlinks
-		if link, evalErr := util.EvalSymLink(src); evalErr == nil {
-			var linkRelPath string
-			var linkErr error
-			if searchRoot == "/" {
-				linkRelPath, linkErr = filepath.Rel("/", link)
-			} else {
-				linkRelPath, linkErr = filepath.Rel(searchRoot, link)
-			}
-			if linkErr == nil {
-				srcFiles = append(srcFiles, linkRelPath)
-				logrus.Debugf("📁 Found symlink target via glob: %s (from root: %s)", linkRelPath, searchRoot)
-			}
-		}
+		srcFiles = processGlobSymlink(src, searchRoot, srcFiles)
 
 		// Add the file itself
-		var relPath string
-		var relErr error
-		if searchRoot == "/" {
-			relPath, relErr = filepath.Rel("/", src)
-		} else {
-			relPath, relErr = filepath.Rel(searchRoot, src)
-		}
-		if relErr == nil {
-			srcFiles = append(srcFiles, relPath)
-			logrus.Debugf("📁 Found file via glob: %s (from root: %s)", relPath, searchRoot)
-		}
+		srcFiles = processGlobFile(src, searchRoot, srcFiles)
 	}
 
 	return srcFiles, nil
