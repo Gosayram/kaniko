@@ -653,11 +653,25 @@ func (s *stageBuilder) handleSnapshot(
 
 	// Protect snapshotter access with write lock
 	s.mutex.Lock()
+	logrus.Debugf("Taking snapshot for command: %s, files count: %d", command.String(), len(files))
+	if len(files) > 0 {
+		logrus.Debugf("Files to snapshot: %v", files)
+	}
 	tarPath, err := s.takeSnapshot(files, command.ShouldDetectDeletedFiles())
 	s.mutex.Unlock()
 
 	if err != nil {
 		return errors.Wrap(err, "failed to take snapshot")
+	}
+
+	if tarPath == "" {
+		logrus.Warnf("⚠️  WARNING: takeSnapshot returned empty tarPath for command %s", command.String())
+		logrus.Warnf("⚠️  This means NO LAYER will be created for this command!")
+		if len(files) > 0 {
+			logrus.Warnf("⚠️  Files that were supposed to be in layer: %v", files)
+		}
+	} else {
+		logrus.Debugf("Snapshot created: %s", tarPath)
 	}
 
 	if s.opts.Cache {

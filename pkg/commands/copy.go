@@ -46,10 +46,16 @@ type CopyCommand struct {
 	fileContext   util.FileContext
 	snapshotFiles []string
 	shdCache      bool
+	mu            sync.Mutex // Protects snapshotFiles for parallel copying
 }
 
 // ExecuteCommand executes the COPY command by copying files from source to destination.
 func (c *CopyCommand) ExecuteCommand(config *v1.Config, buildArgs *dockerfile.BuildArgs) error {
+	logrus.Debugf("COPY: Starting execution of command: %s", c.cmd.String())
+	logrus.Debugf("COPY: File context root: %s", c.fileContext.Root)
+	logrus.Debugf("COPY: Source paths: %v", c.cmd.SourcePaths)
+	logrus.Debugf("COPY: Destination: %s", c.cmd.DestPath)
+
 	// Rootless: automatic permission validation before execution
 	rootlessManager := rootless.GetManager()
 	if rootlessManager.IsRootlessMode() {
@@ -63,6 +69,12 @@ func (c *CopyCommand) ExecuteCommand(config *v1.Config, buildArgs *dockerfile.Bu
 
 	// Setup file context
 	c.fileContext = helper.SetupFileContext(c.cmd, c.fileContext)
+	logrus.Debugf("COPY: File context root after setup: %s", c.fileContext.Root)
+
+	// Reset snapshotFiles at start of execution
+	c.mu.Lock()
+	c.snapshotFiles = []string{}
+	c.mu.Unlock()
 
 	// Setup environment and permissions
 	replacementEnvs := buildArgs.ReplacementEnvs(config.Env)
@@ -83,8 +95,24 @@ func (c *CopyCommand) ExecuteCommand(config *v1.Config, buildArgs *dockerfile.Bu
 		return err
 	}
 
+	logrus.Debugf("COPY: Resolved sources: %v, destination: %s", srcs, dest)
+
 	// Copy each source
-	return c.copySources(srcs, dest, config, uid, gid, chmod, useDefaultChmod)
+	err = c.copySources(srcs, dest, config, uid, gid, chmod, useDefaultChmod)
+	if err != nil {
+		return err
+	}
+
+	c.mu.Lock()
+	finalFiles := len(c.snapshotFiles)
+	c.mu.Unlock()
+	logrus.Infof("COPY: Command completed. Total files added to snapshot: %d", finalFiles)
+	if finalFiles == 0 {
+		logrus.Warnf("COPY: ⚠️  WARNING: No files were added to snapshot for command %s! "+
+			"This means NO LAYER will be created!", c.cmd.String())
+	}
+
+	return nil
 }
 
 // Note: setupUserGroup and resolveSourcesAndDest functions have been moved to common.go
@@ -176,6 +204,8 @@ func (c *CopyCommand) copySingleSource(
 			return nil
 		}
 		// Regular COPY from context - this is an error as the file should exist
+		logrus.Errorf("COPY: Source file %s not found in build context (root: %s) - "+
+			"this will fail the build", src, c.fileContext.Root)
 		return errors.Wrapf(err, "failed to copy %s: file not found in build context or image", src)
 	}
 	if fi.IsDir() && !strings.HasSuffix(fullPath, string(os.PathSeparator)) {
@@ -221,7 +251,9 @@ func (c *CopyCommand) copyDirectory(fullPath, destPath string, uid, gid int64,
 	if err != nil {
 		return errors.Wrap(err, "copying dir")
 	}
+	c.mu.Lock()
 	c.snapshotFiles = append(c.snapshotFiles, copiedFiles...)
+	c.mu.Unlock()
 	return nil
 }
 
@@ -235,7 +267,9 @@ func (c *CopyCommand) copySymlink(fullPath, destPath string) error {
 	if exclude {
 		return nil
 	}
+	c.mu.Lock()
 	c.snapshotFiles = append(c.snapshotFiles, destPath)
+	c.mu.Unlock()
 	return nil
 }
 
@@ -245,17 +279,27 @@ func (c *CopyCommand) copyRegularFile(fullPath, destPath string, uid, gid int64,
 	// ... Else, we want to copy over a file
 	exclude, err := util.CopyFile(fullPath, destPath, c.fileContext, uid, gid, chmod, useDefaultChmod)
 	if err != nil {
+		logrus.Warnf("COPY: Failed to copy file %s to %s: %v", fullPath, destPath, err)
 		return errors.Wrap(err, "copying file")
 	}
 	if exclude {
+		logrus.Debugf("COPY: File %s excluded from snapshot (likely in .dockerignore)", destPath)
 		return nil
 	}
+	c.mu.Lock()
 	c.snapshotFiles = append(c.snapshotFiles, destPath)
+	totalFiles := len(c.snapshotFiles)
+	c.mu.Unlock()
+	logrus.Debugf("COPY: Added file %s to snapshot files list (total: %d)", destPath, totalFiles)
 	return nil
 }
 
 // FilesToSnapshot should return an empty array if still nil; no files were changed
 func (c *CopyCommand) FilesToSnapshot() []string {
+	if len(c.snapshotFiles) == 0 {
+		logrus.Warnf("COPY: FilesToSnapshot() returned empty array for command %s - "+
+			"this may cause no layer to be created!", c.cmd.String())
+	}
 	return c.snapshotFiles
 }
 

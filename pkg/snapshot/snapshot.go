@@ -95,61 +95,131 @@ func (s *Snapshotter) takeIncrementalSnapshot(_ bool) (string, error) {
 	return s.incremental.TakeIncrementalSnapshot()
 }
 
+// verifyFilesExist checks if files exist before adding to layered map
+func verifyFilesExist(filesToAdd []string) {
+	for _, file := range filesToAdd {
+		if _, statErr := os.Lstat(file); statErr != nil {
+			if os.IsNotExist(statErr) {
+				logrus.Warnf("⚠️  File %s does not exist on filesystem when trying to add to layered map!", file)
+				logrus.Warnf("⚠️  This file will be skipped and NOT included in the snapshot!")
+			} else {
+				logrus.Warnf("Failed to stat file %s: %v", file, statErr)
+			}
+		}
+	}
+}
+
+// addFilesToLayeredMap adds files to the current layer in the layered map
+func (s *Snapshotter) addFilesToLayeredMap(filesToAdd []string) error {
+	for _, file := range filesToAdd {
+		if addErr := s.l.Add(file); addErr != nil {
+			logrus.Errorf("Failed to add file %s to layered map: %v", file, addErr)
+			return fmt.Errorf("unable to add file %s to layered map: %w", file, addErr)
+		}
+		logrus.Tracef("Added file to layered map: %s", file)
+	}
+	return nil
+}
+
+// getWhiteoutFiles gets files to whiteout for deleted files
+func (s *Snapshotter) getWhiteoutFiles(shdCheckDelete bool) ([]string, error) {
+	if !shdCheckDelete {
+		return nil, nil
+	}
+
+	_, deletedFiles := util.WalkFS(s.directory, s.l.GetCurrentPaths(), func(_ string) (bool, error) {
+		return true, nil
+	})
+
+	logrus.Debugf("Deleting in layer: %v", deletedFiles)
+	// Whiteout files in current layer.
+	for file := range deletedFiles {
+		if deleteErr := s.l.AddDelete(file); deleteErr != nil {
+			return nil, fmt.Errorf("unable to whiteout file %s in layered map: %w", file, deleteErr)
+		}
+	}
+
+	filesToWhiteout := removeObsoleteWhiteouts(deletedFiles)
+	sort.Strings(filesToWhiteout)
+	return filesToWhiteout, nil
+}
+
+// verifyTarFile verifies that tar file was created and has content
+func verifyTarFile(tarFile *os.File, expectedFileCount int) {
+	fi, statErr := tarFile.Stat()
+	if statErr != nil {
+		logrus.Warnf("Failed to stat tar file: %v", statErr)
+		return
+	}
+
+	logrus.Debugf("Tar file created: %s, size: %d bytes", tarFile.Name(), fi.Size())
+	if fi.Size() == 0 && expectedFileCount > 0 {
+		logrus.Warnf("⚠️  WARNING: Tar file is empty but %d files were supposed to be written!", expectedFileCount)
+	}
+}
+
 // takeRegularSnapshot performs a regular snapshot (original implementation)
 func (s *Snapshotter) takeRegularSnapshot(files []string, shdCheckDelete, forceBuildMetadata bool) (string, error) {
-	f, err := os.CreateTemp(config.KanikoDir, "")
-	if err != nil {
-		return "", err
+	f, createErr := os.CreateTemp(config.KanikoDir, "")
+	if createErr != nil {
+		return "", createErr
 	}
 	defer f.Close()
 
 	s.l.Snapshot()
 	if len(files) == 0 && !forceBuildMetadata {
-		logrus.Info("No files changed in this command, skipping snapshotting.")
+		logrus.Warnf("⚠️  No files changed in this command (files list is empty), " +
+			"skipping snapshotting. This means NO LAYER will be created!")
+		logrus.Warnf("⚠️  If this is a COPY command, the copied files may not be included in the final image!")
 		return "", nil
 	}
 
-	filesToAdd, err := filesystem.ResolvePaths(files, s.ignorelist)
-	if err != nil {
-		return "", err
+	filesToAdd, resolveErr := filesystem.ResolvePaths(files, s.ignorelist)
+	if resolveErr != nil {
+		return "", resolveErr
 	}
 
 	logrus.Info("Taking snapshot of files...")
+	logrus.Debugf("Files to snapshot: %v (count: %d)", filesToAdd, len(filesToAdd))
 
 	sort.Strings(filesToAdd)
+
+	// Verify files exist before adding to layered map
+	verifyFilesExist(filesToAdd)
+
 	logrus.Debugf("Adding to layer: %v", filesToAdd)
 
 	// Add files to current layer.
-	for _, file := range filesToAdd {
-		if err := s.l.Add(file); err != nil {
-			return "", fmt.Errorf("unable to add file %s to layered map: %w", file, err)
-		}
+	if err := s.addFilesToLayeredMap(filesToAdd); err != nil {
+		return "", err
 	}
 
 	// Get whiteout paths
-	var filesToWhiteout []string
-	if shdCheckDelete {
-		_, deletedFiles := util.WalkFS(s.directory, s.l.GetCurrentPaths(), func(_ string) (bool, error) {
-			return true, nil
-		})
-
-		logrus.Debugf("Deleting in layer: %v", deletedFiles)
-		// Whiteout files in current layer.
-		for file := range deletedFiles {
-			if err := s.l.AddDelete(file); err != nil {
-				return "", fmt.Errorf("unable to whiteout file %s in layered map: %w", file, err)
-			}
-		}
-
-		filesToWhiteout = removeObsoleteWhiteouts(deletedFiles)
-		sort.Strings(filesToWhiteout)
+	filesToWhiteout, whiteoutErr := s.getWhiteoutFiles(shdCheckDelete)
+	if whiteoutErr != nil {
+		return "", whiteoutErr
 	}
 
 	t := util.NewTar(f)
 	defer t.Close()
-	if err := writeToTar(t, filesToAdd, filesToWhiteout); err != nil {
-		return "", err
+
+	logrus.Debugf("About to write %d files to tar snapshot", len(filesToAdd))
+	if len(filesToAdd) > 0 {
+		logrus.Debugf("Files to write to tar: %v", filesToAdd)
 	}
+
+	// Sync filesystem before writing to tar to ensure all files are written to disk
+	if runtime.GOOS == "linux" {
+		syncFilesystem()
+	}
+
+	if writeErr := writeToTar(t, filesToAdd, filesToWhiteout); writeErr != nil {
+		return "", fmt.Errorf("failed to write files to tar: %w", writeErr)
+	}
+
+	// Verify tar file was created and has content
+	verifyTarFile(f, len(filesToAdd))
+
 	return f.Name(), nil
 }
 
@@ -304,17 +374,35 @@ func writeToTar(t util.Tar, files, whiteouts []string) error {
 	}
 
 	for _, path := range files {
+		// Verify file exists before adding to tar
+		if _, statErr := os.Lstat(path); statErr != nil {
+			if os.IsNotExist(statErr) {
+				logrus.Warnf("⚠️  CRITICAL: File %s does not exist when trying to write to tar! "+
+					"This file will NOT be in the layer!", path)
+				logrus.Warnf("⚠️  This may cause files to be missing in subsequent stages or final image!")
+				continue
+			}
+			logrus.Warnf("Failed to stat file %s: %v, skipping", path, statErr)
+			continue
+		}
+
 		if err := addParentDirectories(t, addedPaths, path); err != nil {
+			logrus.Warnf("Failed to add parent directories for %s: %v", path, err)
 			return err
 		}
 		if _, pathAdded := addedPaths[path]; pathAdded {
+			logrus.Debugf("Path %s already added to tar, skipping", path)
 			continue
 		}
+		logrus.Debugf("Adding file to tar: %s", path)
 		if err := t.AddFileToTar(path); err != nil {
-			return err
+			logrus.Errorf("❌ CRITICAL: Failed to add file %s to tar: %v - this file will NOT be in the layer!", path, err)
+			return fmt.Errorf("failed to add file %s to tar: %w", path, err)
 		}
 		addedPaths[path] = true
+		logrus.Debugf("✅ Successfully added file to tar: %s", path)
 	}
+	logrus.Debugf("Total files written to tar: %d", len(addedPaths))
 	return nil
 }
 
