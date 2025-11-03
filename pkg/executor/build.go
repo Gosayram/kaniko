@@ -101,6 +101,9 @@ const (
 	// This is critical for cross-stage dependencies where files might be written
 	// by parallel RUN commands
 	FilesystemSyncDelay = 500 * time.Millisecond
+
+	// maxSampleEntries is the maximum number of directory entries to log for debugging
+	maxSampleEntries = 5
 )
 
 // for testing
@@ -1195,6 +1198,83 @@ func handleFinalImage(sourceImage v1.Image, opts *config.KanikoOptions, t *timin
 	return sourceImage, nil
 }
 
+// extractStageImage extracts the stage image to a temporary directory for cross-stage dependency search.
+// Returns the extraction directory path (or "/" if extraction failed).
+func extractStageImage(index int, sourceImage v1.Image) string {
+	stageIndexStr := strconv.Itoa(index)
+	tempExtractDir := filepath.Join(config.KanikoDir, stageIndexStr+"_extract")
+
+	// Clean up any previous extraction
+	if err := os.RemoveAll(tempExtractDir); err != nil {
+		logrus.Debugf("Failed to remove previous extraction directory %s: %v, continuing anyway", tempExtractDir, err)
+	}
+
+	// Extract the image to get all files from layers
+	logrus.Infof("📦 Extracting stage %d image to search for cross-stage dependencies", index)
+	extractedFiles, err := util.GetFSFromImage(tempExtractDir, sourceImage, util.ExtractFile)
+	if err != nil {
+		logrus.Warnf("Failed to extract image for stage %d: %v, will search in current filesystem", index, err)
+		return "/" // Fallback to current filesystem
+	}
+
+	logExtractionResults(index, tempExtractDir, extractedFiles)
+	return tempExtractDir
+}
+
+// logExtractionResults logs information about extracted files for debugging.
+func logExtractionResults(index int, tempExtractDir string, extractedFiles []string) {
+	logrus.Infof("✅ Extracted %d files from stage %d image to %s", len(extractedFiles), index, tempExtractDir)
+	if len(extractedFiles) == 0 {
+		logrus.Warnf("⚠️ No files extracted from stage %d image, files might not exist in image layers", index)
+		return
+	}
+
+	const sampleSize = 10
+	actualSampleSize := sampleSize
+	if len(extractedFiles) < sampleSize {
+		actualSampleSize = len(extractedFiles)
+	}
+	logrus.Debugf("Sample extracted files (first %d): %v", actualSampleSize, extractedFiles[:actualSampleSize])
+
+	// Check if extraction directory exists and list some files
+	entries, listErr := os.ReadDir(tempExtractDir)
+	if listErr != nil {
+		return
+	}
+
+	logrus.Debugf("Extraction directory %s contains %d entries", tempExtractDir, len(entries))
+	for i, entry := range entries {
+		if i >= maxSampleEntries {
+			break
+		}
+		logrus.Debugf("  Entry %d: %s (dir: %v)", i, entry.Name(), entry.IsDir())
+	}
+}
+
+// saveCrossStageFiles saves cross-stage dependency files to the destination directory.
+func saveCrossStageFiles(index int, filesToSave []string, tempExtractDir string) error {
+	dstDir := filepath.Join(config.KanikoDir, strconv.Itoa(index))
+	if err := os.MkdirAll(dstDir, DefaultDirPerm); err != nil {
+		return errors.Wrap(err, fmt.Sprintf("to create workspace for stage %d", index))
+	}
+
+	copyRoot := tempExtractDir
+	if tempExtractDir == "/" {
+		copyRoot = "/"
+	}
+
+	for _, p := range filesToSave {
+		logrus.Infof("Saving file %s for later use", p)
+		if err := util.CopyFileOrSymlink(p, dstDir, copyRoot); err != nil {
+			logrus.Warnf("Failed to save file %s for cross-stage dependency: %v, continuing anyway", p, err)
+			continue
+		}
+		logrus.Debugf("✅ Successfully saved file %s for cross-stage dependency", p)
+	}
+
+	return nil
+}
+
 func handleNonFinalStage(
 	index int,
 	stage *config.KanikoStage,
@@ -1213,23 +1293,9 @@ func handleNonFinalStage(
 
 	// CRITICAL FIX: Files might be in image layers, not in current filesystem
 	// Extract image to temporary directory first, then search for files there
-	stageIndexStr := strconv.Itoa(index)
-	tempExtractDir := filepath.Join(config.KanikoDir, stageIndexStr+"_extract")
-
-	// Clean up any previous extraction
-	if err := os.RemoveAll(tempExtractDir); err != nil {
-		logrus.Debugf("Failed to remove previous extraction directory %s: %v, continuing anyway", tempExtractDir, err)
-	}
-
-	// Extract the image to get all files from layers
-	logrus.Infof("📦 Extracting stage %d image to search for cross-stage dependencies", index)
-	extractedFiles, err := util.GetFSFromImage(tempExtractDir, sourceImage, util.ExtractFile)
-	if err != nil {
-		logrus.Warnf("Failed to extract image for stage %d: %v, will search in current filesystem", index, err)
-		// Fallback to current filesystem if extraction fails
-		tempExtractDir = "/"
-	} else {
-		logrus.Debugf("✅ Extracted %d files from stage %d image to %s", len(extractedFiles), index, tempExtractDir)
+	tempExtractDir := extractStageImage(index, sourceImage)
+	if tempExtractDir == "/" {
+		logrus.Infof("🔄 Using current filesystem (/) for cross-stage dependency search")
 	}
 
 	// Force filesystem sync to ensure all files are written before searching
@@ -1254,27 +1320,8 @@ func handleNonFinalStage(
 		)
 	}
 
-	dstDir := filepath.Join(config.KanikoDir, strconv.Itoa(index))
-	if err := os.MkdirAll(dstDir, DefaultDirPerm); err != nil {
-		return errors.Wrap(err,
-			fmt.Sprintf("to create workspace for stage %d", index))
-	}
-
-	for _, p := range filesToSave {
-		logrus.Infof("Saving file %s for later use", p)
-		// CopyFileOrSymlink expects paths relative to root
-		// If we extracted the image, filesToSave contains paths relative to tempExtractDir
-		// Otherwise, they are relative to "/"
-		copyRoot := tempExtractDir
-		if tempExtractDir == "/" {
-			copyRoot = "/"
-		}
-		if err := util.CopyFileOrSymlink(p, dstDir, copyRoot); err != nil {
-			// Don't fail on individual file copy errors - log warning and continue
-			logrus.Warnf("Failed to save file %s for cross-stage dependency: %v, continuing anyway", p, err)
-			continue
-		}
-		logrus.Debugf("✅ Successfully saved file %s for cross-stage dependency", p)
+	if err := saveCrossStageFiles(index, filesToSave, tempExtractDir); err != nil {
+		return err
 	}
 
 	// Clean up temporary extraction directory
@@ -1310,10 +1357,13 @@ func filesToSaveWithArgs(deps []string, buildArgs *dockerfile.BuildArgs) []strin
 // searching from the specified root directory. This is critical for finding files in extracted image layers.
 func filesToSaveWithArgsFromRoot(deps []string, buildArgs *dockerfile.BuildArgs, searchRoot string) []string {
 	srcFiles := []string{}
+	logrus.Infof("🔍 Searching for cross-stage dependencies in root: %s, patterns: %v", searchRoot, deps)
 	for _, src := range deps {
 		// Build search path relative to the search root
-		searchPath := filepath.Join(searchRoot, filepath.Clean("/"+src))
-		logrus.Debugf("🔍 Searching for files: %s (root: %s)", searchPath, searchRoot)
+		// If src starts with /, we need to remove it before joining
+		cleanSrc := strings.TrimPrefix(src, "/")
+		searchPath := filepath.Join(searchRoot, cleanSrc)
+		logrus.Infof("🔍 Searching for file: %s (src: %s, root: %s)", searchPath, src, searchRoot)
 
 		files, err := findFilesForDependencyWithArgsFromRoot(searchPath, buildArgs, searchRoot)
 		if err != nil {
@@ -1535,6 +1585,13 @@ func findFilesWithGlobFromRoot(searchPath, searchRoot string) ([]string, error) 
 		return srcFiles, nil
 	}
 	if len(srcs) == 0 {
+		// Check if the search path directory exists for better debugging
+		searchDir := filepath.Dir(searchPath)
+		if _, dirErr := os.Stat(searchDir); dirErr == nil {
+			logrus.Debugf("Directory %s exists but pattern %s matches no files", searchDir, searchPath)
+		} else {
+			logrus.Debugf("Directory %s does not exist for pattern %s", searchDir, searchPath)
+		}
 		logrus.Warnf("No files found for pattern %s, continuing anyway", searchPath)
 		return srcFiles, nil
 	}
