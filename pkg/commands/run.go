@@ -279,23 +279,28 @@ func checkCommandErrors(cmd *exec.Cmd, waitErr error, combinedOutput string) err
 
 // detectStderrError detects error patterns in stderr/stdout output
 // Returns empty string if no error detected, or error message if detected
+// Order matters: more specific patterns should be checked first
 func detectStderrError(output string) string {
 	// Normalize output for case-insensitive matching
 	outputLower := strings.ToLower(output)
 
 	switch {
-	case strings.Contains(outputLower, "not found") || strings.Contains(outputLower, "no such file"):
-		return errCommandOrFileNotFound
+	// Check most specific patterns first
 	case strings.Contains(outputLower, "unable to locate package"):
+		// APT package not found error - most specific
 		return errPackageNotFound
 	case strings.Contains(outputLower, "e: ") &&
 		(strings.Contains(outputLower, "unable") || strings.Contains(outputLower, "failed")):
-		// APT/Debian error patterns
+		// APT/Debian error patterns (E: prefix indicates APT errors)
 		return errPackageManagerError
 	case strings.Contains(outputLower, "/bin/sh:") && strings.Contains(outputLower, "not found"):
 		// Shell error messages like "/bin/sh: 1: curl: not found"
 		return errCommandOrFileNotFound
 	case strings.Contains(outputLower, "command not found") || strings.Contains(outputLower, "no such file or directory"):
+		// Command execution errors
+		return errCommandOrFileNotFound
+	case strings.Contains(outputLower, "not found") || strings.Contains(outputLower, "no such file"):
+		// Generic "not found" pattern - check last to avoid false positives
 		return errCommandOrFileNotFound
 	default:
 		return ""

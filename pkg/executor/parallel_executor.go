@@ -20,16 +20,19 @@ import (
 	"context"
 	"fmt"
 	"runtime"
+	"sort"
 	"sync"
 	"time"
 
 	v1 "github.com/google/go-containerregistry/pkg/v1"
+	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/sync/errgroup"
 
 	"github.com/Gosayram/kaniko/pkg/commands"
 	"github.com/Gosayram/kaniko/pkg/config"
 	"github.com/Gosayram/kaniko/pkg/dockerfile"
+	"github.com/Gosayram/kaniko/pkg/logging"
 )
 
 // CommandDependency represents a dependency between commands
@@ -221,18 +224,22 @@ func (pe *ParallelExecutor) buildExecutionOrder() []int {
 	}
 
 	// Kahn's algorithm: start with commands that have no dependencies
+	// Use a sorted slice to ensure stable execution order (commands execute in index order when no dependencies)
 	queue := make([]int, 0)
 	for i, degree := range inDegree {
 		if degree == 0 {
 			queue = append(queue, i)
 		}
 	}
+	// Sort queue to ensure stable execution order (earlier commands execute first when no dependencies)
+	// This ensures that RUN commands that install tools come before commands that use them
+	sort.Ints(queue)
 
 	order := make([]int, 0, len(pe.commands))
 
 	// Process commands in topological order
 	for len(queue) > 0 {
-		// Get next command with no dependencies
+		// Get next command with no dependencies (always the smallest index due to sorting)
 		current := queue[0]
 		queue = queue[1:]
 		order = append(order, current)
@@ -244,6 +251,9 @@ func (pe *ParallelExecutor) buildExecutionOrder() []int {
 				queue = append(queue, dependent)
 			}
 		}
+		// Keep queue sorted to ensure stable execution order
+		// Commands with smaller indices execute first when dependencies allow
+		sort.Ints(queue)
 	}
 
 	// Add any remaining commands (shouldn't happen in a valid DAG, but handle gracefully)
@@ -386,41 +396,108 @@ func (pe *ParallelExecutor) canExecuteInParallel(cmd1Index, cmd2Index int) bool 
 	return true
 }
 
+// PendingSnapshot represents a command that needs a snapshot after execution
+type PendingSnapshot struct {
+	Command      commands.DockerCommand
+	Index        int
+	Files        []string
+	CompositeKey *CompositeCache // Shared compositeKey (updated during command execution)
+}
+
 // executeGroup executes a group of commands in parallel
+// CRITICAL: Commands execute first, then snapshots are taken sequentially to avoid race conditions
 func (pe *ParallelExecutor) executeGroup(group []int, compositeKey *CompositeCache, initSnapshotTaken bool) error {
 	if len(group) == 1 {
-		// Single command - execute directly
-		return pe.executeCommand(group[0], compositeKey, initSnapshotTaken)
+		// Single command - execute directly with immediate snapshot
+		ctx, cancel := context.WithTimeout(context.Background(), pe.config.CommandTimeout)
+		defer cancel()
+		return pe.executeCommand(ctx, group[0], compositeKey, initSnapshotTaken)
 	}
 
-	// Multiple commands - execute in parallel
+	// Multiple commands - execute in parallel, then take snapshots sequentially
+	// Use context to cancel other commands when one fails
 	ctx, cancel := context.WithTimeout(context.Background(), pe.config.CommandTimeout)
 	defer cancel()
 
-	g, _ := errgroup.WithContext(ctx)
+	g, ctx := errgroup.WithContext(ctx)
+
+	// Track pending snapshots - commands that need snapshots after execution
+	pendingSnapshots := make([]PendingSnapshot, 0, len(group))
+	var snapshotMutex sync.Mutex
 
 	for _, cmdIndex := range group {
 		cmdIndex := cmdIndex // Capture for closure
 		g.Go(func() error {
-			return pe.executeCommandWithWorker(cmdIndex, compositeKey, initSnapshotTaken)
+			// Check if context is canceled before executing
+			select {
+			case <-ctx.Done():
+				logrus.Debugf("Command %d canceled due to context", cmdIndex)
+				return ctx.Err()
+			default:
+				// Execute command WITHOUT snapshot (to avoid race conditions)
+				// Snapshot will be taken after all commands complete
+				err := pe.executeCommandWithoutSnapshot(
+					ctx, cmdIndex, compositeKey, initSnapshotTaken,
+					&pendingSnapshots, &snapshotMutex)
+				// Check context again after execution (in case it was canceled during execution)
+				select {
+				case <-ctx.Done():
+					logrus.Debugf("Command %d context canceled during/after execution", cmdIndex)
+					if err == nil {
+						return ctx.Err()
+					}
+				default:
+				}
+				return err
+			}
 		})
 	}
 
-	return g.Wait()
+	// Wait for all commands to complete
+	if err := g.Wait(); err != nil {
+		return err
+	}
+
+	// All commands completed successfully - now take snapshots sequentially
+	// This prevents race conditions where snapshots are taken while commands are still running
+	logrus.Debugf("📸 All commands in group completed, taking snapshots sequentially for %d commands",
+		len(pendingSnapshots))
+
+	// Sort snapshots by command index to ensure consistent order
+	sort.Slice(pendingSnapshots, func(i, j int) bool {
+		return pendingSnapshots[i].Index < pendingSnapshots[j].Index
+	})
+
+	cacheGroup := &errgroup.Group{}
+	for _, pending := range pendingSnapshots {
+		logrus.Debugf("📸 Taking snapshot for command %d: %s", pending.Index, pending.Command.String())
+		if err := pe.stageBuilder.handleSnapshot(
+			pending.Command, pending.Files, pending.CompositeKey, cacheGroup); err != nil {
+			logrus.Errorf("Failed to take snapshot for command %d: %v", pending.Index, err)
+			return errors.Wrapf(err, "failed to take snapshot for command %d", pending.Index)
+		}
+		logrus.Debugf("✅ Snapshot completed for command %d", pending.Index)
+	}
+
+	// Wait for cache operations to complete
+	if err := cacheGroup.Wait(); err != nil {
+		logrus.Warnf("Error in cache operations: %s", err)
+		// Cache errors are non-fatal, but we should log them
+	}
+
+	return nil
 }
 
-// executeCommandWithWorker executes a command using the worker pool
-func (pe *ParallelExecutor) executeCommandWithWorker(
-	cmdIndex int, compositeKey *CompositeCache, initSnapshotTaken bool) error {
-	// Acquire worker
-	pe.workerPool <- struct{}{}
-	defer func() { <-pe.workerPool }()
-
-	return pe.executeCommand(cmdIndex, compositeKey, initSnapshotTaken)
-}
-
-// executeCommand executes a single command
-func (pe *ParallelExecutor) executeCommand(cmdIndex int, compositeKey *CompositeCache, initSnapshotTaken bool) error {
+// executeCommandWithoutSnapshot executes a command but defers snapshot to avoid race conditions
+// It collects snapshot information for later sequential processing
+func (pe *ParallelExecutor) executeCommandWithoutSnapshot(
+	ctx context.Context,
+	cmdIndex int,
+	compositeKey *CompositeCache,
+	initSnapshotTaken bool,
+	pendingSnapshots *[]PendingSnapshot,
+	snapshotMutex *sync.Mutex,
+) error {
 	cmd := pe.commands[cmdIndex]
 	if cmd == nil {
 		return nil
@@ -438,8 +515,178 @@ func (pe *ParallelExecutor) executeCommand(cmdIndex int, compositeKey *Composite
 
 	logrus.Infof("🔄 Executing command %d: %s", cmdIndex, cmd.String())
 
+	// Check context before executing command
+	select {
+	case <-ctx.Done():
+		logrus.Debugf("Command %d canceled before execution", cmdIndex)
+		return ctx.Err()
+	default:
+	}
+
+	// Execute command WITHOUT snapshot (processCommand will be modified to skip snapshot)
+	// We need to manually call the command execution logic
+	err := pe.executeCommandOnly(ctx, cmdIndex, compositeKey, initSnapshotTaken)
+	if err != nil {
+		stats.EndTime = time.Now()
+		stats.Duration = stats.EndTime.Sub(stats.StartTime)
+		stats.Success = false
+		stats.ErrorMessage = err.Error()
+		pe.executedMutex.Lock()
+		pe.executed[cmdIndex] = true
+		pe.executedMutex.Unlock()
+		logrus.Errorf("❌ Command %d failed: %v", cmdIndex, err)
+		return fmt.Errorf("command %d (%s) failed: %w", cmdIndex, cmd.String(), err)
+	}
+
+	// Check context after execution
+	select {
+	case <-ctx.Done():
+		logrus.Debugf("Command %d context canceled during execution", cmdIndex)
+		return ctx.Err()
+	default:
+	}
+
+	// Update statistics
+	stats.EndTime = time.Now()
+	stats.Duration = stats.EndTime.Sub(stats.StartTime)
+	stats.Success = true
+
+	pe.executedMutex.Lock()
+	pe.executed[cmdIndex] = true
+	pe.executedMutex.Unlock()
+
+	// Collect snapshot information for later processing
+	// Only if command needs a snapshot
+	if pe.stageBuilder.shouldTakeSnapshot(cmdIndex, cmd.MetadataOnly()) || pe.config.ForceBuildMetadata {
+		files := cmd.FilesToSnapshot()
+		// Create a snapshot of compositeKey at this point for this specific command
+		// This ensures each command gets the correct cache key state
+		cmdCompositeKey := *compositeKey
+
+		snapshotMutex.Lock()
+		*pendingSnapshots = append(*pendingSnapshots, PendingSnapshot{
+			Command:      cmd,
+			Index:        cmdIndex,
+			Files:        files,
+			CompositeKey: &cmdCompositeKey, // Copy of compositeKey at this point in execution
+		})
+		snapshotMutex.Unlock()
+	}
+
+	logrus.Infof("✅ Command %d completed in %v (snapshot deferred)", cmdIndex, stats.Duration)
+	return nil
+}
+
+// executeCommandOnly executes a command without taking snapshot
+func (pe *ParallelExecutor) executeCommandOnly(
+	_ context.Context, cmdIndex int, compositeKey *CompositeCache, initSnapshotTaken bool) error {
+	cmd := pe.commands[cmdIndex]
+	if cmd == nil {
+		return nil
+	}
+
+	// Get files used from context (needed for cache key)
+	pe.stageBuilder.mutex.RLock()
+	files, err := cmd.FilesUsedFromContext(pe.imageConfig, pe.args)
+	pe.stageBuilder.mutex.RUnlock()
+
+	if err != nil {
+		return errors.Wrap(err, "failed to get files used from context")
+	}
+
+	// Update composite key if caching is enabled
+	// CRITICAL: Use mutex to protect compositeKey updates during parallel execution
+	// Each command needs to update compositeKey sequentially to maintain correct cache key order
+	if pe.config.Cache {
+		var err error
+		var updatedKey CompositeCache
+		pe.stageBuilder.mutex.Lock()
+		updatedKey, err = pe.stageBuilder.populateCompositeKey(cmd, files, *compositeKey, pe.args, pe.imageConfig.Env)
+		if err == nil {
+			*compositeKey = updatedKey
+		}
+		pe.stageBuilder.mutex.Unlock()
+		if err != nil {
+			return err
+		}
+	}
+
+	// Log command start
+	globalLogger := logging.GetGlobalManager()
+	commandStartTime := time.Now()
+	globalLogger.LogCommandStart(cmdIndex, cmd.String(), "stage")
+
+	// Handle init snapshot if needed
+	// Check if command is a cached command (similar to isCacheCommand in build.go)
+	_, isCached := cmd.(commands.Cached)
+	if !initSnapshotTaken && !isCached && !cmd.ProvidesFilesToSnapshot() {
+		if err := pe.stageBuilder.initSnapshotWithTimings(); err != nil {
+			return err
+		}
+	}
+
+	// Execute command (this is safe as it doesn't modify shared state)
+	if err := cmd.ExecuteCommand(pe.imageConfig, pe.args); err != nil {
+		// Log command failure
+		commandDuration := time.Since(commandStartTime).Milliseconds()
+		globalLogger.LogCommandComplete(cmdIndex, cmd.String(), commandDuration, false)
+		globalLogger.LogError("command", "execute", err, map[string]interface{}{
+			"command_index": cmdIndex,
+			"command":       cmd.String(),
+		})
+		return errors.Wrap(err, "failed to execute command")
+	}
+
+	// Log command completion
+	commandDuration := time.Since(commandStartTime).Milliseconds()
+	globalLogger.LogCommandComplete(cmdIndex, cmd.String(), commandDuration, true)
+
+	// NOTE: Snapshot is NOT taken here - it will be taken after all commands in group complete
+	return nil
+}
+
+// executeCommand executes a single command
+func (pe *ParallelExecutor) executeCommand(
+	ctx context.Context, cmdIndex int, compositeKey *CompositeCache, initSnapshotTaken bool) error {
+	cmd := pe.commands[cmdIndex]
+	if cmd == nil {
+		return nil
+	}
+
+	// Start timing
+	stats := &CommandExecutionStats{
+		StartTime: time.Now(),
+		WorkerID:  len(pe.workerPool),
+	}
+
+	pe.statsMutex.Lock()
+	pe.executionStats[cmdIndex] = stats
+	pe.statsMutex.Unlock()
+
+	logrus.Infof("🔄 Executing command %d: %s", cmdIndex, cmd.String())
+
+	// Check context before executing command
+	select {
+	case <-ctx.Done():
+		logrus.Debugf("Command %d canceled before execution", cmdIndex)
+		return ctx.Err()
+	default:
+	}
+
 	// Execute the command using the existing stageBuilder logic
 	err := pe.stageBuilder.processCommand(cmd, cmdIndex, compositeKey, &errgroup.Group{}, initSnapshotTaken)
+
+	// Check context after execution (in case it was canceled during execution)
+	select {
+	case <-ctx.Done():
+		logrus.Debugf("Command %d context canceled during execution", cmdIndex)
+		if err == nil {
+			// If command succeeded but context was canceled, return context error
+			return ctx.Err()
+		}
+		// If command failed, return the original error (more specific)
+	default:
+	}
 
 	// Update statistics
 	stats.EndTime = time.Now()
