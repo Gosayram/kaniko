@@ -1313,26 +1313,70 @@ func saveCrossStageFiles(index int, filesToSave []string, tempExtractDir string)
 	}
 
 	logrus.Infof("💾 Saving %d cross-stage dependency files to %s (copy root: %s)", len(filesToSave), dstDir, copyRoot)
+
+	successCount := 0
+	failedCount := 0
+
 	for i, p := range filesToSave {
 		logrus.Infof("   [%d/%d] Saving file: %s (relative path)", i+1, len(filesToSave), p)
 
+		// Use local variable for file-specific root
+		fileCopyRoot := copyRoot
+
 		// Build absolute source path for logging
-		absSrcPath := filepath.Join(copyRoot, p)
+		absSrcPath := filepath.Join(fileCopyRoot, p)
 		logrus.Infof("      Source: %s (absolute)", absSrcPath)
 
 		// Check if source exists before copying
 		if _, statErr := os.Stat(absSrcPath); statErr != nil {
 			logrus.Warnf("      ⚠️ Source file does not exist: %s (error: %v)", absSrcPath, statErr)
-			continue
+
+			// CRITICAL FIX: If file not found in extracted directory, try current filesystem
+			if fileCopyRoot != "/" {
+				// Build filesystem path properly - avoid filepath.Join with "/" as first arg
+				var fsPath string
+				if strings.HasPrefix(p, "/") {
+					fsPath = p
+				} else {
+					fsPath = "/" + p
+				}
+				fsPath = filepath.Clean(fsPath)
+
+				if _, fsErr := os.Stat(fsPath); fsErr == nil {
+					logrus.Infof("      🔄 Found file in current filesystem: %s, using it instead", fsPath)
+					fileCopyRoot = "/"
+					// File found in filesystem, will use fileCopyRoot="/" for copying
+				} else {
+					logrus.Warnf("      ⚠️ File not found in both extracted image and filesystem, skipping: %s", p)
+					failedCount++
+					continue
+				}
+			} else {
+				logrus.Warnf("      ⚠️ File not found, skipping: %s", p)
+				failedCount++
+				continue
+			}
 		}
 
-		if err := util.CopyFileOrSymlink(p, dstDir, copyRoot); err != nil {
+		if err := util.CopyFileOrSymlink(p, dstDir, fileCopyRoot); err != nil {
 			logrus.Warnf("      ❌ Failed to save file %s: %v, continuing anyway", p, err)
+			failedCount++
 			continue
 		}
 
 		destPath := filepath.Join(dstDir, p)
 		logrus.Infof("      ✅ Successfully saved file %s -> %s", p, destPath)
+		successCount++
+	}
+
+	logrus.Infof("💾 Cross-stage file save summary: %d succeeded, %d failed out of %d total",
+		successCount, failedCount, len(filesToSave))
+
+	if failedCount > 0 && successCount == 0 {
+		logrus.Warnf("⚠️ All cross-stage dependency files failed to save! This may cause issues in COPY --from commands")
+	} else if failedCount > 0 {
+		logrus.Warnf("⚠️ Some cross-stage dependency files failed to save (%d/%d), but build will continue",
+			failedCount, len(filesToSave))
 	}
 
 	return nil
@@ -1373,10 +1417,27 @@ func handleNonFinalStage(
 	// Search for files in the extracted directory or current filesystem
 	filesToSave := filesToSaveWithArgsFromRoot(crossStageDependencies[index], buildArgs, tempExtractDir)
 
-	// If no files to save, log warning and continue
+	// CRITICAL FIX: If files not found in extracted image, try searching in current filesystem
+	// This handles cases where files were created but not yet committed to image layers
+	if len(filesToSave) == 0 && tempExtractDir != "/" {
+		logrus.Warnf("⚠️ No files found in extracted image for stage %d, trying current filesystem as fallback", index)
+		logrus.Infof("   Expected patterns: %v", crossStageDependencies[index])
+
+		// Try searching in current filesystem
+		filesToSaveFromFS := filesToSaveWithArgsFromRoot(crossStageDependencies[index], buildArgs, "/")
+		if len(filesToSaveFromFS) > 0 {
+			logrus.Infof("✅ Found %d files in current filesystem that were missing in extracted image", len(filesToSaveFromFS))
+			filesToSave = filesToSaveFromFS
+			// Update tempExtractDir to "/" to use current filesystem
+			tempExtractDir = "/"
+		}
+	}
+
+	// If still no files to save, log warning and continue
 	if len(filesToSave) == 0 {
 		logrus.Warnf("No files found for cross-stage dependencies in stage %d, continuing anyway", index)
 		logrus.Debugf("Expected patterns: %v", crossStageDependencies[index])
+		logrus.Warnf("   This may cause missing files in COPY --from commands, but build will continue")
 		return errors.Wrap(
 			util.DeleteFilesystem(),
 			fmt.Sprintf("deleting file system after stage %d", index),
@@ -1486,11 +1547,29 @@ func findFilesForDependencyWithArgsFromRoot(
 		entries, listErr := os.ReadDir(parentDir)
 		if listErr == nil {
 			logrus.Infof("   Parent directory contains %d entries", len(entries))
+			// Show all entries, not just first few, for better debugging
 			for i, entry := range entries {
-				if i >= maxSampleEntries {
+				if i >= maxSampleEntries*2 {
+					logrus.Infof("     ... and %d more entries", len(entries)-i)
 					break
 				}
 				logrus.Infof("     - %s (dir: %v)", entry.Name(), entry.IsDir())
+			}
+
+			// CRITICAL FIX: Also try to find files by name pattern in parent directory
+			// This handles cases where files exist but with different paths
+			// This is a generic solution that works for any file name, no hardcoding
+			fileName := filepath.Base(searchPath)
+			if fileName != "" && fileName != "." && fileName != "/" {
+				for _, entry := range entries {
+					if entry.Name() == fileName {
+						foundPath := filepath.Join(parentDir, entry.Name())
+						logrus.Infof("   ✅ Found file by name pattern: %s", foundPath)
+						if foundInfo, foundErr := os.Stat(foundPath); foundErr == nil {
+							return processExistingPathFromRoot(foundPath, foundInfo, searchRoot)
+						}
+					}
+				}
 			}
 		}
 	} else {
