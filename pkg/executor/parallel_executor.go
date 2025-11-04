@@ -77,6 +77,12 @@ type ParallelExecutor struct {
 	// Performance monitoring
 	executionStats map[int]*CommandExecutionStats
 	statsMutex     sync.RWMutex
+
+	// Init snapshot state - ensures init snapshot is taken only once
+	initSnapshotOnce     sync.Once
+	initSnapshotErr      error
+	initSnapshotDone     chan struct{} // Channel to signal when init snapshot is complete
+	initSnapshotDoneOnce sync.Once     // Ensure channel is closed only once
 }
 
 // CommandExecutionStats tracks execution statistics for a command
@@ -103,15 +109,16 @@ func NewParallelExecutor(
 	}
 
 	return &ParallelExecutor{
-		commands:       cmds,
-		config:         opts,
-		args:           args,
-		imageConfig:    imageConfig,
-		stageBuilder:   sb,
-		maxWorkers:     maxWorkers,
-		workerPool:     make(chan struct{}, maxWorkers),
-		executed:       make(map[int]bool),
-		executionStats: make(map[int]*CommandExecutionStats),
+		commands:         cmds,
+		config:           opts,
+		args:             args,
+		imageConfig:      imageConfig,
+		stageBuilder:     sb,
+		maxWorkers:       maxWorkers,
+		workerPool:       make(chan struct{}, maxWorkers),
+		executed:         make(map[int]bool),
+		executionStats:   make(map[int]*CommandExecutionStats),
+		initSnapshotDone: make(chan struct{}),
 	}
 }
 
@@ -280,6 +287,14 @@ func (pe *ParallelExecutor) buildExecutionOrder() []int {
 // ExecuteCommands executes commands in parallel with dependency resolution
 func (pe *ParallelExecutor) ExecuteCommands(compositeKey *CompositeCache, initSnapshotTaken bool) error {
 	logrus.Info("🚀 Starting parallel command execution")
+
+	// CRITICAL: If init snapshot was already taken, close the channel immediately
+	// to prevent any blocking when commands check for init snapshot
+	if initSnapshotTaken {
+		pe.initSnapshotDoneOnce.Do(func() {
+			close(pe.initSnapshotDone)
+		})
+	}
 
 	// Analyze dependencies if not already done
 	if len(pe.executionOrder) == 0 {
@@ -617,13 +632,29 @@ func (pe *ParallelExecutor) executeCommandOnly(
 	globalLogger.LogCommandStart(cmdIndex, cmd.String(), "stage")
 
 	// Handle init snapshot if needed
+	// CRITICAL: Use sync.Once to ensure init snapshot is taken only once across all parallel commands
+	// AND ensure all commands wait for it to complete before executing
+	// Multiple commands may check initSnapshotTaken == false simultaneously, but only one should execute
 	// Check if command is a cached command (similar to isCacheCommand in build.go)
 	_, isCached := cmd.(commands.Cached)
 	if !initSnapshotTaken && !isCached && !cmd.ProvidesFilesToSnapshot() {
-		if err := pe.stageBuilder.initSnapshotWithTimings(); err != nil {
-			return err
+		// Only one command will execute init snapshot, but all commands must wait for it
+		pe.initSnapshotOnce.Do(func() {
+			pe.initSnapshotErr = pe.stageBuilder.initSnapshotWithTimings()
+			// Signal that init snapshot is complete (close channel to unblock waiting commands)
+			close(pe.initSnapshotDone)
+		})
+
+		// CRITICAL: All commands must wait for init snapshot to complete before executing
+		// This prevents race conditions where commands start before filesystem is ready
+		// Reading from closed channel returns immediately (non-blocking)
+		<-pe.initSnapshotDone
+
+		if pe.initSnapshotErr != nil {
+			return pe.initSnapshotErr
 		}
 	}
+	// Note: If initSnapshotTaken == true, channel is already closed in ExecuteCommands
 
 	// Execute command (this is safe as it doesn't modify shared state)
 	if err := cmd.ExecuteCommand(pe.imageConfig, pe.args); err != nil {
