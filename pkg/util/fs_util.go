@@ -437,13 +437,14 @@ func (pm *PermissionManager) ExecuteWithElevatedPermissions(fn func() error) err
 
 // SystemDirectories contains directories that should be protected from modification
 // These directories are typically read-only or system-managed
+// NOTE: /etc is NOT included because it needs to be extracted from images and modified
+// in containers (e.g., /etc/apt/* for package management)
 var SystemDirectories = []string{
 	"/sys",
 	"/proc",
 	"/dev",
 	"/run",
-	"/tmp",
-	"/etc",
+	// /etc is intentionally excluded - it must be extracted from images and can be modified
 }
 
 const (
@@ -840,12 +841,18 @@ func ExtractFile(dest string, hdr *tar.Header, cleanedName string, tr io.Reader)
 	// CRITICAL: For cross-stage dependency extraction, we should NOT skip system directories
 	// because we're extracting to a temporary directory, not modifying the actual system
 	// Check if we're extracting to a temporary directory (contains "_extract")
+	// Also allow all paths for root user - root has full access
 	if !strings.Contains(dest, "_extract") {
-		// Only skip system directories if NOT extracting to temp directory
-		for _, sysDir := range SystemDirectories {
-			if strings.HasPrefix(abs, sysDir) {
-				logrus.Debugf("Skipping system directory %s (protected by SystemDirectories)", path)
-				return nil
+		// For root user, allow all paths - no restrictions
+		if os.Getuid() == 0 {
+			logrus.Debugf("Root user: allowing extraction of %s (no restrictions)", path)
+		} else {
+			// Only skip system directories if NOT extracting to temp directory AND not root
+			for _, sysDir := range SystemDirectories {
+				if strings.HasPrefix(abs, sysDir) {
+					logrus.Debugf("Skipping system directory %s (protected by SystemDirectories)", path)
+					return nil
+				}
 			}
 		}
 	} else {
