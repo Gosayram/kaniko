@@ -199,39 +199,69 @@ func (pe *ParallelExecutor) isEnvironmentCommand(cmd commands.DockerCommand) boo
 }
 
 // buildExecutionOrder builds the execution order based on dependencies
+// Uses Kahn's algorithm for topological sorting
 func (pe *ParallelExecutor) buildExecutionOrder() []int {
-	// Simple topological sort for now
-	// In a more sophisticated implementation, we could use Kahn's algorithm
+	// Build dependency graph: for each command, track how many dependencies it has
+	inDegree := make(map[int]int)
+	// Build reverse graph: for each command, track which commands depend on it
+	dependsOnMe := make(map[int][]int)
+
+	// Initialize inDegree for all commands
+	for i := range pe.commands {
+		if pe.commands[i] != nil {
+			inDegree[i] = 0
+		}
+	}
+
+	// Build dependency graph
+	for _, dep := range pe.dependencies {
+		// Command dep.To depends on dep.From, so increment inDegree
+		inDegree[dep.To]++
+		dependsOnMe[dep.From] = append(dependsOnMe[dep.From], dep.To)
+	}
+
+	// Kahn's algorithm: start with commands that have no dependencies
+	queue := make([]int, 0)
+	for i, degree := range inDegree {
+		if degree == 0 {
+			queue = append(queue, i)
+		}
+	}
 
 	order := make([]int, 0, len(pe.commands))
-	visited := make(map[int]bool)
 
-	// Add commands that have no dependencies first
+	// Process commands in topological order
+	for len(queue) > 0 {
+		// Get next command with no dependencies
+		current := queue[0]
+		queue = queue[1:]
+		order = append(order, current)
+
+		// Decrease inDegree for commands that depend on current
+		for _, dependent := range dependsOnMe[current] {
+			inDegree[dependent]--
+			if inDegree[dependent] == 0 {
+				queue = append(queue, dependent)
+			}
+		}
+	}
+
+	// Add any remaining commands (shouldn't happen in a valid DAG, but handle gracefully)
 	for i, cmd := range pe.commands {
 		if cmd == nil {
 			continue
 		}
-
-		hasDependencies := false
-		for _, dep := range pe.dependencies {
-			if dep.To == i {
-				hasDependencies = true
+		found := false
+		for _, idx := range order {
+			if idx == i {
+				found = true
 				break
 			}
 		}
-
-		if !hasDependencies {
+		if !found {
+			logrus.Warnf("Command %d has circular dependency or wasn't processed, adding at end", i)
 			order = append(order, i)
-			visited[i] = true
 		}
-	}
-
-	// Add remaining commands in order
-	for i, cmd := range pe.commands {
-		if cmd == nil || visited[i] {
-			continue
-		}
-		order = append(order, i)
 	}
 
 	return order
@@ -291,18 +321,46 @@ func (pe *ParallelExecutor) buildExecutionGroups() [][]int {
 }
 
 // findParallelGroup finds commands that can be executed in parallel
+// Only includes commands whose ALL dependencies are already executed
 func (pe *ParallelExecutor) findParallelGroup(startIndex int, executed map[int]bool) []int {
 	group := []int{startIndex}
 
-	// Find commands that don't depend on the start command
+	// Find commands that can be executed in parallel with startIndex
+	// A command can be added if:
+	// 1. It's not already executed
+	// 2. ALL its dependencies are already executed
+	// 3. It doesn't conflict with other commands in the group
 	for i, cmd := range pe.commands {
 		if cmd == nil || executed[i] || i == startIndex {
 			continue
 		}
 
-		// Check if this command can be executed in parallel
+		// Check if ALL dependencies of this command are executed
+		allDepsExecuted := true
+		for _, dep := range pe.dependencies {
+			if dep.To == i && !executed[dep.From] {
+				allDepsExecuted = false
+				break
+			}
+		}
+
+		if !allDepsExecuted {
+			continue
+		}
+
+		// Check if this command can be executed in parallel with startIndex
 		if pe.canExecuteInParallel(startIndex, i) {
-			group = append(group, i)
+			// Also check it can be executed in parallel with all commands in the group
+			canAdd := true
+			for _, groupIdx := range group {
+				if !pe.canExecuteInParallel(groupIdx, i) {
+					canAdd = false
+					break
+				}
+			}
+			if canAdd {
+				group = append(group, i)
+			}
 		}
 	}
 

@@ -43,6 +43,18 @@ type RunCommand struct {
 	shdCache bool
 }
 
+// Error messages for command execution
+const (
+	errCommandOrFileNotFound = "command or file not found"
+	errPackageNotFound       = "package not found"
+	errPackageManagerError   = "package manager error"
+)
+
+// Output truncation limits
+const (
+	maxOutputPreviewLength = 500 // Maximum length for error output preview
+)
+
 // for testing
 var (
 	userLookup = util.LookupUser
@@ -137,9 +149,10 @@ func executeAndCleanupCommand(cmd *exec.Cmd) error {
 	// This ensures changes are included in the snapshot/cache
 	util.PrepareCommonSystemDirectoriesWritable()
 
-	// Capture stderr to detect permission errors
-	var stderrBuf strings.Builder
+	// Capture stderr and stdout to detect errors (especially for piped commands)
+	var stderrBuf, stdoutBuf strings.Builder
 	cmd.Stderr = io.MultiWriter(os.Stderr, &stderrBuf)
+	cmd.Stdout = io.MultiWriter(os.Stdout, &stdoutBuf)
 
 	logrus.Infof("Running: %s", cmd.Args)
 
@@ -153,14 +166,27 @@ func executeAndCleanupCommand(cmd *exec.Cmd) error {
 	// Wait for command to complete and check for errors
 	waitErr := waitAndCleanupProcess(cmd)
 
-	// Get stderr output
+	// Get stderr and stdout output
+	// Important: Read buffers after command completes to ensure all data is captured
 	stderrOutput := stderrBuf.String()
+	stdoutOutput := stdoutBuf.String()
 
-	// Debug: log stderr length
-	logrus.Debugf("📝 Captured stderr length: %d bytes", len(stderrOutput))
+	// Debug: log output lengths and content
+	logrus.Debugf("📝 Captured stderr length: %d bytes, stdout length: %d bytes", len(stderrOutput), len(stdoutOutput))
 	if stderrOutput != "" {
 		const stderrPreviewLength = 200
 		logrus.Debugf("📝 Stderr preview (first 200 chars): %s", truncateString(stderrOutput, stderrPreviewLength))
+	}
+	if stdoutOutput != "" {
+		const stdoutPreviewLength = 200
+		logrus.Debugf("📝 Stdout preview (first 200 chars): %s", truncateString(stdoutOutput, stdoutPreviewLength))
+	}
+
+	// Log full output for debugging if it contains error patterns
+	if strings.Contains(strings.ToLower(stderrOutput+stdoutOutput), "not found") ||
+		strings.Contains(strings.ToLower(stderrOutput+stdoutOutput), "error") {
+		logrus.Debugf("📝 Full stderr output: %s", stderrOutput)
+		logrus.Debugf("📝 Full stdout output: %s", stdoutOutput)
 	}
 
 	// Check if there were permission errors in stderr
@@ -206,25 +232,74 @@ func executeAndCleanupCommand(cmd *exec.Cmd) error {
 	}
 
 	// Check for command execution errors
-	// Important: Don't ignore waitErr - commands that fail should fail the build
+	// Combine stderr and stdout for error detection (piped commands may output errors to stdout)
+	combinedOutput := stderrOutput
+	if stdoutOutput != "" {
+		combinedOutput += "\n" + stdoutOutput
+	}
+	return checkCommandErrors(cmd, waitErr, combinedOutput)
+}
+
+// checkCommandErrors checks for command execution errors and handles them appropriately
+// This function handles both exit code errors and stderr/stdout error patterns
+func checkCommandErrors(cmd *exec.Cmd, waitErr error, combinedOutput string) error {
+	commandStr := strings.Join(cmd.Args, " ")
+
+	// Check output for error patterns even if waitErr is nil
+	// This is critical for piped commands (e.g., "curl ... | bash") where the pipe
+	// may succeed but the first command fails (bash exits 0 even if curl fails)
+	errMsg := detectStderrError(combinedOutput)
+
 	if waitErr != nil {
-		commandStr := strings.Join(cmd.Args, " ")
-		// Check if error is due to missing command (like "curl: not found")
-		if strings.Contains(stderrOutput, "not found") || strings.Contains(stderrOutput, "No such file") {
-			logrus.Errorf("❌ Command failed: command or file not found - %s", commandStr)
-			return errors.Wrapf(waitErr, "command failed: %s (output: %s)", commandStr, stderrOutput)
+		// Process exit error - definitely failed
+		if errMsg != "" {
+			logrus.Errorf("❌ Command failed: %s - %s", errMsg, commandStr)
+			return errors.Wrapf(waitErr, "command failed: %s (%s, output: %s)",
+				commandStr, errMsg, combinedOutput)
 		}
-		// Check for other common error patterns
-		if strings.Contains(stderrOutput, "Unable to locate package") || strings.Contains(stderrOutput, "Failed to") {
-			logrus.Errorf("❌ Command failed: %s", commandStr)
-			return errors.Wrapf(waitErr, "command failed: %s (output: %s)", commandStr, stderrOutput)
-		}
-		// For other errors, log and fail
 		logrus.Errorf("❌ Command execution failed: %s", commandStr)
-		return errors.Wrapf(waitErr, "command failed: %s (output: %s)", commandStr, stderrOutput)
+		return errors.Wrapf(waitErr, "command failed: %s (output: %s)", commandStr, combinedOutput)
+	}
+
+	// waitErr is nil, but check output for errors anyway (especially for piped commands)
+	if errMsg != "" {
+		// For piped commands, errors in output indicate failure even if exit code is 0
+		// Example: "curl ... | bash" - bash succeeds (exit 0) but curl fails
+		// The error "curl: not found" appears in stderr/stdout
+		logrus.Errorf("❌ Command failed: %s - %s", errMsg, commandStr)
+		logrus.Errorf("   Command exited with code 0, but output contains errors " +
+			"(likely piped command failure)")
+		logrus.Errorf("   Output: %s", truncateString(combinedOutput, maxOutputPreviewLength))
+		return errors.Errorf("command failed: %s (%s, output: %s)",
+			commandStr, errMsg, combinedOutput)
 	}
 
 	return nil
+}
+
+// detectStderrError detects error patterns in stderr/stdout output
+// Returns empty string if no error detected, or error message if detected
+func detectStderrError(output string) string {
+	// Normalize output for case-insensitive matching
+	outputLower := strings.ToLower(output)
+
+	switch {
+	case strings.Contains(outputLower, "not found") || strings.Contains(outputLower, "no such file"):
+		return errCommandOrFileNotFound
+	case strings.Contains(outputLower, "unable to locate package"):
+		return errPackageNotFound
+	case strings.Contains(outputLower, "e: ") &&
+		(strings.Contains(outputLower, "unable") || strings.Contains(outputLower, "failed")):
+		// APT/Debian error patterns
+		return errPackageManagerError
+	case strings.Contains(outputLower, "/bin/sh:") && strings.Contains(outputLower, "not found"):
+		// Shell error messages like "/bin/sh: 1: curl: not found"
+		return errCommandOrFileNotFound
+	case strings.Contains(outputLower, "command not found") || strings.Contains(outputLower, "no such file or directory"):
+		return errCommandOrFileNotFound
+	default:
+		return ""
+	}
 }
 
 // truncateString truncates a string to maxLen characters
@@ -411,10 +486,11 @@ func createDirectCommand(newCommand []string) (*exec.Cmd, error) {
 }
 
 // configureCommandSettings configures basic command settings
+// NOTE: Stdout and Stderr are set in executeAndCleanupCommand to capture output
 func configureCommandSettings(cmd *exec.Cmd, config *v1.Config) {
 	cmd.Dir = setWorkDirIfExists(config.WorkingDir)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	// Don't set Stdout/Stderr here - they will be set in executeAndCleanupCommand
+	// to capture output for error detection
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		Setpgid: true,
 	}
