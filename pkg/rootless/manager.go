@@ -313,6 +313,20 @@ func (rm *Manager) parseUserString(userStr string) error {
 		groupPart = parts[1]
 	}
 
+	// Special case: root user (by name or UID 0)
+	if userPart == "root" || userPart == "0" {
+		rm.targetUID = 0
+		if groupPart == "root" || groupPart == "0" {
+			rm.targetGID = 0
+		} else if gid, err := strconv.Atoi(groupPart); err == nil {
+			rm.targetGID = gid
+		} else {
+			rm.targetGID = 0 // Default root GID
+		}
+		logrus.Debugf("Parsed root user: UID=%d, GID=%d", rm.targetUID, rm.targetGID)
+		return nil
+	}
+
 	// Try to parse as numeric UID:GID first
 	if uid, err := strconv.Atoi(userPart); err == nil {
 		rm.targetUID = uid
@@ -542,7 +556,13 @@ func (rm *Manager) validateSecurity() error {
 		return fmt.Errorf("target UID %d is not in safe range", rm.targetUID)
 	}
 
-	// 2. Check that critical paths don't contain system directories
+	// 2. For root user, skip all path validation - root has full access to all paths
+	if rm.targetUID == 0 {
+		logrus.Debugf("Skipping path validation for root user - full access granted")
+		return nil
+	}
+
+	// 3. Check that critical paths don't contain system directories (only for non-root users)
 	// Get filesystem structure to check for temp directories
 	fs := util.GetFilesystemStructure()
 	tempDirs := fs.GetTempDirectories()

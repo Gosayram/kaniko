@@ -171,7 +171,12 @@ func isValidUsernameCharStrict(c rune) bool {
 }
 
 // isValidUID validates UID values
+// Root user (UID 0) is always allowed
 func isValidUID(uid uint32) bool {
+	// Allow root user (UID 0)
+	if uid == 0 {
+		return true
+	}
 	return uid >= minUIDValue && uid <= maxUIDValue
 }
 

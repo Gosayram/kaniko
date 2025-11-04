@@ -1829,23 +1829,40 @@ func MkdirAllWithPermissions(path string, mode os.FileMode, uid, gid int64) erro
 }
 
 func setFilePermissions(path string, mode os.FileMode, uid, gid int) error {
-	// Skip system directories that are read-only
-	for _, sysDir := range SystemDirectories {
-		if strings.HasPrefix(path, sysDir) {
-			logrus.Debugf("Skipping permissions change for system directory %s", path)
-			return nil
+	// For root user (uid == 0), allow all operations including system directories
+	// Root has full access to all paths
+	if uid != 0 {
+		// Skip system directories that are read-only (only for non-root users)
+		for _, sysDir := range SystemDirectories {
+			if strings.HasPrefix(path, sysDir) {
+				logrus.Debugf("Skipping permissions change for system directory %s", path)
+				return nil
+			}
 		}
 	}
 
 	// SECURITY: Safe ownership handling without root privileges
-	if err := setFileOwnershipSafely(path, uid, gid); err != nil {
-		logrus.Warnf("Could not set ownership for %s: %v, continuing anyway", path, err)
+	// For root user, direct chown will work without elevation
+	if uid == 0 {
+		// For root, directly set ownership without permission elevation
+		if err := os.Chown(path, uid, gid); err != nil {
+			logrus.Warnf("Could not set ownership for %s: %v, continuing anyway", path, err)
+		}
+	} else {
+		// For non-root users, use permission elevation
+		if err := setFileOwnershipSafely(path, uid, gid); err != nil {
+			logrus.Warnf("Could not set ownership for %s: %v, continuing anyway", path, err)
+		}
 	}
 
-	// Set file permissions (this usually works without root)
+	// Set file permissions
 	if chmodErr := os.Chmod(path, mode); chmodErr != nil {
-		// Log warning but continue - some system files may be protected
-		logrus.Warnf("Could not chmod %s: %v, continuing anyway", path, chmodErr)
+		// For root, this should always work, but log warning if it fails
+		if uid == 0 {
+			logrus.Warnf("Root user could not chmod %s: %v", path, chmodErr)
+		} else {
+			logrus.Warnf("Could not chmod %s: %v, continuing anyway", path, chmodErr)
+		}
 		return chmodErr
 	}
 	return nil
