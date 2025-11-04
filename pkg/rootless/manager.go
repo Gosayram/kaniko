@@ -543,7 +543,19 @@ func (rm *Manager) validateSecurity() error {
 	}
 
 	// 2. Check that critical paths don't contain system directories
+	// Get filesystem structure to check for temp directories
+	fs := util.GetFilesystemStructure()
+	tempDirs := fs.GetTempDirectories()
+	tempDirMap := make(map[string]bool)
+	for _, tempDir := range tempDirs {
+		tempDirMap[tempDir] = true
+	}
+
 	for _, path := range rm.criticalPaths {
+		// Skip validation for temp directories - they are safe to use even if in system paths
+		if tempDirMap[path] {
+			continue
+		}
 		if rm.isSystemPath(path) {
 			return fmt.Errorf("critical path %s is a system path", path)
 		}
