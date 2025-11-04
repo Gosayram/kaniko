@@ -145,9 +145,8 @@ func setupUserPath(env []string) {
 }
 
 func executeAndCleanupCommand(cmd *exec.Cmd) error {
-	// PROACTIVE: Make common system directories writable BEFORE running the command
-	// This ensures changes are included in the snapshot/cache
-	util.PrepareCommonSystemDirectoriesWritable()
+	// NOTE: PrepareCommonSystemDirectoriesWritable is now called once in ExecuteCommands
+	// before parallel execution starts to prevent race conditions
 
 	// Capture stderr and stdout to detect errors (especially for piped commands)
 	var stderrBuf, stdoutBuf strings.Builder

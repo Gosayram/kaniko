@@ -1559,10 +1559,16 @@ func CreateSymlinkWithFallback(target, linkPath string) error {
 }
 
 // isProtectedDirectory checks if a path is in a protected system directory
+// Uses dynamic filesystem structure analysis instead of hardcoded paths when available.
 func isProtectedDirectory(path string) bool {
-	protectedDirs := []string{"/usr/local/bin", "/usr/bin", "/bin", "/usr/local/sbin", "/usr/sbin", "/sbin"}
+	// Get filesystem structure (dynamic if analyzed, fallback if not)
+	fsStructure := GetFilesystemStructure()
+
+	// Get bin directories (protected directories for executables)
+	binDirs := fsStructure.GetBinDirectories()
+
 	dir := filepath.Dir(path)
-	for _, protected := range protectedDirs {
+	for _, protected := range binDirs {
 		if dir == protected {
 			return true
 		}
@@ -2829,43 +2835,87 @@ func MakeDirectoryWritable(dirPath string) error {
 
 // PrepareCommonSystemDirectoriesWritable makes common system directories writable proactively
 // This is called BEFORE running commands to ensure permissions are set in the snapshot/cache
+// It uses dynamic filesystem structure analysis instead of hardcoded paths when available.
 func PrepareCommonSystemDirectoriesWritable() {
-	// Make common system directories writable
-	for _, dir := range CommonSystemDirectories {
+	// Get filesystem structure (dynamic if analyzed, fallback if not)
+	fsStructure := GetFilesystemStructure()
+
+	// Collect all directories that need to be writable
+	dirsToMakeWritable := make(map[string]bool)
+
+	// Add cache directories
+	for _, dir := range fsStructure.GetCacheDirectories() {
+		dirsToMakeWritable[dir] = true
+	}
+
+	// Add temp directories
+	for _, dir := range fsStructure.GetTempDirectories() {
+		dirsToMakeWritable[dir] = true
+	}
+
+	// Add bin directories (for symlink creation)
+	for _, dir := range fsStructure.GetBinDirectories() {
+		dirsToMakeWritable[dir] = true
+	}
+
+	// Add lib directories (for symlink creation)
+	for _, dir := range fsStructure.GetLibDirectories() {
+		dirsToMakeWritable[dir] = true
+	}
+
+	// Add parent directories for cache paths
+	additionalPaths := []string{
+		"/",    // Root directory (for /.cache)
+		"/var", // For /var/cache, /var/tmp
+	}
+	for _, path := range additionalPaths {
+		dirsToMakeWritable[path] = true
+	}
+
+	// Make all collected directories writable
+	for dir := range dirsToMakeWritable {
 		// Check if directory exists
 		if info, err := os.Stat(dir); err == nil && info.IsDir() {
 			// Make it writable (will use cache to avoid redundant operations)
 			if mkErr := MakeDirectoryWritable(dir); mkErr != nil {
 				logrus.Debugf("Could not make %s writable: %v", dir, mkErr)
+			} else {
+				logrus.Debugf("✅ Made directory writable: %s", dir)
 			}
 		} else if err != nil {
 			logrus.Debugf("Directory %s does not exist: %v", dir, err)
 		}
 	}
 
-	// Also make parent directories of common paths writable
-	// This handles cases like /.cache, /var/cache, etc.
-	additionalPaths := []string{
-		"/",    // Root directory (for /.cache)
-		"/var", // For /var/cache, /var/tmp
-	}
+	logrus.Debugf("📁 Prepared %d directories as writable using %s filesystem structure",
+		len(dirsToMakeWritable), getStructureType(fsStructure))
+}
 
-	for _, path := range additionalPaths {
-		if info, err := os.Stat(path); err == nil && info.IsDir() {
-			if mkErr := MakeDirectoryWritable(path); mkErr != nil {
-				logrus.Debugf("Could not make parent directory %s writable: %v", path, mkErr)
-			}
-		}
+// getStructureType returns a string describing the type of filesystem structure
+func getStructureType(fsStructure FilesystemStructure) string {
+	if _, ok := fsStructure.(*FilesystemStructureAnalyzer); ok {
+		return "dynamic"
 	}
+	return "fallback (hardcoded)"
 }
 
 // MakeDirectoryWritableByPattern makes a directory writable if it matches any of our patterns
 // This is called when we detect permission errors to dynamically fix directories
+// It uses dynamic filesystem structure analysis instead of hardcoded patterns when available.
 func MakeDirectoryWritableByPattern(dirPath string) bool {
-	// Check if directory matches any of our patterns
-	for _, pattern := range DirectoryPatterns {
+	// Get filesystem structure (dynamic if analyzed, fallback if not)
+	fsStructure := GetFilesystemStructure()
+
+	// Check patterns from filesystem structure
+	patterns := fsStructure.GetDirectoryPatterns()
+	for _, patternStr := range patterns {
+		pattern, err := regexp.Compile(patternStr)
+		if err != nil {
+			logrus.Debugf("Invalid pattern %s: %v", patternStr, err)
+			continue
+		}
 		if pattern.MatchString(dirPath) {
-			logrus.Debugf("🔍 Directory %s matches pattern %s, making writable", dirPath, pattern.String())
+			logrus.Debugf("🔍 Directory %s matches pattern %s, making writable", dirPath, patternStr)
 			if err := MakeDirectoryWritable(dirPath); err != nil {
 				logrus.Debugf("Could not make %s writable: %v", dirPath, err)
 				return false
@@ -2873,6 +2923,26 @@ func MakeDirectoryWritableByPattern(dirPath string) bool {
 			return true
 		}
 	}
+
+	// Also check if it's in any of the known directories
+	cacheDirs := fsStructure.GetCacheDirectories()
+	tempDirs := fsStructure.GetTempDirectories()
+	binDirs := fsStructure.GetBinDirectories()
+	libDirs := fsStructure.GetLibDirectories()
+
+	allDirs := append(append(append(cacheDirs, tempDirs...), binDirs...), libDirs...)
+	cleanPath := filepath.Clean(dirPath)
+	for _, dir := range allDirs {
+		if strings.HasPrefix(cleanPath, dir) {
+			logrus.Debugf("🔍 Directory %s is in %s, making writable", dirPath, dir)
+			if err := MakeDirectoryWritable(dirPath); err != nil {
+				logrus.Debugf("Could not make %s writable: %v", dirPath, err)
+				return false
+			}
+			return true
+		}
+	}
+
 	return false
 }
 

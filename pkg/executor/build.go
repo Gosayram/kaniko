@@ -506,7 +506,20 @@ func (s *stageBuilder) unpackFilesystemIfNeeded() error {
 
 	retryFunc := func() error {
 		_, err := getFSFromImage(config.RootDir, s.image, util.ExtractFile)
-		return err
+		if err != nil {
+			return err
+		}
+
+		// Initialize filesystem structure analysis after successful extraction
+		// This allows dynamic path detection instead of hardcoded paths
+		if initErr := util.InitializeFilesystemStructure(config.RootDir); initErr != nil {
+			logrus.Warnf("Failed to initialize filesystem structure analysis: %v, will use fallback", initErr)
+			// Continue with fallback (hardcoded paths)
+		} else {
+			logrus.Debugf("✅ Filesystem structure analysis initialized successfully")
+		}
+
+		return nil
 	}
 
 	return errors.Wrap(util.Retry(retryFunc, s.opts.ImageFSExtractRetry, defaultRetryDelayMs),

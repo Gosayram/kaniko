@@ -13,3 +13,4 @@ test-results/*
 *.backup
 **/**.bkp
 test-scenarios/
+*.test

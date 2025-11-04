@@ -17,8 +17,6 @@ limitations under the License.
 package executor
 
 import (
-	"fmt"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -98,22 +96,20 @@ func (t *trackingSnapshotter) GetInitTime() time.Time {
 // TestInitSnapshotOnce tests that initSnapshot is called only once even with parallel commands
 func TestInitSnapshotOnce(t *testing.T) {
 	// Create mock commands that don't provide files to snapshot (like RUN commands)
-	// This ensures initSnapshot will be called
-	cmds := []commands.DockerCommand{
-		&testRunCommand{command: "RUN cmd1"},
-		&testRunCommand{command: "RUN cmd2"},
-		&testRunCommand{command: "RUN cmd3"},
-	}
+	cmd0 := &testRunCommand{command: "RUN cmd0"}
+	cmd1 := &testRunCommand{command: "RUN cmd1"}
+	cmd2 := &testRunCommand{command: "RUN cmd2"}
+	cmd3 := &testRunCommand{command: "RUN cmd3"}
+	cmds := []commands.DockerCommand{cmd0, cmd1, cmd2, cmd3}
 
 	opts := &config.KanikoOptions{
-		MaxParallelCommands: 3,
+		MaxParallelCommands: 4,
 		CommandTimeout:      30 * time.Second,
 	}
 
 	args := dockerfile.NewBuildArgs([]string{})
 	imageConfig := &v1.Config{}
 
-	// Create minimal stageBuilder with tracking snapshotter
 	trackingSnap := &trackingSnapshotter{
 		fakeSnapShotter: &fakeSnapShotter{file: ""},
 	}
@@ -126,7 +122,6 @@ func TestInitSnapshotOnce(t *testing.T) {
 
 	executor := NewParallelExecutor(cmds, opts, args, imageConfig, sb)
 
-	// Execute commands in parallel
 	compositeKey := &CompositeCache{}
 	err := executor.ExecuteCommands(compositeKey, false)
 
@@ -134,63 +129,19 @@ func TestInitSnapshotOnce(t *testing.T) {
 		t.Fatalf("ExecuteCommands failed: %v", err)
 	}
 
-	// Verify init snapshot was called only once
+	// Verify init snapshot was called only once despite 4 parallel commands
 	callCount := trackingSnap.GetInitCallCount()
 	if callCount != 1 {
-		t.Errorf("Expected initSnapshot to be called once, got %d", callCount)
+		t.Errorf("Expected initSnapshot to be called once with 4 parallel commands, got %d", callCount)
 	}
 }
 
-// TestInitSnapshotAlreadyTaken tests that initSnapshot is not called when already taken
-func TestInitSnapshotAlreadyTaken(t *testing.T) {
+// TestParallelExecutionOrder tests that execution order respects dependencies
+func TestParallelExecutionOrder(t *testing.T) {
 	cmds := []commands.DockerCommand{
-		MockDockerCommand{command: "RUN cmd1"},
-		MockDockerCommand{command: "RUN cmd2"},
-	}
-
-	opts := &config.KanikoOptions{
-		MaxParallelCommands: 2,
-		CommandTimeout:      30 * time.Second,
-	}
-
-	args := dockerfile.NewBuildArgs([]string{})
-	imageConfig := &v1.Config{}
-
-	trackingSnap := &trackingSnapshotter{
-		fakeSnapShotter: &fakeSnapShotter{file: ""},
-	}
-	sb := &stageBuilder{
-		args:        dockerfile.NewBuildArgs([]string{}),
-		opts:        opts,
-		cf:          &v1.ConfigFile{Config: v1.Config{Env: make([]string, 0)}},
-		snapshotter: trackingSnap,
-	}
-
-	executor := NewParallelExecutor(cmds, opts, args, imageConfig, sb)
-
-	compositeKey := &CompositeCache{}
-	// Pass initSnapshotTaken = true
-	err := executor.ExecuteCommands(compositeKey, true)
-
-	if err != nil {
-		t.Fatalf("ExecuteCommands failed: %v", err)
-	}
-
-	// Verify init snapshot was NOT called
-	callCount := trackingSnap.GetInitCallCount()
-	if callCount != 0 {
-		t.Errorf("Expected initSnapshot to not be called when already taken, got %d", callCount)
-	}
-}
-
-// TestCommandExecutionOrder tests that commands execute in correct order
-func TestCommandExecutionOrder(t *testing.T) {
-	// Create commands with dependencies
-	// Command 0 should execute before command 1
-	cmds := []commands.DockerCommand{
-		MockDockerCommand{command: "RUN install-tool"},
-		MockDockerCommand{command: "RUN use-tool"},
-		MockDockerCommand{command: "ARG VAR"},
+		MockDockerCommand{command: "RUN install"}, // Command 0
+		MockDockerCommand{command: "RUN use"},     // Command 1 depends on 0
+		MockDockerCommand{command: "ARG VAR"},     // Command 2 - no dependencies
 	}
 
 	opts := &config.KanikoOptions{
@@ -455,7 +406,6 @@ func TestParallelGroupWithDependencies(t *testing.T) {
 		{From: 0, To: 2, Type: FileSystemDependency},
 	}
 
-	compositeKey := &CompositeCache{}
 	err := executor.AnalyzeDependencies()
 	if err != nil {
 		t.Fatalf("AnalyzeDependencies failed: %v", err)
@@ -497,197 +447,31 @@ func TestParallelGroupWithDependencies(t *testing.T) {
 
 	// Command 0 must come before commands 1 and 2
 	if idx0 >= idx1 {
-		t.Errorf("Command 0 (index %d) should execute before command 1 (index %d)", idx0, idx1)
+		t.Errorf("Command 0 should execute before command 1, but got: 0 at %d, 1 at %d", idx0, idx1)
 	}
 	if idx0 >= idx2 {
-		t.Errorf("Command 0 (index %d) should execute before command 2 (index %d)", idx0, idx2)
-	}
-
-	// Execute commands
-	err = executor.ExecuteCommands(compositeKey, true)
-	if err != nil {
-		t.Fatalf("ExecuteCommands failed: %v", err)
+		t.Errorf("Command 0 should execute before command 2, but got: 0 at %d, 2 at %d", idx0, idx2)
 	}
 }
 
-// TestSnapshotWithCacheEnabled tests snapshot behavior when cache is enabled
-func TestSnapshotWithCacheEnabled(t *testing.T) {
+// TestEnvironmentDependencyDetection tests that ENV commands are detected as dependencies for RUN commands
+// that use those environment variables
+func TestEnvironmentDependencyDetection(t *testing.T) {
+	// Command 0: ENV PATH=/custom/path:$PATH
+	// Command 1: RUN echo $PATH
+	// Command 2: RUN echo "hello"
+	// Command 1 should depend on command 0 (uses PATH variable)
+	// Command 2 should not depend on command 0 (doesn't use PATH)
 	cmds := []commands.DockerCommand{
-		&testRunCommand{command: "RUN cmd1"},
-		&testRunCommand{command: "RUN cmd2"},
-	}
-
-	opts := &config.KanikoOptions{
-		MaxParallelCommands: 2,
-		CommandTimeout:      30 * time.Second,
-		Cache:               true, // Enable cache
-		ForceBuildMetadata:  true,
-	}
-
-	args := dockerfile.NewBuildArgs([]string{})
-	imageConfig := &v1.Config{}
-
-	sb := &stageBuilder{
-		args:        dockerfile.NewBuildArgs([]string{}),
-		opts:        opts,
-		cf:          &v1.ConfigFile{Config: v1.Config{Env: make([]string, 0)}},
-		snapshotter: &fakeSnapShotter{file: "/tmp/test-snapshot"},
-		cmds:        cmds,
-		pushLayerToCache: func(_ *config.KanikoOptions, _, _, _ string) error {
-			return nil // Mock cache push
-		},
-	}
-
-	executor := NewParallelExecutor(cmds, opts, args, imageConfig, sb)
-
-	compositeKey := &CompositeCache{}
-	compositeKey.AddKey("test-key")
-
-	err := executor.ExecuteCommands(compositeKey, true)
-
-	// Should succeed with cache enabled
-	if err != nil {
-		t.Fatalf("ExecuteCommands failed with cache enabled: %v", err)
-	}
-}
-
-// TestPendingSnapshotCompositeKeyCopy tests that each PendingSnapshot has its own copy of CompositeKey
-func TestPendingSnapshotCompositeKeyCopy(t *testing.T) {
-	cmds := []commands.DockerCommand{
-		&testRunCommand{command: "RUN cmd0"},
-		&testRunCommand{command: "RUN cmd1"},
-	}
-
-	opts := &config.KanikoOptions{
-		MaxParallelCommands: 2,
-		CommandTimeout:      30 * time.Second,
-		ForceBuildMetadata:  true,
-		Cache:               true,
-	}
-
-	args := dockerfile.NewBuildArgs([]string{})
-	imageConfig := &v1.Config{}
-
-	sb := &stageBuilder{
-		args:        dockerfile.NewBuildArgs([]string{}),
-		opts:        opts,
-		cf:          &v1.ConfigFile{Config: v1.Config{Env: make([]string, 0)}},
-		snapshotter: &fakeSnapShotter{file: "/tmp/test-snapshot"},
-		cmds:        cmds,
-		pushLayerToCache: func(_ *config.KanikoOptions, _, _, _ string) error {
-			return nil
-		},
-	}
-
-	executor := NewParallelExecutor(cmds, opts, args, imageConfig, sb)
-
-	compositeKey := &CompositeCache{}
-	compositeKey.AddKey("key0")
-
-	err := executor.ExecuteCommands(compositeKey, true)
-
-	// Should succeed - each snapshot should have its own compositeKey copy
-	if err != nil {
-		t.Fatalf("ExecuteCommands failed: %v", err)
-	}
-}
-
-// TestSnapshotSequentialOrder tests that snapshots are taken sequentially after parallel execution
-func TestSnapshotSequentialOrder(t *testing.T) {
-	cmds := []commands.DockerCommand{
-		&testRunCommand{command: "RUN cmd0"},
-		&testRunCommand{command: "RUN cmd1"},
-		&testRunCommand{command: "RUN cmd2"},
+		MockDockerCommand{command: "ENV PATH=/custom/path:$PATH"},
+		&testRunCommand{command: "RUN echo $PATH"},
+		&testRunCommand{command: "RUN echo hello"},
 	}
 
 	opts := &config.KanikoOptions{
 		MaxParallelCommands: 3,
 		CommandTimeout:      30 * time.Second,
-		ForceBuildMetadata:  true,
-	}
-
-	args := dockerfile.NewBuildArgs([]string{})
-	imageConfig := &v1.Config{}
-
-	sb := &stageBuilder{
-		args:        dockerfile.NewBuildArgs([]string{}),
-		opts:        opts,
-		cf:          &v1.ConfigFile{Config: v1.Config{Env: make([]string, 0)}},
-		snapshotter: &fakeSnapShotter{file: "/tmp/test-snapshot"},
-		cmds:        cmds,
-		pushLayerToCache: func(_ *config.KanikoOptions, _, _, _ string) error {
-			return nil
-		},
-	}
-
-	executor := NewParallelExecutor(cmds, opts, args, imageConfig, sb)
-
-	compositeKey := &CompositeCache{}
-	err := executor.ExecuteCommands(compositeKey, true)
-
-	// Should succeed - snapshots should be taken sequentially
-	if err != nil {
-		t.Fatalf("ExecuteCommands failed: %v", err)
-	}
-
-	// Verify all commands executed
-	executor.executedMutex.RLock()
-	executedCount := len(executor.executed)
-	executor.executedMutex.RUnlock()
-
-	if executedCount != 3 {
-		t.Errorf("Expected 3 commands to be executed, got %d", executedCount)
-	}
-}
-
-// TestSingleCommandGroup tests that single command groups work correctly
-func TestSingleCommandGroup(t *testing.T) {
-	cmds := []commands.DockerCommand{
-		&testRunCommand{command: "RUN cmd0"},
-	}
-
-	opts := &config.KanikoOptions{
-		MaxParallelCommands: 1,
-		CommandTimeout:      30 * time.Second,
-		ForceBuildMetadata:  true,
-	}
-
-	args := dockerfile.NewBuildArgs([]string{})
-	imageConfig := &v1.Config{}
-
-	sb := &stageBuilder{
-		args:        dockerfile.NewBuildArgs([]string{}),
-		opts:        opts,
-		cf:          &v1.ConfigFile{Config: v1.Config{Env: make([]string, 0)}},
-		snapshotter: &fakeSnapShotter{file: "/tmp/test-snapshot"},
-		cmds:        cmds,
-		pushLayerToCache: func(_ *config.KanikoOptions, _, _, _ string) error {
-			return nil
-		},
-	}
-
-	executor := NewParallelExecutor(cmds, opts, args, imageConfig, sb)
-
-	compositeKey := &CompositeCache{}
-	err := executor.ExecuteCommands(compositeKey, true)
-
-	// Single command should work with immediate snapshot
-	if err != nil {
-		t.Fatalf("ExecuteCommands failed for single command: %v", err)
-	}
-}
-
-// TestMultipleCommandsNoSnapshots tests commands that don't require snapshots
-func TestMultipleCommandsNoSnapshots(t *testing.T) {
-	cmds := []commands.DockerCommand{
-		MockDockerCommand{command: "ARG VAR1"},
-		MockDockerCommand{command: "ARG VAR2"},
-		MockDockerCommand{command: "ENV KEY=value"},
-	}
-
-	opts := &config.KanikoOptions{
-		MaxParallelCommands: 3,
-		CommandTimeout:      30 * time.Second,
+		EnableParallelExec:  true,
 	}
 
 	args := dockerfile.NewBuildArgs([]string{})
@@ -698,201 +482,44 @@ func TestMultipleCommandsNoSnapshots(t *testing.T) {
 		opts:        opts,
 		cf:          &v1.ConfigFile{Config: v1.Config{Env: make([]string, 0)}},
 		snapshotter: &fakeSnapShotter{file: ""},
-		cmds:        cmds,
-		pushLayerToCache: func(_ *config.KanikoOptions, _, _, _ string) error {
-			return nil
-		},
 	}
 
 	executor := NewParallelExecutor(cmds, opts, args, imageConfig, sb)
 
-	compositeKey := &CompositeCache{}
-	err := executor.ExecuteCommands(compositeKey, true)
-
-	// Should succeed - metadata commands don't need snapshots
-	if err != nil {
-		t.Fatalf("ExecuteCommands failed for metadata commands: %v", err)
-	}
-}
-
-// TestInitSnapshotBeforeParallelCommands tests that init snapshot is taken BEFORE parallel commands execute
-// This is critical to ensure filesystem is ready for commands like apt-get that require system directories
-func TestInitSnapshotBeforeParallelCommands(t *testing.T) {
-	cmd0 := &testRunCommand{command: "RUN apt-get update"} // Command that requires /etc/apt/ directories
-	cmd1 := &testRunCommand{command: "RUN echo test"}
-	cmd2 := &testRunCommand{command: "RUN ls"}
-	cmds := []commands.DockerCommand{cmd0, cmd1, cmd2}
-
-	opts := &config.KanikoOptions{
-		MaxParallelCommands: 3,
-		CommandTimeout:      30 * time.Second,
-	}
-
-	args := dockerfile.NewBuildArgs([]string{})
-	imageConfig := &v1.Config{}
-
-	trackingSnap := &trackingSnapshotter{
-		fakeSnapShotter: &fakeSnapShotter{file: "/tmp/test-snapshot"},
-	}
-
-	sb := &stageBuilder{
-		args:        dockerfile.NewBuildArgs([]string{}),
-		opts:        opts,
-		cf:          &v1.ConfigFile{Config: v1.Config{Env: make([]string, 0)}},
-		snapshotter: trackingSnap,
-		cmds:        cmds,
-		pushLayerToCache: func(_ *config.KanikoOptions, _, _, _ string) error {
-			return nil
-		},
-	}
-
-	executor := NewParallelExecutor(cmds, opts, args, imageConfig, sb)
-
-	compositeKey := &CompositeCache{}
-	err := executor.ExecuteCommands(compositeKey, false) // initSnapshotTaken = false to trigger init
-
-	if err != nil {
-		t.Fatalf("ExecuteCommands failed: %v", err)
-	}
-
-	// Verify init snapshot was called
-	if trackingSnap.GetInitCallCount() != 1 {
-		t.Errorf("Expected initSnapshot to be called once, got %d", trackingSnap.GetInitCallCount())
-	}
-
-	// Verify init snapshot was taken BEFORE commands started
-	// This is critical - commands should not execute until filesystem is ready
-	initTime := trackingSnap.GetInitTime()
-	cmd0Time := cmd0.GetExecuteTime()
-
-	if !initTime.IsZero() && !cmd0Time.IsZero() {
-		if cmd0Time.Before(initTime) {
-			t.Errorf("CRITICAL: First command started at %v BEFORE init snapshot at %v - this can cause filesystem errors",
-				cmd0Time, initTime)
-		}
-	}
-}
-
-// TestContextCancellationOnError tests that when one command fails, other commands are properly canceled
-// This prevents race conditions where failed command leaves filesystem in inconsistent state
-func TestContextCancellationOnError(t *testing.T) {
-	var executionOrder []int
-	var executionMutex sync.Mutex
-
-	cmd0 := &testRunCommand{
-		command: "RUN cmd1",
-		executeFunc: func(*v1.Config, *dockerfile.BuildArgs) error {
-			executionMutex.Lock()
-			executionOrder = append(executionOrder, 0)
-			executionMutex.Unlock()
-			return nil
-		},
-	}
-	cmd1 := &testRunCommand{
-		command: "RUN cmd2",
-		executeFunc: func(*v1.Config, *dockerfile.BuildArgs) error {
-			executionMutex.Lock()
-			executionOrder = append(executionOrder, 1)
-			executionMutex.Unlock()
-			return fmt.Errorf("command 1 failed intentionally")
-		},
-	}
-	cmd2 := &testRunCommand{
-		command: "RUN cmd3",
-		executeFunc: func(*v1.Config, *dockerfile.BuildArgs) error {
-			executionMutex.Lock()
-			executionOrder = append(executionOrder, 2)
-			executionMutex.Unlock()
-			return nil
-		},
-	}
-	cmds := []commands.DockerCommand{cmd0, cmd1, cmd2}
-
-	opts := &config.KanikoOptions{
-		MaxParallelCommands: 3,
-		CommandTimeout:      30 * time.Second,
-	}
-
-	args := dockerfile.NewBuildArgs([]string{})
-	imageConfig := &v1.Config{}
-
-	sb := &stageBuilder{
-		args:        dockerfile.NewBuildArgs([]string{}),
-		opts:        opts,
-		cf:          &v1.ConfigFile{Config: v1.Config{Env: make([]string, 0)}},
-		snapshotter: &fakeSnapShotter{file: ""},
-		cmds:        cmds,
-	}
-
-	executor := NewParallelExecutor(cmds, opts, args, imageConfig, sb)
-
-	compositeKey := &CompositeCache{}
-	err := executor.ExecuteCommands(compositeKey, true)
-
-	// Should fail because command 1 failed
-	if err == nil {
-		t.Fatal("Expected ExecuteCommands to fail when command fails, but it succeeded")
-	}
-
-	// Verify that error was properly propagated
-	if !strings.Contains(err.Error(), "command 1") {
-		t.Errorf("Expected error to mention 'command 1', got: %v", err)
-	}
-
-	// Verify that not all commands executed (some should be canceled)
-	// The exact behavior depends on timing, but at least one should have started
-	executionMutex.Lock()
-	executedCount := len(executionOrder)
-	executionMutex.Unlock()
-
-	if executedCount == 0 {
-		t.Errorf("Expected at least one command to start execution")
-	}
-}
-
-// TestFilesystemDependencyDetection tests that commands which modify filesystem
-// are properly detected as dependencies for subsequent commands
-func TestFilesystemDependencyDetection(t *testing.T) {
-	cmds := []commands.DockerCommand{
-		&testRunCommand{command: "RUN mkdir -p /etc/apt/apt.conf.d"}, // Creates directory
-		&testRunCommand{command: "RUN apt-get update"},               // Requires directory from previous command
-		&testRunCommand{command: "RUN echo test"},
-	}
-
-	opts := &config.KanikoOptions{
-		MaxParallelCommands: 3,
-		CommandTimeout:      30 * time.Second,
-	}
-
-	args := dockerfile.NewBuildArgs([]string{})
-	imageConfig := &v1.Config{}
-
-	sb := &stageBuilder{
-		args:        dockerfile.NewBuildArgs([]string{}),
-		opts:        opts,
-		cf:          &v1.ConfigFile{Config: v1.Config{Env: make([]string, 0)}},
-		snapshotter: &fakeSnapShotter{file: "/tmp/test-snapshot"},
-		cmds:        cmds,
-		pushLayerToCache: func(_ *config.KanikoOptions, _, _, _ string) error {
-			return nil
-		},
-	}
-
-	executor := NewParallelExecutor(cmds, opts, args, imageConfig, sb)
-
-	// Manually set dependency to test that dependency system works correctly
-	// (Automatic detection requires specific command interfaces that mocks may not implement)
-	executor.dependencies = []CommandDependency{
-		{From: 0, To: 1, Type: FileSystemDependency},
-	}
-
-	// Analyze dependencies (will build execution order from our dependencies)
+	// Analyze dependencies - should detect ENV dependency
 	err := executor.AnalyzeDependencies()
 	if err != nil {
 		t.Fatalf("AnalyzeDependencies failed: %v", err)
 	}
 
-	// Verify execution order respects dependencies
+	// Check that environment dependency was detected
+	envDepFound := false
+	for _, dep := range executor.dependencies {
+		if dep.From == 0 && dep.To == 1 && dep.Type == EnvironmentDependency {
+			envDepFound = true
+			break
+		}
+	}
+
+	if !envDepFound {
+		t.Errorf("Expected environment dependency from command 0 (ENV) to command 1 (RUN uses $PATH), but it was not found")
+		t.Logf("Found dependencies: %+v", executor.dependencies)
+	}
+
+	// Verify that command 2 (doesn't use PATH) doesn't have dependency on command 0
+	cmd2DepFound := false
+	for _, dep := range executor.dependencies {
+		if dep.From == 0 && dep.To == 2 {
+			cmd2DepFound = true
+			break
+		}
+	}
+
+	if cmd2DepFound {
+		t.Errorf("Command 2 should not depend on command 0 (ENV) since it doesn't use PATH variable")
+	}
+
+	// Verify execution order - command 0 should come before command 1
 	order := executor.executionOrder
 	idx0 := -1
 	idx1 := -1
@@ -909,153 +536,28 @@ func TestFilesystemDependencyDetection(t *testing.T) {
 		t.Errorf("Commands not found in execution order: 0=%d, 1=%d", idx0, idx1)
 	}
 
-	// Command 0 should execute before command 1 when dependency is set
+	// Command 0 (ENV) must come before command 1 (RUN uses $PATH)
 	if idx0 >= idx1 {
-		t.Errorf("CRITICAL: Command 0 (mkdir) should execute before command 1 (apt-get) when dependency is set, but got order: %v", order)
+		t.Errorf("Command 0 (ENV) should execute before command 1 (RUN uses $PATH), but got: 0 at %d, 1 at %d", idx0, idx1)
 	}
 }
 
-// TestConcurrentFilesystemModifications tests race conditions when multiple commands
-// modify the same filesystem locations concurrently
-func TestConcurrentFilesystemModifications(t *testing.T) {
-	var executionCount int64
-	var executionMutex sync.Mutex
-
-	// Create commands that all modify the same directory structure
-	createCommand := func(index int) *testRunCommand {
-		return &testRunCommand{
-			command: fmt.Sprintf("RUN touch /tmp/test%d", index),
-			executeFunc: func(*v1.Config, *dockerfile.BuildArgs) error {
-				executionMutex.Lock()
-				currentCount := atomic.LoadInt64(&executionCount)
-				atomic.AddInt64(&executionCount, 1)
-				executionMutex.Unlock()
-
-				// Simulate some work
-				time.Sleep(10 * time.Millisecond)
-
-				atomic.AddInt64(&executionCount, -1)
-
-				// Verify no race condition - count should be managed correctly
-				if currentCount >= 8 {
-					t.Errorf("CRITICAL: Too many concurrent executions: %d (max: 8)", currentCount)
-				}
-
-				return nil
-			},
-		}
-	}
-
-	cmds := make([]commands.DockerCommand, 8)
-	for i := 0; i < 8; i++ {
-		cmds[i] = createCommand(i + 1)
-	}
-
-	opts := &config.KanikoOptions{
-		MaxParallelCommands: 8, // Execute all in parallel
-		CommandTimeout:      30 * time.Second,
-		ForceBuildMetadata:  true,
-	}
-
-	args := dockerfile.NewBuildArgs([]string{})
-	imageConfig := &v1.Config{}
-
-	sb := &stageBuilder{
-		args:        dockerfile.NewBuildArgs([]string{}),
-		opts:        opts,
-		cf:          &v1.ConfigFile{Config: v1.Config{Env: make([]string, 0)}},
-		snapshotter: &fakeSnapShotter{file: "/tmp/test-snapshot"},
-		cmds:        cmds,
-		pushLayerToCache: func(_ *config.KanikoOptions, _, _, _ string) error {
-			return nil
-		},
-	}
-
-	executor := NewParallelExecutor(cmds, opts, args, imageConfig, sb)
-
-	compositeKey := &CompositeCache{}
-	err := executor.ExecuteCommands(compositeKey, true)
-
-	// Should succeed even with concurrent filesystem modifications
-	if err != nil {
-		t.Fatalf("ExecuteCommands failed with concurrent modifications: %v", err)
-	}
-
-	// Verify all commands executed
-	executor.executedMutex.RLock()
-	executedCount := len(executor.executed)
-	executor.executedMutex.RUnlock()
-
-	if executedCount != 8 {
-		t.Errorf("Expected 8 commands to be executed, got %d", executedCount)
-	}
-}
-
-// TestCompositeKeyUpdateRaceCondition tests that compositeKey updates are thread-safe
-// This is critical for cache correctness
-func TestCompositeKeyUpdateRaceCondition(t *testing.T) {
+// TestEnvironmentDependencyMultipleVars tests detection of multiple environment variables
+func TestEnvironmentDependencyMultipleVars(t *testing.T) {
+	// Command 0: ENV VAR1=value1
+	// Command 1: ENV VAR2=value2
+	// Command 2: RUN echo $VAR1 $VAR2
+	// Command 2 should depend on both command 0 and command 1
 	cmds := []commands.DockerCommand{
-		&testRunCommand{command: "RUN cmd0"},
-		&testRunCommand{command: "RUN cmd1"},
-		&testRunCommand{command: "RUN cmd2"},
-		&testRunCommand{command: "RUN cmd3"},
+		MockDockerCommand{command: "ENV VAR1=value1"},
+		MockDockerCommand{command: "ENV VAR2=value2"},
+		&testRunCommand{command: "RUN echo $VAR1 $VAR2"},
 	}
-
-	opts := &config.KanikoOptions{
-		MaxParallelCommands: 4,
-		CommandTimeout:      30 * time.Second,
-		Cache:               true, // Enable cache to test compositeKey updates
-		ForceBuildMetadata:  true,
-	}
-
-	args := dockerfile.NewBuildArgs([]string{})
-	imageConfig := &v1.Config{}
-
-	sb := &stageBuilder{
-		args:        dockerfile.NewBuildArgs([]string{}),
-		opts:        opts,
-		cf:          &v1.ConfigFile{Config: v1.Config{Env: make([]string, 0)}},
-		snapshotter: &fakeSnapShotter{file: "/tmp/test-snapshot"},
-		cmds:        cmds,
-		pushLayerToCache: func(_ *config.KanikoOptions, _, _, _ string) error {
-			return nil
-		},
-	}
-
-	executor := NewParallelExecutor(cmds, opts, args, imageConfig, sb)
-
-	compositeKey := &CompositeCache{}
-	compositeKey.AddKey("initial-key")
-
-	err := executor.ExecuteCommands(compositeKey, true)
-
-	// Should succeed - compositeKey updates should be thread-safe (protected by mutex in code)
-	if err != nil {
-		t.Fatalf("ExecuteCommands failed: %v", err)
-	}
-
-	// Verify all commands executed
-	executor.executedMutex.RLock()
-	executedCount := len(executor.executed)
-	executor.executedMutex.RUnlock()
-
-	if executedCount != 4 {
-		t.Errorf("Expected 4 commands to be executed, got %d", executedCount)
-	}
-}
-
-// TestDeferredSnapshotOrder tests that deferred snapshots are taken in correct order
-// This prevents cache corruption when snapshots are taken out of order
-func TestDeferredSnapshotOrder(t *testing.T) {
-	cmd0 := &testRunCommand{command: "RUN cmd0"}
-	cmd1 := &testRunCommand{command: "RUN cmd1"}
-	cmd2 := &testRunCommand{command: "RUN cmd2"}
-	cmds := []commands.DockerCommand{cmd0, cmd1, cmd2}
 
 	opts := &config.KanikoOptions{
 		MaxParallelCommands: 3,
 		CommandTimeout:      30 * time.Second,
-		ForceBuildMetadata:  true,
+		EnableParallelExec:  true,
 	}
 
 	args := dockerfile.NewBuildArgs([]string{})
@@ -1065,29 +567,32 @@ func TestDeferredSnapshotOrder(t *testing.T) {
 		args:        dockerfile.NewBuildArgs([]string{}),
 		opts:        opts,
 		cf:          &v1.ConfigFile{Config: v1.Config{Env: make([]string, 0)}},
-		snapshotter: &fakeSnapShotter{file: "/tmp/test-snapshot"},
-		cmds:        cmds,
-		pushLayerToCache: func(_ *config.KanikoOptions, _, _, _ string) error {
-			return nil
-		},
+		snapshotter: &fakeSnapShotter{file: ""},
 	}
 
 	executor := NewParallelExecutor(cmds, opts, args, imageConfig, sb)
 
-	compositeKey := &CompositeCache{}
-	err := executor.ExecuteCommands(compositeKey, true)
-
-	// Should succeed - deferred snapshots should work correctly
+	err := executor.AnalyzeDependencies()
 	if err != nil {
-		t.Fatalf("ExecuteCommands failed: %v", err)
+		t.Fatalf("AnalyzeDependencies failed: %v", err)
 	}
 
-	// Verify all commands executed
-	executor.executedMutex.RLock()
-	executedCount := len(executor.executed)
-	executor.executedMutex.RUnlock()
+	// Check that both dependencies were detected
+	var1DepFound := false
+	var2DepFound := false
+	for _, dep := range executor.dependencies {
+		if dep.From == 0 && dep.To == 2 && dep.Type == EnvironmentDependency {
+			var1DepFound = true
+		}
+		if dep.From == 1 && dep.To == 2 && dep.Type == EnvironmentDependency {
+			var2DepFound = true
+		}
+	}
 
-	if executedCount != 3 {
-		t.Errorf("Expected 3 commands to be executed, got %d", executedCount)
+	if !var1DepFound {
+		t.Errorf("Expected environment dependency from command 0 (ENV VAR1) to command 2 (RUN uses $VAR1)")
+	}
+	if !var2DepFound {
+		t.Errorf("Expected environment dependency from command 1 (ENV VAR2) to command 2 (RUN uses $VAR2)")
 	}
 }

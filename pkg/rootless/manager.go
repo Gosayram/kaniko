@@ -27,6 +27,8 @@ import (
 	"strings"
 
 	"github.com/sirupsen/logrus"
+
+	"github.com/Gosayram/kaniko/pkg/util"
 )
 
 const (
@@ -658,8 +660,15 @@ func (rm *Manager) validateCommandSafety(cmd string) error {
 
 // validateFileSystemAccess validates file system access
 func (rm *Manager) validateFileSystemAccess(cmd string) error {
-	// Check for access to system directories
-	systemPaths := []string{"/bin", "/sbin", "/usr/bin", "/usr/sbin", "/etc", "/lib", "/lib64", "/root"}
+	// Get filesystem structure (dynamic if analyzed, fallback if not)
+	fs := util.GetFilesystemStructure()
+
+	// Get system directories dynamically
+	systemDirs := fs.GetSystemDirectories()
+	// Also include root home directory
+	systemPaths := make([]string, len(systemDirs), len(systemDirs)+1)
+	copy(systemPaths, systemDirs)
+	systemPaths = append(systemPaths, RootHomeDir)
 
 	for _, sysPath := range systemPaths {
 		if strings.Contains(cmd, sysPath) {
@@ -675,25 +684,40 @@ func (rm *Manager) validateFileSystemAccess(cmd string) error {
 }
 
 func (rm *Manager) isSystemPath(path string) bool {
-	systemPaths := []string{"/bin", "/sbin", "/usr/bin", "/usr/sbin", "/etc", "/lib", "/lib64"}
-	for _, sysPath := range systemPaths {
-		if strings.HasPrefix(path, sysPath) {
-			return true
-		}
-	}
-	return false
+	// Get filesystem structure (dynamic if analyzed, fallback if not)
+	fs := util.GetFilesystemStructure()
+
+	// Use the dynamic filesystem structure to check if path is a system directory
+	return fs.IsSystemDirectory(path)
 }
 
 // getDefaultCriticalPaths returns the default critical paths for rootless setup
+// Uses dynamic filesystem structure analysis for temp and bin directories when available.
 func getDefaultCriticalPaths() []string {
-	return []string{
+	// Get filesystem structure (dynamic if analyzed, fallback if not)
+	fs := util.GetFilesystemStructure()
+
+	// Start with kaniko-specific paths
+	paths := []string{
 		"/kaniko",                   // working directory
 		"/workspace",                // build context
-		"/tmp",                      // temporary files
-		"/var/tmp",                  // temporary files
-		"/usr/local/bin",            // user binaries
 		"/home/kaniko/.local/bin",   // user binaries
 		"/home/kaniko/.local/lib",   // user libraries
 		"/home/kaniko/.local/share", // user data
 	}
+
+	// Add temp directories dynamically
+	paths = append(paths, fs.GetTempDirectories()...)
+
+	// Add bin directories dynamically (for user binaries)
+	binDirs := fs.GetBinDirectories()
+	// Filter to only include /usr/local/bin (user space)
+	for _, binDir := range binDirs {
+		if binDir == "/usr/local/bin" {
+			paths = append(paths, binDir)
+			break
+		}
+	}
+
+	return paths
 }

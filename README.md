@@ -378,7 +378,9 @@ docker run -v $(pwd):/workspace \
       - [**Memory Management \& Monitoring**](#memory-management--monitoring)
       - [**Memory Configuration**](#memory-configuration)
       - [**Parallel Execution \& Performance**](#parallel-execution--performance)
+      - [**How Parallel Execution Works**](#how-parallel-execution-works)
       - [**Parallel Execution Configuration**](#parallel-execution-configuration)
+      - [**Best Practices for Parallel Execution**](#best-practices-for-parallel-execution)
       - [**Build Optimization Engine**](#build-optimization-engine)
       - [**Optimization Features**](#optimization-features)
       - [**Advanced Snapshotting**](#advanced-snapshotting)
@@ -1666,6 +1668,27 @@ Kaniko includes comprehensive performance optimization capabilities:
 - **Smart Command Analysis** - Automatic dependency detection for safe parallel execution
 - **Performance Optimization** - 20-40% improvement for builds with independent commands
 - **Command Timeout Management** - Configurable timeouts for individual commands
+- **Race Condition Prevention** - Automatic detection and prevention of filesystem conflicts
+- **Thread-Safe Operations** - Safe parallel execution with proper synchronization
+
+#### **How Parallel Execution Works**
+Kaniko automatically analyzes Dockerfile commands to determine which can be executed in parallel:
+
+1. **Dependency Analysis** - Commands are analyzed for:
+   - File system dependencies (commands that create/modify files used by other commands)
+   - Environment variable dependencies (ENV commands affecting RUN commands)
+   - Parent directory relationships (mkdir + commands using created directories)
+
+2. **Conflict Detection** - Commands that modify the same files or directories are automatically detected and executed sequentially to prevent race conditions
+
+3. **Execution Groups** - Commands are grouped by dependencies:
+   - Commands in the same group can execute in parallel
+   - Groups execute sequentially to respect dependencies
+   - Snapshots are taken in deterministic order after parallel execution
+
+4. **System Directory Preparation** - System directories are made writable once before parallel execution starts, preventing race conditions when multiple commands need to modify system directories
+
+5. **Error Handling** - If any command fails, other parallel commands are canceled to prevent inconsistent filesystem state
 
 #### **Parallel Execution Configuration**
 ```bash
@@ -1674,6 +1697,12 @@ Kaniko includes comprehensive performance optimization capabilities:
 --max-parallel-commands=4           # Maximum parallel commands (0=auto-detect)
 --command-timeout=1h                # Command execution timeout
 ```
+
+#### **Best Practices for Parallel Execution**
+- **Independent Commands** - Structure Dockerfile with independent commands for best performance
+- **Avoid Shared Resources** - Commands that modify the same files/directories will run sequentially
+- **Use Multi-Stage Builds** - Cross-stage dependencies are automatically handled with filesystem sync
+- **Monitor Build Logs** - Check execution groups in logs to understand parallelization
 
 #### **Build Optimization Engine**
 - **Pattern Detection** - Automatic detection of common Dockerfile patterns
