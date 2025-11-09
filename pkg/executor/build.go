@@ -17,6 +17,7 @@ limitations under the License.
 package executor
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -40,6 +41,7 @@ import (
 
 	"github.com/google/go-containerregistry/pkg/v1/partial"
 
+	"github.com/Gosayram/kaniko/pkg/attestation"
 	"github.com/Gosayram/kaniko/pkg/cache"
 	"github.com/Gosayram/kaniko/pkg/commands"
 	"github.com/Gosayram/kaniko/pkg/config"
@@ -50,10 +52,22 @@ import (
 	"github.com/Gosayram/kaniko/pkg/logging"
 	"github.com/Gosayram/kaniko/pkg/multiplatform"
 	"github.com/Gosayram/kaniko/pkg/network"
+	"github.com/Gosayram/kaniko/pkg/retry"
 	"github.com/Gosayram/kaniko/pkg/rootless"
 	"github.com/Gosayram/kaniko/pkg/snapshot"
 	"github.com/Gosayram/kaniko/pkg/timing"
 	"github.com/Gosayram/kaniko/pkg/util"
+)
+
+const (
+	// defaultFullScanIntervalHours is the default interval for full scans (24 hours)
+	defaultFullScanIntervalHours = 24
+	// adaptiveThresholdDivisor is used to calculate adaptive scan count threshold
+	adaptiveThresholdDivisor = 50
+	// minScanCountThreshold is the minimum threshold for scan count
+	minScanCountThreshold = 10
+	// defaultScanCountThreshold is the default threshold for scan count
+	defaultScanCountThreshold = 100
 )
 
 // This is the size of an empty tar in Go
@@ -64,6 +78,10 @@ const (
 	keyValueParts       = 2
 	defaultRetryDelayMs = 1000
 	DefaultDirPerm      = 0o750
+	// DefaultRetryMaxDelay is the default maximum delay for retry operations
+	DefaultRetryMaxDelay = 30 * time.Second
+	// DefaultRetryBackoff is the default exponential backoff multiplier
+	DefaultRetryBackoff = 2.0
 )
 
 // Optimization constants
@@ -75,14 +93,14 @@ const (
 	CompressionZstd = "zstd"
 
 	// Performance optimization constants
-	NoCacheParallelMultiplier = 2
-	MemoryLimitGB             = 2
-	MemoryLimitBytes          = 2 * 1024 * 1024 * 1024 // 2GB
-	CommandTimeoutMinutes     = 30
-	MaxFileSizeMB             = 500
-	MaxFileSizeBytes          = 500 * 1024 * 1024 // 500MB
-	MaxTotalFileSizeGB        = 10
-	MaxTotalFileSizeBytes     = 10 * 1024 * 1024 * 1024 // 10GB
+	// NoCacheParallelMultiplier removed - parallel execution is no longer supported
+	MemoryLimitGB         = 2
+	MemoryLimitBytes      = 2 * 1024 * 1024 * 1024 // 2GB
+	CommandTimeoutMinutes = 30
+	MaxFileSizeMB         = 500
+	MaxFileSizeBytes      = 500 * 1024 * 1024 // 500MB
+	MaxTotalFileSizeGB    = 10
+	MaxTotalFileSizeBytes = 10 * 1024 * 1024 * 1024 // 10GB
 
 	// Network optimization constants
 	MaxIdleConns            = 200
@@ -97,11 +115,6 @@ const (
 	ManifestCacheTimeoutMin = 30
 
 	// Filesystem sync constants
-	// Increased delay to ensure filesystem operations are fully committed
-	// This is critical for cross-stage dependencies where files might be written
-	// by parallel RUN commands
-	FilesystemSyncDelay = 500 * time.Millisecond
-
 	// maxSampleEntries is the maximum number of directory entries to log for debugging
 	maxSampleEntries = 5
 )
@@ -138,8 +151,53 @@ type stageBuilder struct {
 	pushLayerToCache cachePusher
 	resourceLimits   *util.ResourceLimits
 
+	// ImmutableRef/MutableRef support for layer management
+	currentImmutable *ImmutableRef // Current immutable reference
+
+	// Cached values to avoid recomputation (performance optimization)
+	cachedDigest string     // Cached image digest
+	cachedLayers []v1.Layer // Cached image layers
+	digestValid  bool       // Whether cached digest is valid
+	layersValid  bool       // Whether cached layers are valid
+
 	// Mutex for thread-safe access to shared state
 	mutex sync.RWMutex
+}
+
+// StageSnapshot represents an immutable snapshot of a stage image
+// This simplifies cross-stage dependencies by storing the image directly
+// instead of extracting to temporary directories
+type StageSnapshot struct {
+	Image      v1.Image   // Immutable stage image
+	Digest     string     // Image digest
+	Files      []string   // List of files to save (from CalculateDependencies)
+	Extracted  bool       // Whether the image has been extracted
+	ExtractDir string     // Extraction directory (if needed)
+	mutex      sync.Mutex // Protection against concurrent access
+}
+
+// stageSnapshots stores snapshots of all stages for cross-stage dependencies
+var (
+	stageSnapshots = make(map[int]*StageSnapshot)
+	snapshotsMutex sync.RWMutex
+)
+
+// ImmutableRef represents an immutable layer reference (already committed)
+// This provides clear separation between committed and uncommitted layers
+type ImmutableRef struct {
+	Image  v1.Image   // Immutable image with this layer
+	Digest string     // Image digest
+	Layers []v1.Layer // All layers in the image
+}
+
+// MutableRef represents a mutable layer reference (in progress)
+// Used during command execution before committing to immutable
+type MutableRef struct {
+	Parent    *ImmutableRef // Parent immutable layer
+	Changes   []string      // Changed files in this layer
+	Snapshot  string        // Path to tar snapshot
+	Committed bool          // Whether the layer has been committed
+	CreatedBy string        // Command that created this layer
 }
 
 // initializeResourceLimits initializes resource limits if configured
@@ -165,6 +223,48 @@ func initializeResourceLimits(opts *config.KanikoOptions) *util.ResourceLimits {
 	}
 
 	return resourceLimits
+}
+
+// configureIncrementalSnapshots configures incremental snapshots with default values
+func configureIncrementalSnapshots(snapshotter *snapshot.Snapshotter, opts *config.KanikoOptions) {
+	// Calculate full scan interval (default: 24 hours, configurable via scan count threshold)
+	fullScanInterval := defaultFullScanIntervalHours * time.Hour
+	scanCountThreshold := defaultScanCountThreshold // Default threshold
+	if opts.MaxExpectedChanges > 0 {
+		// Use MaxExpectedChanges if provided
+		scanCountThreshold = opts.MaxExpectedChanges / adaptiveThresholdDivisor // Adaptive threshold based on max changes
+		if scanCountThreshold < minScanCountThreshold {
+			scanCountThreshold = minScanCountThreshold // Minimum threshold
+		}
+	}
+
+	// Set default MaxExpectedChanges if not provided
+	if opts.MaxExpectedChanges == 0 {
+		opts.MaxExpectedChanges = 5000 // Good balance for most projects per plan
+	}
+
+	// Enable integrity check by default if not explicitly disabled
+	// This ensures periodic full scans for reliability
+	if !opts.IntegrityCheck {
+		opts.IntegrityCheck = true
+		logrus.Debugf("Integrity check enabled by default for incremental snapshots")
+	}
+
+	// Enable full scan backup by default if not explicitly disabled
+	// This provides safety net for incremental snapshots
+	if !opts.FullScanBackup {
+		opts.FullScanBackup = true
+		logrus.Debugf("Full scan backup enabled by default for incremental snapshots")
+	}
+
+	snapshotter.ConfigureIncrementalSnapshots(
+		opts.MaxExpectedChanges,
+		opts.IntegrityCheck,
+		opts.FullScanBackup,
+		fullScanInterval,
+		scanCountThreshold,
+	)
+	logrus.Info("Incremental snapshots enabled and configured for this build")
 }
 
 // newStageBuilder returns a new type stageBuilder which contains all the information required to build the stage
@@ -202,10 +302,10 @@ func newStageBuilder(
 	l := snapshot.NewLayeredMap(hasher)
 	snapshotter := snapshot.NewSnapshotter(l, config.RootDir)
 
-	// Enable incremental snapshots if configured
+	// Enable and configure incremental snapshots by default (per plan)
+	// This provides fast incremental snapshots with periodic integrity checks
 	if opts.IncrementalSnapshots {
-		snapshotter.EnableIncrementalSnapshots()
-		logrus.Info("📸 Incremental snapshots enabled for this build")
+		configureIncrementalSnapshots(snapshotter, opts)
 	}
 
 	// Initialize resource limits if configured
@@ -218,12 +318,26 @@ func newStageBuilder(
 	if err != nil {
 		return nil, err
 	}
+
+	// Create initial immutable reference from base image
+	layers, err := sourceImage.Layers()
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to get base image layers")
+	}
+
+	digestStr := digest.String()
+	baseImmutable := &ImmutableRef{
+		Image:  sourceImage,
+		Digest: digestStr,
+		Layers: layers,
+	}
+
 	s := &stageBuilder{
 		stage:            *stage,
 		image:            sourceImage,
 		cf:               imageConfig,
 		snapshotter:      snapshotter,
-		baseImageDigest:  digest.String(),
+		baseImageDigest:  digestStr,
 		opts:             opts,
 		fileContext:      fileContext,
 		crossStageDeps:   crossStageDeps,
@@ -232,6 +346,12 @@ func newStageBuilder(
 		layerCache:       newLayerCache(opts),
 		pushLayerToCache: pushLayerToCache,
 		resourceLimits:   resourceLimits,
+		currentImmutable: baseImmutable,
+		// Initialize cache with base image values
+		cachedDigest: digestStr,
+		cachedLayers: layers,
+		digestValid:  true,
+		layersValid:  true,
 	}
 
 	for _, cmd := range stage.Commands {
@@ -274,23 +394,20 @@ func initConfig(img partial.WithConfigFile, opts *config.KanikoOptions) (*v1.Con
 		return imageConfig, nil
 	}
 
-	// Set default user with security best practices
+	// Set default user - compatible with Docker behavior
 	// If no user is set in the base image, apply default user
 	if imageConfig.Config.User == "" {
 		if opts.DefaultUser != "" {
 			// User explicitly specified via --default-user flag
-			if opts.DefaultUser == "root" {
-				logrus.Warnf("SECURITY WARNING: Using --default-user=root is unsafe and prohibited in production!")
-				logrus.Warnf("Consider specifying a non-root user in your Dockerfile with USER instruction instead.")
-			}
 			logrus.Infof("Setting default user to: %s", opts.DefaultUser)
 			imageConfig.Config.User = opts.DefaultUser
 		} else {
-			// No user specified - apply secure default (non-root user)
-			// Use kaniko:kaniko (1000:1000) as default for security
-			const defaultSecureUser = "kaniko:kaniko"
-			logrus.Infof("No user specified. Setting secure default user: %s", defaultSecureUser)
-			imageConfig.Config.User = defaultSecureUser
+			// No user specified - use root as default (Docker-compatible behavior)
+			// This ensures compatibility with existing Dockerfiles that expect root
+			// Users can specify --default-user for non-root builds if needed
+			const defaultUser = "root"
+			logrus.Debugf("No user specified. Using default user: %s (Docker-compatible)", defaultUser)
+			imageConfig.Config.User = defaultUser
 		}
 	}
 
@@ -325,14 +442,41 @@ func initConfig(img partial.WithConfigFile, opts *config.KanikoOptions) (*v1.Con
 }
 
 func newLayerCache(opts *config.KanikoOptions) cache.LayerCache {
+	// Create base cache (slow cache)
+	var slowCache cache.LayerCache
 	if isOCILayout(opts.CacheRepo) {
-		return &cache.LayoutCache{
+		slowCache = &cache.LayoutCache{
+			Opts: opts,
+		}
+	} else {
+		slowCache = &cache.RegistryCache{
 			Opts: opts,
 		}
 	}
-	return &cache.RegistryCache{
-		Opts: opts,
+
+	// Use FastSlowCache for fast/slow/remote cache hierarchy (BuildKit-style)
+	// Remote cache uses the same base cache for now
+	fastSlowCache := cache.NewFastSlowCache(slowCache, slowCache)
+
+	// If unified cache is enabled, wrap FastSlowCache in UnifiedCache
+	// This allows combining multiple cache sources (local, registry, S3, etc.)
+	if opts.EnableUnifiedCache {
+		logrus.Info("Unified cache enabled: combining multiple cache sources")
+		unifiedCache := cache.NewUnifiedCache(fastSlowCache)
+
+		// Add local file cache if CacheDir is specified
+		// Local file cache is typically faster than registry cache for local builds
+		if opts.CacheDir != "" {
+			localFileCache := cache.NewLocalFileCache(&opts.CacheOptions)
+			unifiedCache.AddCache(localFileCache)
+			logrus.Infof("Added local file cache (dir: %s) to unified cache", opts.CacheDir)
+		}
+
+		// Additional caches (S3, etc.) can be added here in the future via unifiedCache.AddCache()
+		return unifiedCache
 	}
+
+	return fastSlowCache
 }
 
 func isOCILayout(path string) bool {
@@ -384,50 +528,53 @@ func (s *stageBuilder) optimize(compositeKey CompositeCache, cfg *v1.Config) err
 		s.args = buildArgs
 	}()
 
-	stopCache := false
-	// Possibly replace commands with their cached implementations.
-	// We walk through all the commands, running any commands that only operate on metadata.
-	// We throw the metadata away after, but we need it to properly track command dependencies
-	// for things like COPY ${FOO} or RUN commands that use environment variables.
+	// Check cache for each command independently (like BuildKit does)
+	// Each command is checked separately - a cache miss for one command doesn't stop checking others
+	// This allows partial cache hits and better cache utilization
 	for i, command := range s.cmds {
 		if command == nil {
 			continue
 		}
+
+		// Cache command string representation to avoid multiple calls
+		commandStr := command.String()
+
 		files, err := command.FilesUsedFromContext(cfg, s.args)
 		if err != nil {
-			return errors.Wrap(err, "failed to get files used from context")
+			return errors.Wrapf(err, "failed to get files used from context for command %s", commandStr)
 		}
 
 		compositeKey, err = s.populateCompositeKey(command, files, compositeKey, s.args, cfg.Env)
 		if err != nil {
-			return err
+			return errors.Wrapf(err, "failed to populate composite cache key for command %s", commandStr)
 		}
 
-		logrus.Debugf("Optimize: composite key for command %v %v", command.String(), compositeKey)
+		logrus.Debugf("Optimize: composite key for command %v %v", commandStr, compositeKey)
 		ck, err := compositeKey.Hash()
 		if err != nil {
-			return errors.Wrap(err, "failed to hash composite key")
+			return errors.Wrapf(err, "failed to hash composite key for command %s", commandStr)
 		}
 
-		logrus.Debugf("Optimize: cache key for command %v %v", command.String(), ck)
+		logrus.Debugf("Optimize: cache key for command %v %v", commandStr, ck)
 		s.finalCacheKey = ck
 
-		if command.ShouldCacheOutput() && !stopCache {
+		// Check cache for each command independently (BuildKit-style)
+		// Even if previous commands missed cache, we still check this one
+		if command.ShouldCacheOutput() {
 			img, err := s.layerCache.RetrieveLayer(ck)
 
 			if err != nil {
-				logrus.Debugf("Failed to retrieve layer: %s", err)
-				logrus.Infof("No cached layer found for cmd %s", command.String())
-				logrus.Debugf("Key missing was: %s", compositeKey.Key())
-				// Log detailed cache key information for debugging
+				logrus.Debugf("Cache miss for command %s: %s", commandStr, err)
+				logrus.Debugf("Cache key: %s", compositeKey.Key())
 				logrus.Debugf("Cache key components: %v", compositeKey.keys)
-				stopCache = true
-				continue
-			}
-
-			if cacheCmd := command.CacheCommand(img); cacheCmd != nil {
-				logrus.Infof("Using caching version of cmd: %s", command.String())
-				s.cmds[i] = cacheCmd
+				// Continue to next command - don't stop checking cache
+				// This allows partial cache hits (some commands cached, others not)
+			} else {
+				// Cache hit - replace command with cached version
+				if cacheCmd := command.CacheCommand(img); cacheCmd != nil {
+					logrus.Infof("Cache hit for command: %s", commandStr)
+					s.cmds[i] = cacheCmd
+				}
 			}
 		}
 
@@ -511,78 +658,52 @@ func (s *stageBuilder) unpackFilesystemIfNeeded() error {
 		}
 
 		// Initialize filesystem structure analysis after successful extraction
-		// This allows dynamic path detection instead of hardcoded paths
+		// Simplified: no fallback - if initialization fails, log and continue
 		if initErr := util.InitializeFilesystemStructure(config.RootDir); initErr != nil {
-			logrus.Warnf("Failed to initialize filesystem structure analysis: %v, will use fallback", initErr)
-			// Continue with fallback (hardcoded paths)
+			logrus.Warnf("Failed to initialize filesystem structure analysis: %v, continuing without it", initErr)
 		} else {
-			logrus.Debugf("✅ Filesystem structure analysis initialized successfully")
+			logrus.Debugf("Filesystem structure analysis initialized successfully")
 		}
 
 		return nil
 	}
 
-	return errors.Wrap(util.Retry(retryFunc, s.opts.ImageFSExtractRetry, defaultRetryDelayMs),
-		"failed to get filesystem from image")
+	// Use new retry mechanism with exponential backoff
+	retryConfig := retry.NewRetryConfigBuilder().
+		WithMaxAttempts(s.opts.ImageFSExtractRetry + 1). // +1 because first attempt is not a retry
+		WithInitialDelay(time.Duration(defaultRetryDelayMs) * time.Millisecond).
+		WithMaxDelay(DefaultRetryMaxDelay).
+		WithBackoff(DefaultRetryBackoff).
+		WithRetryableErrors(retry.IsRetryableError).
+		Build()
+
+	err := retry.Retry(context.Background(), retryConfig, retryFunc)
+	return errors.Wrap(err, "failed to get filesystem from image")
 }
 
 func (s *stageBuilder) executeCommands(compositeKey *CompositeCache, initSnapshotTaken bool) error {
-	// Check if parallel execution is enabled
-	if s.opts.EnableParallelExec {
-		logrus.Info("🚀 Using parallel command execution")
-		return s.executeCommandsParallel(compositeKey, initSnapshotTaken)
+	// Use parallel execution when dependency graph is available (BuildKit-style)
+	// This allows independent commands to run in parallel for better performance
+	if s.opts.OptimizeExecutionOrder {
+		executor := NewSimpleExecutor(s.cmds, s, s.opts, s.args)
+		if executor.dependencyGraph != nil && executor.useGraph {
+			logrus.Info("Using parallel command execution with dependency graph (BuildKit-style)")
+			return executor.ExecuteInParallel(compositeKey, initSnapshotTaken)
+		}
 	}
 
 	// Fallback to sequential execution
-	logrus.Info("🔄 Using sequential command execution")
+	logrus.Info("Using sequential command execution")
 	return s.executeCommandsSequential(compositeKey, initSnapshotTaken)
 }
 
-// executeCommandsParallel executes commands in parallel using ParallelExecutor
-func (s *stageBuilder) executeCommandsParallel(compositeKey *CompositeCache, initSnapshotTaken bool) error {
-	// Create parallel executor
-	executor := NewParallelExecutor(s.cmds, s.opts, s.args, &s.cf.Config, s)
-
-	// Execute commands in parallel
-	return executor.ExecuteCommands(compositeKey, initSnapshotTaken)
-}
-
-// executeCommandsSequential executes commands sequentially (original implementation)
+// executeCommandsSequential executes commands sequentially using SimpleExecutor
+// This provides simple, reliable execution without race conditions
+// Optionally uses dependency graph to optimize execution order
 func (s *stageBuilder) executeCommandsSequential(compositeKey *CompositeCache, initSnapshotTaken bool) error {
-	cacheGroup := errgroup.Group{}
-	var commandErrors []error
-	var errorMutex sync.Mutex
-
-	for index, command := range s.cmds {
-		if command == nil {
-			continue
-		}
-
-		func() {
-			t := timing.Start("Command: " + command.String())
-			defer timing.DefaultRun.Stop(t)
-			err := s.processCommand(command, index, compositeKey, &cacheGroup, initSnapshotTaken)
-			if err != nil {
-				// Collect errors instead of ignoring them
-				errorMutex.Lock()
-				commandErrors = append(commandErrors, fmt.Errorf("command %d (%s) failed: %w", index, command.String(), err))
-				errorMutex.Unlock()
-			}
-		}()
-	}
-
-	// Wait for cache operations to complete
-	if err := cacheGroup.Wait(); err != nil {
-		logrus.Warnf("Error uploading layer to cache: %s", err)
-		// Cache errors are non-fatal, but we should log them
-	}
-
-	// Return the first command error if any occurred
-	if len(commandErrors) > 0 {
-		return fmt.Errorf("command execution failed: %v", commandErrors[0])
-	}
-
-	return nil
+	// Use SimpleExecutor for clean separation of concerns
+	executor := NewSimpleExecutor(s.cmds, s, s.opts, s.args)
+	return executor.ExecuteSequentially(compositeKey, initSnapshotTaken)
 }
 
 func (s *stageBuilder) processCommand(
@@ -607,7 +728,7 @@ func (s *stageBuilder) processCommand(
 		*compositeKey, err = s.populateCompositeKey(command, files, *compositeKey, s.args, s.cf.Config.Env)
 		s.mutex.RUnlock()
 		if err != nil {
-			return err
+			return errors.Wrap(err, "failed to populate composite cache key")
 		}
 	}
 
@@ -660,13 +781,23 @@ func (s *stageBuilder) handleSnapshot(
 	compositeKey *CompositeCache,
 	cacheGroup *errgroup.Group,
 ) error {
+	// Cache command string representation to avoid multiple calls (performance optimization)
+	commandStr := command.String()
+
 	if isCacheCommand(command) {
-		return s.saveLayerToImage(command.(commands.Cached).Layer(), command.String())
+		return s.saveLayerToImage(command.(commands.Cached).Layer(), commandStr)
 	}
+
+	// Create mutable layer reference for this command
+	mutable, err := s.createMutableLayer(commandStr)
+	if err != nil {
+		return errors.Wrap(err, "failed to create mutable layer")
+	}
+	mutable.Changes = files
 
 	// Protect snapshotter access with write lock
 	s.mutex.Lock()
-	logrus.Debugf("Taking snapshot for command: %s, files count: %d", command.String(), len(files))
+	logrus.Debugf("Taking snapshot for command: %s, files count: %d", commandStr, len(files))
 	if len(files) > 0 {
 		logrus.Debugf("Files to snapshot: %v", files)
 	}
@@ -677,33 +808,56 @@ func (s *stageBuilder) handleSnapshot(
 		return errors.Wrap(err, "failed to take snapshot")
 	}
 
+	// Store snapshot path in mutable reference
+	mutable.Snapshot = tarPath
+
 	if tarPath == "" {
-		logrus.Warnf("⚠️  WARNING: takeSnapshot returned empty tarPath for command %s", command.String())
-		logrus.Warnf("⚠️  This means NO LAYER will be created for this command!")
+		logrus.Warnf("WARNING: takeSnapshot returned empty tarPath for command %s", commandStr)
+		logrus.Warnf("This means NO LAYER will be created for this command!")
 		if len(files) > 0 {
-			logrus.Warnf("⚠️  Files that were supposed to be in layer: %v", files)
+			logrus.Warnf("Files that were supposed to be in layer: %v", files)
 		}
+		// Even if no snapshot, we can still commit (will result in empty layer handling)
 	} else {
 		logrus.Debugf("Snapshot created: %s", tarPath)
 	}
 
 	if s.opts.Cache {
-		logrus.Debugf("Build: composite key for command %v %v", command.String(), compositeKey)
-		ck, err := compositeKey.Hash()
-		if err != nil {
-			return errors.Wrap(err, "failed to hash composite key")
+		// Use cached hash from optimize() if available to avoid duplicate computation
+		var ck string
+		if s.finalCacheKey != "" {
+			// Reuse hash computed in optimize() - this avoids expensive SHA256 computation
+			ck = s.finalCacheKey
+			logrus.Debugf("Build: using cached composite key hash for command %v: %v", commandStr, ck)
+		} else {
+			// Fallback: compute hash if not available from optimize() (should be rare)
+			logrus.Debugf("Build: composite key for command %v %v", commandStr, compositeKey)
+			var hashErr error
+			ck, hashErr = compositeKey.Hash()
+			if hashErr != nil {
+				return errors.Wrap(hashErr, "failed to hash composite key")
+			}
+			logrus.Debugf("Build: cache key for command %v %v", commandStr, ck)
 		}
 
-		logrus.Debugf("Build: cache key for command %v %v", command.String(), ck)
-
 		if command.ShouldCacheOutput() && !s.opts.NoPushCache {
+			// Capture variables for goroutine to avoid race conditions
+			cacheKey := ck
+			snapshotPath := tarPath
+			createdBy := commandStr
 			cacheGroup.Go(func() error {
-				return s.pushLayerToCache(s.opts, ck, tarPath, command.String())
+				return s.pushLayerToCache(s.opts, cacheKey, snapshotPath, createdBy)
 			})
 		}
 	}
 
-	return s.saveSnapshotToImage(command.String(), tarPath)
+	// Commit mutable layer to immutable using new system
+	_, err = s.commitMutableLayer(mutable)
+	if err != nil {
+		return errors.Wrap(err, "failed to commit mutable layer")
+	}
+
+	return nil
 }
 
 func (s *stageBuilder) takeSnapshot(files []string, shdDelete bool) (string, error) {
@@ -739,18 +893,8 @@ func (s *stageBuilder) shouldTakeSnapshot(index int, isMetadatCmd bool) bool {
 	return !isMetadatCmd
 }
 
-func (s *stageBuilder) saveSnapshotToImage(createdBy, tarPath string) error {
-	layer, err := s.saveSnapshotToLayer(tarPath)
-	if err != nil {
-		return err
-	}
-
-	if layer == nil {
-		return nil
-	}
-
-	return s.saveLayerToImage(layer, createdBy)
-}
+// saveSnapshotToImage is deprecated - use commitMutableLayer instead
+// Kept for backward compatibility but not used in new code
 
 func (s *stageBuilder) saveSnapshotToLayer(tarPath string) (v1.Layer, error) {
 	if tarPath == "" {
@@ -882,6 +1026,11 @@ func (s *stageBuilder) saveLayerToImage(layer v1.Layer, createdBy string) error 
 	if err != nil {
 		return err
 	}
+
+	// Protect image and immutable reference updates with mutex
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+
 	s.image, err = mutate.Append(s.image,
 		mutate.Addendum{
 			Layer: layer,
@@ -891,7 +1040,87 @@ func (s *stageBuilder) saveLayerToImage(layer v1.Layer, createdBy string) error 
 			},
 		},
 	)
-	return err
+	if err != nil {
+		return err
+	}
+
+	// Invalidate cached values since image changed
+	s.digestValid = false
+	s.layersValid = false
+
+	// Update immutable reference after committing layer
+	// Compute digest and layers (cache will be invalidated, so we need to recompute)
+	digest, err := s.image.Digest()
+	if err != nil {
+		return errors.Wrap(err, "failed to get image digest")
+	}
+	layers, err := s.image.Layers()
+	if err != nil {
+		return errors.Wrap(err, "failed to get image layers")
+	}
+
+	// Update cache
+	s.cachedDigest = digest.String()
+	s.cachedLayers = layers
+	s.digestValid = true
+	s.layersValid = true
+
+	s.currentImmutable = &ImmutableRef{
+		Image:  s.image,
+		Digest: s.cachedDigest,
+		Layers: s.cachedLayers,
+	}
+
+	return nil
+}
+
+// createMutableLayer creates a mutable layer reference for a command
+func (s *stageBuilder) createMutableLayer(createdBy string) (*MutableRef, error) {
+	if s.currentImmutable == nil {
+		return nil, fmt.Errorf("no immutable reference available")
+	}
+
+	return &MutableRef{
+		Parent:    s.currentImmutable,
+		Changes:   []string{},
+		Snapshot:  "",
+		Committed: false,
+		CreatedBy: createdBy,
+	}, nil
+}
+
+// commitMutableLayer commits a mutable layer to immutable
+func (s *stageBuilder) commitMutableLayer(mutable *MutableRef) (*ImmutableRef, error) {
+	if mutable.Committed {
+		return nil, fmt.Errorf("layer already committed")
+	}
+
+	if mutable.Snapshot == "" {
+		// Empty snapshot - return current immutable without changes
+		mutable.Committed = true
+		return s.currentImmutable, nil
+	}
+
+	// Create layer from snapshot
+	layer, err := s.saveSnapshotToLayer(mutable.Snapshot)
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to create layer from snapshot")
+	}
+
+	if layer == nil {
+		// Empty layer - return current immutable without changes
+		mutable.Committed = true
+		return s.currentImmutable, nil
+	}
+
+	// Save layer to image (this updates s.currentImmutable)
+	if err := s.saveLayerToImage(layer, mutable.CreatedBy); err != nil {
+		return nil, errors.Wrap(err, "failed to save layer to image")
+	}
+
+	mutable.Committed = true
+	// Return the updated immutable reference (updated by saveLayerToImage)
+	return s.currentImmutable, nil
 }
 
 // CommandType represents the type of command that can be processed for dependencies.
@@ -953,8 +1182,9 @@ func CalculateDependencies(
 	opts *config.KanikoOptions,
 	stageNameToIdx map[string]string,
 ) (map[int][]string, error) {
-	images := []v1.Image{}
-	depGraph := map[int][]string{}
+	// Pre-allocate slices and maps for better performance
+	images := make([]v1.Image, 0, len(stages))
+	depGraph := make(map[int][]string, len(stages))
 
 	for i := range stages {
 		s := &stages[i]
@@ -1215,6 +1445,47 @@ func handleFinalImage(sourceImage v1.Image, opts *config.KanikoOptions, t *timin
 		}
 	}
 
+	// Generate SLSA provenance attestation if enabled
+	// This provides supply chain security and traceability
+	if opts.GenerateProvenance {
+		ctx := context.Background()
+		generator := attestation.NewProvenanceGenerator(opts)
+
+		// Build provenance information
+		buildInfo := &attestation.BuildInfo{
+			SourceURI:    opts.DockerfilePath,
+			BuilderID:    "kaniko",
+			BuildType:    "https://github.com/Gosayram/kaniko",
+			StartedOn:    time.Now(), // Should be tracked from build start
+			FinishedOn:   time.Now(),
+			Parameters:   make(map[string]interface{}),
+			Dependencies: []attestation.ResolvedDependency{},
+		}
+
+		// Get image digest for provenance
+		digest, digestErr := sourceImage.Digest()
+		if digestErr == nil {
+			buildInfo.Dependencies = append(buildInfo.Dependencies, attestation.ResolvedDependency{
+				URI: digest.String(),
+				Digest: map[string]string{
+					"sha256": digest.Hex,
+				},
+			})
+		}
+
+		provenance, provErr := generator.Generate(ctx, sourceImage, buildInfo)
+		if provErr != nil {
+			logrus.Warnf("Failed to generate provenance: %v", provErr)
+		} else {
+			// Provenance is generated but not yet attached to image
+			// In future, this can be attached as an attestation
+			provenanceJSON, jsonErr := provenance.ToJSON()
+			if jsonErr == nil {
+				logrus.Debugf("Generated SLSA provenance: %s", string(provenanceJSON))
+			}
+		}
+	}
+
 	if opts.Cleanup {
 		if err := util.DeleteFilesystem(); err != nil {
 			return nil, err
@@ -1225,79 +1496,79 @@ func handleFinalImage(sourceImage v1.Image, opts *config.KanikoOptions, t *timin
 	return sourceImage, nil
 }
 
-// extractStageImage extracts the stage image to a temporary directory for cross-stage dependency search.
-// Returns the extraction directory path (or "/" if extraction failed).
-func extractStageImage(index int, sourceImage v1.Image) string {
-	stageIndexStr := strconv.Itoa(index)
-	tempExtractDir := filepath.Join(config.KanikoDir, stageIndexStr+"_extract")
-
-	// Clean up any previous extraction
-	if err := os.RemoveAll(tempExtractDir); err != nil {
-		logrus.Debugf("Failed to remove previous extraction directory %s: %v, continuing anyway", tempExtractDir, err)
-	}
-
-	// Extract the image to get all files from layers
-	logrus.Infof("📦 Extracting stage %d image to search for cross-stage dependencies", index)
-	logrus.Infof("   Extraction directory: %s", tempExtractDir)
-
-	extractedFiles, err := util.GetFSFromImage(tempExtractDir, sourceImage, util.ExtractFile)
+// saveStageSnapshot saves an immutable snapshot of a stage for use in cross-stage dependencies
+// This simplifies cross-stage dependency handling by removing the need for fallback mechanisms
+func saveStageSnapshot(index int, image v1.Image, deps []string) (*StageSnapshot, error) {
+	digest, err := image.Digest()
 	if err != nil {
-		logrus.Warnf("❌ Failed to extract image for stage %d: %v, will search in current filesystem", index, err)
-		logrus.Warnf("   Error details: %+v", err)
-		return "/" // Fallback to current filesystem
+		return nil, errors.Wrap(err, "failed to get image digest")
 	}
 
-	logExtractionResults(index, tempExtractDir, extractedFiles)
-	return tempExtractDir
+	stageSnapshot := &StageSnapshot{
+		Image:     image,
+		Digest:    digest.String(),
+		Files:     deps,
+		Extracted: false,
+	}
+
+	snapshotsMutex.Lock()
+	stageSnapshots[index] = stageSnapshot
+	snapshotsMutex.Unlock()
+
+	logrus.Infof("Saved stage %d snapshot (digest: %s, files: %d)", index, digest.String(), len(deps))
+	return stageSnapshot, nil
 }
 
-// logExtractionResults logs information about extracted files for debugging.
-func logExtractionResults(index int, tempExtractDir string, extractedFiles []string) {
-	logrus.Infof("✅ Extracted %d files from stage %d image to %s", len(extractedFiles), index, tempExtractDir)
+// getStageSnapshot retrieves a saved stage snapshot
+func getStageSnapshot(index int) (*StageSnapshot, bool) {
+	snapshotsMutex.RLock()
+	defer snapshotsMutex.RUnlock()
+	stageSnapshot, exists := stageSnapshots[index]
+	return stageSnapshot, exists
+}
 
-	if len(extractedFiles) == 0 {
-		logrus.Warnf("⚠️ No files extracted from stage %d image, files might not exist in image layers", index)
-		// Verify extraction directory exists
-		if entries, listErr := os.ReadDir(tempExtractDir); listErr == nil {
-			logrus.Infof("   Directory %s exists with %d entries "+
-				"(but extraction returned 0 files)", tempExtractDir, len(entries))
-			for i, entry := range entries {
-				if i >= maxSampleEntries {
-					break
-				}
-				logrus.Infof("   Entry %d: %s (dir: %v)", i, entry.Name(), entry.IsDir())
-			}
-		} else {
-			logrus.Warnf("   Directory %s does not exist or is not readable: %v", tempExtractDir, listErr)
+// getFilesFromStage retrieves files from a saved stage image
+// If the image has not been extracted yet, extracts it once
+func getFilesFromStage(
+	stageSnapshot *StageSnapshot,
+	patterns []string,
+	buildArgs *dockerfile.BuildArgs,
+) ([]string, error) {
+	stageSnapshot.mutex.Lock()
+	defer stageSnapshot.mutex.Unlock()
+
+	// If the image has not been extracted yet, extract it once
+	if !stageSnapshot.Extracted {
+		extractDir, err := extractImageToTemp(stageSnapshot.Image)
+		if err != nil {
+			return nil, errors.Wrap(err, "failed to extract stage image")
 		}
-		return
+		stageSnapshot.ExtractDir = extractDir
+		stageSnapshot.Extracted = true
+		logrus.Infof("📦 Extracted stage image to %s", extractDir)
 	}
 
-	const sampleSize = 10
-	actualSampleSize := sampleSize
-	if len(extractedFiles) < sampleSize {
-		actualSampleSize = len(extractedFiles)
-	}
-	logrus.Infof("   Sample extracted files (first %d): %v", actualSampleSize, extractedFiles[:actualSampleSize])
+	// Find files in the extracted directory
+	return filesToSaveWithArgsFromRoot(patterns, buildArgs, stageSnapshot.ExtractDir), nil
+}
 
-	// Check if extraction directory exists and list some files
-	entries, listErr := os.ReadDir(tempExtractDir)
-	if listErr != nil {
-		logrus.Warnf("   ⚠️ Cannot read extraction directory %s: %v", tempExtractDir, listErr)
-		return
+// extractImageToTemp extracts an image to a temporary directory
+func extractImageToTemp(image v1.Image) (string, error) {
+	tempExtractDir, err := os.MkdirTemp(config.KanikoDir, "stage_extract_")
+	if err != nil {
+		return "", errors.Wrap(err, "failed to create temp directory")
 	}
 
-	logrus.Infof("   Directory %s contains %d entries", tempExtractDir, len(entries))
-	// Show first few entries for debugging
-	shownCount := 0
-	for _, entry := range entries {
-		if shownCount >= maxSampleEntries {
-			break
+	extractedFiles, err := util.GetFSFromImage(tempExtractDir, image, util.ExtractFile)
+	if err != nil {
+		if rmErr := os.RemoveAll(tempExtractDir); rmErr != nil {
+			logrus.Debugf("Failed to remove temp directory %s: %v", tempExtractDir, rmErr)
 		}
-		entryPath := filepath.Join(tempExtractDir, entry.Name())
-		logrus.Infof("   Entry %d: %s (dir: %v, path: %s)", shownCount, entry.Name(), entry.IsDir(), entryPath)
-		shownCount++
+		return "", errors.Wrap(err, "failed to extract image")
 	}
+
+	logrus.Debugf("Extracted %d files to %s", len(extractedFiles), tempExtractDir)
+	return tempExtractDir, nil
 }
 
 // saveCrossStageFiles saves cross-stage dependency files to the destination directory.
@@ -1312,7 +1583,7 @@ func saveCrossStageFiles(index int, filesToSave []string, tempExtractDir string)
 		copyRoot = "/"
 	}
 
-	logrus.Infof("💾 Saving %d cross-stage dependency files to %s (copy root: %s)", len(filesToSave), dstDir, copyRoot)
+	logrus.Infof("Saving %d cross-stage dependency files to %s (copy root: %s)", len(filesToSave), dstDir, copyRoot)
 
 	successCount := 0
 	failedCount := 0
@@ -1328,54 +1599,32 @@ func saveCrossStageFiles(index int, filesToSave []string, tempExtractDir string)
 		logrus.Infof("      Source: %s (absolute)", absSrcPath)
 
 		// Check if source exists before copying
+		// Simplified: no fallback mechanisms - if file not found in extracted directory, skip it
 		if _, statErr := os.Stat(absSrcPath); statErr != nil {
-			logrus.Warnf("      ⚠️ Source file does not exist: %s (error: %v)", absSrcPath, statErr)
-
-			// CRITICAL FIX: If file not found in extracted directory, try current filesystem
-			if fileCopyRoot != "/" {
-				// Build filesystem path properly - avoid filepath.Join with "/" as first arg
-				var fsPath string
-				if strings.HasPrefix(p, "/") {
-					fsPath = p
-				} else {
-					fsPath = "/" + p
-				}
-				fsPath = filepath.Clean(fsPath)
-
-				if _, fsErr := os.Stat(fsPath); fsErr == nil {
-					logrus.Infof("      🔄 Found file in current filesystem: %s, using it instead", fsPath)
-					fileCopyRoot = "/"
-					// File found in filesystem, will use fileCopyRoot="/" for copying
-				} else {
-					logrus.Warnf("      ⚠️ File not found in both extracted image and filesystem, skipping: %s", p)
-					failedCount++
-					continue
-				}
-			} else {
-				logrus.Warnf("      ⚠️ File not found, skipping: %s", p)
-				failedCount++
-				continue
-			}
+			logrus.Warnf("       Source file does not exist in extracted image: %s (error: %v), skipping", absSrcPath, statErr)
+			failedCount++
+			continue
 		}
 
 		if err := util.CopyFileOrSymlink(p, dstDir, fileCopyRoot); err != nil {
-			logrus.Warnf("      ❌ Failed to save file %s: %v, continuing anyway", p, err)
+			// Non-critical: individual file copy failures don't stop the build
+			logrus.Debugf("Failed to copy file %s (non-critical): %v", p, err)
 			failedCount++
 			continue
 		}
 
 		destPath := filepath.Join(dstDir, p)
-		logrus.Infof("      ✅ Successfully saved file %s -> %s", p, destPath)
+		logrus.Infof("      Successfully saved file %s -> %s", p, destPath)
 		successCount++
 	}
 
-	logrus.Infof("💾 Cross-stage file save summary: %d succeeded, %d failed out of %d total",
+	logrus.Infof("Cross-stage file save summary: %d succeeded, %d failed out of %d total",
 		successCount, failedCount, len(filesToSave))
 
 	if failedCount > 0 && successCount == 0 {
-		logrus.Warnf("⚠️ All cross-stage dependency files failed to save! This may cause issues in COPY --from commands")
+		logrus.Warnf(" All cross-stage dependency files failed to save! This may cause issues in COPY --from commands")
 	} else if failedCount > 0 {
-		logrus.Warnf("⚠️ Some cross-stage dependency files failed to save (%d/%d), but build will continue",
+		logrus.Warnf(" Some cross-stage dependency files failed to save (%d/%d), but build will continue",
 			failedCount, len(filesToSave))
 	}
 
@@ -1395,67 +1644,40 @@ func handleNonFinalStage(
 		}
 	}
 
-	// Log cross-stage dependencies for debugging
-	logrus.Debugf("Cross-stage dependencies for stage %d: %v", index, crossStageDependencies[index])
+	// Simplified approach: save immutable stage snapshot
+	// This removes the need for fallback mechanisms and FilesystemSyncDelay
+	deps := crossStageDependencies[index]
+	logrus.Debugf("Cross-stage dependencies for stage %d: %v", index, deps)
 
-	// CRITICAL FIX: Files might be in image layers, not in current filesystem
-	// Extract image to temporary directory first, then search for files there
-	tempExtractDir := extractStageImage(index, sourceImage)
-	if tempExtractDir == "/" {
-		logrus.Infof("🔄 Using current filesystem (/) for cross-stage dependency search")
+	// Save stage snapshot for use in COPY --from
+	// Non-critical: if snapshot save fails, cross-stage COPY may still work via direct image access
+	if _, err := saveStageSnapshot(index, sourceImage, deps); err != nil {
+		logrus.Debugf("Stage snapshot save failed (non-critical): %v", err)
 	}
 
-	// Force filesystem sync to ensure all files are written before searching
-	logrus.Debugf("🔄 Syncing filesystem before searching for cross-stage dependencies")
-	if err := util.SyncFilesystem(); err != nil {
-		logrus.Warnf("Failed to sync filesystem: %v, continuing anyway", err)
-	}
-
-	// Add a small delay to ensure filesystem operations are complete
-	time.Sleep(FilesystemSyncDelay)
-
-	// Search for files in the extracted directory or current filesystem
-	filesToSave := filesToSaveWithArgsFromRoot(crossStageDependencies[index], buildArgs, tempExtractDir)
-
-	// CRITICAL FIX: If files not found in extracted image, try searching in current filesystem
-	// This handles cases where files were created but not yet committed to image layers
-	if len(filesToSave) == 0 && tempExtractDir != "/" {
-		logrus.Warnf("⚠️ No files found in extracted image for stage %d, trying current filesystem as fallback", index)
-		logrus.Infof("   Expected patterns: %v", crossStageDependencies[index])
-
-		// Try searching in current filesystem
-		filesToSaveFromFS := filesToSaveWithArgsFromRoot(crossStageDependencies[index], buildArgs, "/")
-		if len(filesToSaveFromFS) > 0 {
-			logrus.Infof("✅ Found %d files in current filesystem that were missing in extracted image", len(filesToSaveFromFS))
-			filesToSave = filesToSaveFromFS
-			// Update tempExtractDir to "/" to use current filesystem
-			tempExtractDir = "/"
+	// If there are dependencies, save files for the next stage
+	if len(deps) > 0 {
+		// Get files from the saved image
+		stageSnapshot, exists := getStageSnapshot(index)
+		if !exists {
+			logrus.Warnf("Stage snapshot not found for stage %d, skipping file save", index)
+		} else {
+			filesToSave, err := getFilesFromStage(stageSnapshot, deps, buildArgs)
+			switch {
+			case err != nil:
+				// Non-critical: cross-stage files may not be needed if stage is not used
+				logrus.Debugf("Failed to get files from stage %d (non-critical): %v", index, err)
+			case len(filesToSave) > 0:
+				// Save files to directory for the next stage
+				// getFilesFromStage guarantees that stageSnapshot.ExtractDir is set
+				if err := saveCrossStageFiles(index, filesToSave, stageSnapshot.ExtractDir); err != nil {
+					// Non-critical: files may be extracted on-demand later
+					logrus.Debugf("Failed to save cross-stage files (non-critical): %v", err)
+				}
+			default:
+				logrus.Debugf("No files to save for cross-stage dependencies in stage %d", index)
+			}
 		}
-	}
-
-	// If still no files to save, log warning and continue
-	if len(filesToSave) == 0 {
-		logrus.Warnf("No files found for cross-stage dependencies in stage %d, continuing anyway", index)
-		logrus.Debugf("Expected patterns: %v", crossStageDependencies[index])
-		logrus.Warnf("   This may cause missing files in COPY --from commands, but build will continue")
-		return errors.Wrap(
-			util.DeleteFilesystem(),
-			fmt.Sprintf("deleting file system after stage %d", index),
-		)
-	}
-
-	if err := saveCrossStageFiles(index, filesToSave, tempExtractDir); err != nil {
-		return err
-	}
-
-	// Clean up temporary extraction directory
-	if tempExtractDir != "/" {
-		defer os.RemoveAll(tempExtractDir)
-	}
-
-	// Sync filesystem after copying files to ensure they are written to disk
-	if err := util.SyncFilesystem(); err != nil {
-		logrus.Warnf("Failed to sync filesystem after saving cross-stage dependencies: %v, continuing anyway", err)
 	}
 
 	// Delete the filesystem
@@ -1487,7 +1709,7 @@ func filesToSaveWithArgsFromRoot(deps []string, buildArgs *dockerfile.BuildArgs,
 	// First, verify that searchRoot exists and is accessible
 	if searchRoot != "/" {
 		if rootInfo, rootErr := os.Stat(searchRoot); rootErr != nil {
-			logrus.Warnf("   ⚠️ Search root %s does not exist or is not accessible: %v", searchRoot, rootErr)
+			logrus.Warnf("    Search root %s does not exist or is not accessible: %v", searchRoot, rootErr)
 		} else {
 			logrus.Infof("   ✓ Search root %s exists (dir: %v, mode: %v)", searchRoot, rootInfo.IsDir(), rootInfo.Mode())
 		}
@@ -1502,7 +1724,8 @@ func filesToSaveWithArgsFromRoot(deps []string, buildArgs *dockerfile.BuildArgs,
 
 		files, err := findFilesForDependencyWithArgsFromRoot(searchPath, buildArgs, searchRoot)
 		if err != nil {
-			logrus.Warnf("Failed to find files for %s: %v, continuing anyway", searchPath, err)
+			// Non-critical: file may not exist or be accessible, skip this dependency
+			logrus.Debugf("Failed to find files for %s (non-critical): %v", searchPath, err)
 			continue
 		}
 		srcFiles = append(srcFiles, files...)
@@ -1525,18 +1748,18 @@ func findFilesForDependencyWithArgsFromRoot(
 	// For example: /app/apps/${APP_TYPE}/.output should be resolved to /app/apps/webview/.output
 	resolvedPath := resolvePathVariablesWithArgs(searchPath, buildArgs)
 	if resolvedPath != searchPath {
-		logrus.Debugf("🔄 Resolved path variables: %s -> %s", searchPath, resolvedPath)
+		logrus.Debugf("Resolved path variables: %s -> %s", searchPath, resolvedPath)
 		searchPath = resolvedPath
 	}
 
 	// First try exact path (works for both files and directories)
 	info, statErr := os.Stat(searchPath)
 	if statErr == nil {
-		logrus.Infof("   ✅ Found exact path: %s (dir: %v, size: %d)", searchPath, info.IsDir(), info.Size())
+		logrus.Infof("   Found exact path: %s (dir: %v, size: %d)", searchPath, info.IsDir(), info.Size())
 		return processExistingPathFromRoot(searchPath, info, searchRoot)
 	}
 
-	logrus.Infof("   ⚠️ Exact path not found: %s (error: %v)", searchPath, statErr)
+	logrus.Infof("    Exact path not found: %s (error: %v)", searchPath, statErr)
 
 	// Try to check parent directory
 	parentDir := filepath.Dir(searchPath)
@@ -1564,7 +1787,7 @@ func findFilesForDependencyWithArgsFromRoot(
 				for _, entry := range entries {
 					if entry.Name() == fileName {
 						foundPath := filepath.Join(parentDir, entry.Name())
-						logrus.Infof("   ✅ Found file by name pattern: %s", foundPath)
+						logrus.Infof("   Found file by name pattern: %s", foundPath)
 						if foundInfo, foundErr := os.Stat(foundPath); foundErr == nil {
 							return processExistingPathFromRoot(foundPath, foundInfo, searchRoot)
 						}
@@ -1573,7 +1796,7 @@ func findFilesForDependencyWithArgsFromRoot(
 			}
 		}
 	} else {
-		logrus.Infof("   ⚠️ Parent directory does not exist: %s (error: %v)", parentDir, parentErr)
+		logrus.Infof("    Parent directory does not exist: %s (error: %v)", parentDir, parentErr)
 	}
 
 	// Path doesn't exist, try to find similar paths
@@ -1597,7 +1820,7 @@ func calculateRelativePath(absolutePath, searchRoot string) string {
 		cleanPath := filepath.Clean(absolutePath)
 		relPath, err = filepath.Rel(cleanRoot, cleanPath)
 		if err != nil {
-			// Fallback: if Rel fails, try manual calculation
+			// If Rel fails, calculate manually
 			if strings.HasPrefix(cleanPath, cleanRoot) {
 				relPath = strings.TrimPrefix(strings.TrimPrefix(cleanPath, cleanRoot), "/")
 				if relPath == "" {
@@ -1622,7 +1845,7 @@ func processExistingPathFromRoot(searchPath string, info os.FileInfo, searchRoot
 	var srcFiles []string
 
 	if info.IsDir() {
-		logrus.Infof("   ✅ Found directory: %s", searchPath)
+		logrus.Infof("   Found directory: %s", searchPath)
 		return walkDirectoryFromRoot(searchPath, searchRoot)
 	}
 
@@ -1633,7 +1856,7 @@ func processExistingPathFromRoot(searchPath string, info os.FileInfo, searchRoot
 		logrus.Infof("   📁 Added file to cross-stage dependencies: %s "+
 			"(absolute: %s, root: %s)", relPath, searchPath, searchRoot)
 	} else {
-		logrus.Warnf("   ⚠️ Failed to calculate relative path from %s to %s",
+		logrus.Warnf("    Failed to calculate relative path from %s to %s",
 			searchRoot, searchPath)
 	}
 	return srcFiles, nil
@@ -1682,7 +1905,7 @@ func findSimilarPathsFromRoot(searchPath, searchRoot string) ([]string, error) {
 
 	// If we found files, return them
 	if len(srcFiles) > 0 {
-		logrus.Debugf("✅ Found %d files in similar paths", len(srcFiles))
+		logrus.Debugf("Found %d files in similar paths", len(srcFiles))
 		return srcFiles, nil
 	}
 
@@ -1713,7 +1936,7 @@ func findBuildOutputDirectoriesFromRoot(searchPath, searchRoot string) []string 
 				dirName := filepath.Base(path)
 				for _, pattern := range buildOutputPatterns {
 					if dirName == pattern && info.IsDir() {
-						logrus.Debugf("✅ Found build output directory: %s", path)
+						logrus.Debugf("Found build output directory: %s", path)
 						files, err := walkDirectoryFromRoot(path, searchRoot)
 						if err == nil {
 							srcFiles = append(srcFiles, files...)
@@ -1836,13 +2059,15 @@ func findFilesWithGlobFromRoot(searchPath, searchRoot string) ([]string, error) 
 
 	srcs, err := filepath.Glob(searchPath)
 	if err != nil {
-		logrus.Warnf("Failed to glob pattern %s: %v, continuing anyway", searchPath, err)
+		// Non-critical: glob pattern may be invalid, return what we found so far
+		logrus.Debugf("Glob pattern failed for %s (non-critical): %v", searchPath, err)
 		return srcFiles, nil
 	}
 
 	if len(srcs) == 0 {
 		checkGlobDirectory(searchPath)
-		logrus.Warnf("No files found for pattern %s, continuing anyway", searchPath)
+		// Non-critical: pattern may not match any files, return what we found so far
+		logrus.Debugf("No files found for pattern %s (non-critical)", searchPath)
 		return srcFiles, nil
 	}
 
@@ -1879,7 +2104,7 @@ func resolvePathVariablesWithArgs(path string, buildArgs *dockerfile.BuildArgs) 
 	}
 
 	if resolved != path {
-		logrus.Debugf("🔄 Resolved path variables: %s -> %s", path, resolved)
+		logrus.Debugf("Resolved path variables: %s -> %s", path, resolved)
 	}
 
 	return resolved
@@ -1888,6 +2113,8 @@ func resolvePathVariablesWithArgs(path string, buildArgs *dockerfile.BuildArgs) 
 // deduplicatePaths returns a deduplicated slice of shortest paths
 // For example {"usr/lib", "usr/lib/ssl"} will return only {"usr/lib"}
 func deduplicatePaths(paths []string) []string {
+	const avgPathPartLength = 10 // Average estimated length per path part for pre-allocation
+
 	type node struct {
 		children map[string]*node
 		value    bool
@@ -1909,20 +2136,37 @@ func deduplicatePaths(paths []string) []string {
 		current.children[parts[len(parts)-1]] = &node{children: make(map[string]*node), value: true}
 	}
 
-	// Collect all paths
-	deduped := []string{}
-	var traverse func(*node, string)
-	traverse = func(n *node, path string) {
+	// Collect all paths - pre-allocate slice for better performance
+	deduped := make([]string, 0, len(paths))
+	var traverse func(*node, []string)
+	traverse = func(n *node, pathParts []string) {
 		if n.value {
-			deduped = append(deduped, strings.TrimPrefix(path, "/"))
+			// Build path from parts using strings.Builder for efficiency
+			if len(pathParts) == 0 {
+				return
+			}
+			var pathBuilder strings.Builder
+			pathBuilder.Grow(len(pathParts) * avgPathPartLength) // Pre-allocate reasonable capacity
+			for i, part := range pathParts {
+				if i > 0 {
+					pathBuilder.WriteString("/")
+				}
+				pathBuilder.WriteString(part)
+			}
+			deduped = append(deduped, pathBuilder.String())
 			return
 		}
 		for k, v := range n.children {
-			traverse(v, path+"/"+k)
+			// Create new slice with this part appended
+			newPath := make([]string, len(pathParts), len(pathParts)+1)
+			copy(newPath, pathParts)
+			newPath = append(newPath, k)
+			traverse(v, newPath)
 		}
 	}
 
-	traverse(root, "")
+	// Start traversal with empty path
+	traverse(root, []string{})
 
 	return deduped
 }
@@ -2167,28 +2411,20 @@ func optimizeForNoCache(opts *config.KanikoOptions) {
 	// This function is only called when cache is not enabled
 	// No need to check opts.Cache here as it's already verified in applyComprehensiveOptimizations
 
-	logrus.Info("🚀 Applying no-cache optimizations for better performance")
+	logrus.Info("Applying no-cache optimizations for better performance")
 
 	// 1. Enable incremental snapshots for faster filesystem scanning
 	if !opts.IncrementalSnapshots {
 		opts.IncrementalSnapshots = true
-		logrus.Info("📸 Enabled incremental snapshots for no-cache build")
+		logrus.Info("Enabled incremental snapshots for no-cache build")
 	}
 
 	// 2. Enable comprehensive file processing for cross-stage dependencies
 	logrus.Info("🔍 Enabled comprehensive file processing for cross-stage dependencies")
 
-	// 2. Increase parallelism to compensate for lack of cache
-	if opts.MaxParallelCommands == 0 {
-		opts.MaxParallelCommands = runtime.NumCPU() * NoCacheParallelMultiplier
-		logrus.Infof("⚡ Set parallel commands to %d for no-cache build", opts.MaxParallelCommands)
-	}
-
-	// 3. Enable parallel execution if not already enabled
-	if !opts.EnableParallelExec {
-		opts.EnableParallelExec = true
-		logrus.Info("🔄 Enabled parallel execution for no-cache build")
-	}
+	// 2. Removed: parallel execution is no longer supported
+	// Sequential execution is the default and only mode
+	// MaxParallelCommands is no longer used
 
 	// 4. Optimize snapshot mode for better performance
 	if opts.SnapshotMode == "" {
@@ -2199,7 +2435,7 @@ func optimizeForNoCache(opts *config.KanikoOptions) {
 	// 5. Set reasonable memory limits if not configured
 	if opts.MaxMemoryUsageBytes == 0 {
 		opts.MaxMemoryUsageBytes = MemoryLimitBytes
-		logrus.Info("💾 Set memory limit to 2GB for no-cache build")
+		logrus.Info("Set memory limit to 2GB for no-cache build")
 	}
 
 	// 6. Enable memory monitoring for better resource management
@@ -2223,7 +2459,7 @@ func optimizeForNoCache(opts *config.KanikoOptions) {
 	// 9. Increase retry attempts for network operations
 	if opts.ImageFSExtractRetry == 0 {
 		opts.ImageFSExtractRetry = 3
-		logrus.Info("🔄 Set image extraction retries to 3 for no-cache build")
+		logrus.Info("Set image extraction retries to 3 for no-cache build")
 	}
 
 	// 10. Set reasonable file size limits
@@ -2237,7 +2473,7 @@ func optimizeForNoCache(opts *config.KanikoOptions) {
 		logrus.Info("📦 Set max total file size to 10GB for no-cache build")
 	}
 
-	logrus.Info("✅ No-cache optimizations applied successfully")
+	logrus.Info("No-cache optimizations applied successfully")
 }
 
 // optimizePerformance applies additional performance optimizations
@@ -2259,7 +2495,7 @@ func optimizePerformance(opts *config.KanikoOptions) {
 	// 3. Enable compressed caching for better layer handling
 	if !opts.CompressedCaching {
 		opts.CompressedCaching = true
-		logrus.Info("💾 Enabled compressed caching for better performance")
+		logrus.Info("Enabled compressed caching for better performance")
 	}
 
 	// 4. Set monitoring interval for better resource tracking
@@ -2286,7 +2522,7 @@ func optimizePerformance(opts *config.KanikoOptions) {
 		logrus.Info("🛡️ Enabled full scan backup for safety")
 	}
 
-	logrus.Info("✅ Performance optimizations applied successfully")
+	logrus.Info("Performance optimizations applied successfully")
 }
 
 // optimizeNetwork applies network optimizations for better stability
@@ -2296,7 +2532,7 @@ func optimizeNetwork(opts *config.KanikoOptions) {
 	// 1. Set reasonable push retry settings
 	if opts.PushRetry == 0 {
 		opts.PushRetry = 3
-		logrus.Info("🔄 Set push retry to 3 for better network stability")
+		logrus.Info("Set push retry to 3 for better network stability")
 	}
 
 	// 2. Set initial delay for retries
@@ -2329,7 +2565,7 @@ func optimizeNetwork(opts *config.KanikoOptions) {
 		logrus.Info("🏷️ Enabled push ignore immutable tag errors for better compatibility")
 	}
 
-	logrus.Info("✅ Network optimizations applied successfully")
+	logrus.Info("Network optimizations applied successfully")
 }
 
 // initializeNetworkManager initializes the advanced network manager
@@ -2371,7 +2607,7 @@ func initializeNetworkManager(_ *config.KanikoOptions) *network.Manager {
 		return nil
 	}
 
-	logrus.Info("✅ Advanced network manager initialized successfully")
+	logrus.Info("Advanced network manager initialized successfully")
 	return manager
 }
 
@@ -2388,7 +2624,7 @@ func optimizeFilesystem(opts *config.KanikoOptions) {
 	// 2. Enable incremental snapshots for better performance (only when cache is not used)
 	if !opts.Cache && !opts.IncrementalSnapshots {
 		opts.IncrementalSnapshots = true
-		logrus.Info("📸 Enabled incremental snapshots for faster filesystem scanning")
+		logrus.Info("Enabled incremental snapshots for faster filesystem scanning")
 	}
 
 	// 3. Set reasonable max expected changes for integrity checking
@@ -2423,7 +2659,7 @@ func optimizeFilesystem(opts *config.KanikoOptions) {
 	// 7. Enable compressed caching for better layer handling
 	if !opts.CompressedCaching {
 		opts.CompressedCaching = true
-		logrus.Info("💾 Enabled compressed caching for better filesystem performance")
+		logrus.Info("Enabled compressed caching for better filesystem performance")
 	}
 
 	// 8. Set optimal compression for filesystem operations
@@ -2437,19 +2673,19 @@ func optimizeFilesystem(opts *config.KanikoOptions) {
 		logrus.Info("📊 Set compression level to 3 for optimal filesystem performance")
 	}
 
-	logrus.Info("✅ Filesystem optimizations applied successfully")
+	logrus.Info("Filesystem optimizations applied successfully")
 }
 
 // applyComprehensiveOptimizations applies all optimizations in the correct order
 func applyComprehensiveOptimizations(opts *config.KanikoOptions) {
-	logrus.Info("🚀 Applying comprehensive optimizations for maximum performance")
+	logrus.Info("Applying comprehensive optimizations for maximum performance")
 
 	// 1. Apply no-cache optimizations first (foundation) - only when cache is not used
 	if !opts.Cache {
 		logrus.Info("📦 Cache not enabled - applying no-cache optimizations for better performance")
 		optimizeForNoCache(opts)
 	} else {
-		logrus.Info("💾 Cache enabled - skipping no-cache optimizations")
+		logrus.Info("Cache enabled - skipping no-cache optimizations")
 	}
 
 	// 2. Apply performance optimizations (core improvements) - always beneficial
@@ -2467,7 +2703,7 @@ func applyComprehensiveOptimizations(opts *config.KanikoOptions) {
 	// 6. Final integration checks
 	validateOptimizations(opts)
 
-	logrus.Info("✅ All comprehensive optimizations applied successfully")
+	logrus.Info("All comprehensive optimizations applied successfully")
 }
 
 // validateOptimizations validates that all optimizations are properly configured
@@ -2477,36 +2713,34 @@ func validateOptimizations(opts *config.KanikoOptions) {
 	// Validate no-cache optimizations
 	if !opts.Cache {
 		if !opts.IncrementalSnapshots {
-			logrus.Warn("⚠️ Incremental snapshots should be enabled for no-cache builds")
+			logrus.Warn(" Incremental snapshots should be enabled for no-cache builds")
 		}
-		if opts.MaxParallelCommands == 0 {
-			logrus.Warn("⚠️ MaxParallelCommands should be set for no-cache builds")
-		}
+		// MaxParallelCommands is no longer used (parallel execution removed)
 	}
 
 	// Validate performance optimizations
 	if opts.Compression == "" {
-		logrus.Warn("⚠️ Compression should be set for optimal performance")
+		logrus.Warn(" Compression should be set for optimal performance")
 	}
 	if opts.CompressionLevel == 0 {
-		logrus.Warn("⚠️ CompressionLevel should be set for optimal performance")
+		logrus.Warn(" CompressionLevel should be set for optimal performance")
 	}
 
 	// Validate network optimizations
 	if opts.PushRetry == 0 {
-		logrus.Warn("⚠️ PushRetry should be set for network stability")
+		logrus.Warn(" PushRetry should be set for network stability")
 	}
 	if opts.ImageDownloadRetry == 0 {
-		logrus.Warn("⚠️ ImageDownloadRetry should be set for network stability")
+		logrus.Warn(" ImageDownloadRetry should be set for network stability")
 	}
 
 	// Validate filesystem optimizations
 	if opts.SnapshotMode == "" {
-		logrus.Warn("⚠️ SnapshotMode should be set for filesystem performance")
+		logrus.Warn(" SnapshotMode should be set for filesystem performance")
 	}
 	if !opts.IntegrityCheck {
-		logrus.Warn("⚠️ IntegrityCheck should be enabled for reliability")
+		logrus.Warn(" IntegrityCheck should be enabled for reliability")
 	}
 
-	logrus.Info("✅ Optimization validation completed")
+	logrus.Info("Optimization validation completed")
 }

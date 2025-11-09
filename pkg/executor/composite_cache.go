@@ -39,12 +39,17 @@ func NewCompositeCache(initial ...string) *CompositeCache {
 
 // CompositeCache is a type that generates a cache key from a series of keys.
 type CompositeCache struct {
-	keys []string
+	keys         []string
+	cachedHash   string // Cached hash result to avoid recomputation
+	hashComputed bool   // Whether hash has been computed
 }
 
 // AddKey adds the specified key to the sequence.
 func (s *CompositeCache) AddKey(k ...string) {
 	s.keys = append(s.keys, k...)
+	// Invalidate cached hash when keys are added
+	s.hashComputed = false
+	s.cachedHash = ""
 }
 
 // Key returns the human readable composite key as a string.
@@ -53,8 +58,24 @@ func (s *CompositeCache) Key() string {
 }
 
 // Hash returns the composite key in a string SHA256 format.
+// Results are cached to avoid recomputation for the same key set.
 func (s *CompositeCache) Hash() (string, error) {
-	return util.SHA256(strings.NewReader(s.Key()))
+	// Return cached hash if available
+	if s.hashComputed {
+		return s.cachedHash, nil
+	}
+
+	// Compute hash
+	hash, err := util.SHA256(strings.NewReader(s.Key()))
+	if err != nil {
+		return "", err
+	}
+
+	// Cache the result
+	s.cachedHash = hash
+	s.hashComputed = true
+
+	return hash, nil
 }
 
 // AddPath adds a file or directory path to the composite cache key
@@ -82,6 +103,9 @@ func (s *CompositeCache) AddPath(p string, context util.FileContext) error {
 		if !isEmptyDir || !context.ExcludesFile(p) {
 			s.keys = append(s.keys, k)
 		}
+		// Invalidate hash cache when directory hash is added
+		s.hashComputed = false
+		s.cachedHash = ""
 		return nil
 	}
 
@@ -97,6 +121,9 @@ func (s *CompositeCache) AddPath(p string, context util.FileContext) error {
 	}
 
 	s.keys = append(s.keys, fmt.Sprintf("%x", sha.Sum(nil)))
+	// Invalidate hash cache when file hash is added
+	s.hashComputed = false
+	s.cachedHash = ""
 	return nil
 }
 

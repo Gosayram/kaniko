@@ -187,10 +187,7 @@ func TestIncrementalSnapshotterIntegration(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 
 		// Detect changes
-		changes, err := incremental.detectIncrementalChanges()
-		if err != nil {
-			t.Fatalf("Failed to detect incremental changes: %v", err)
-		}
+		changes := incremental.detectIncrementalChanges()
 
 		// Should detect the modified file
 		found := false

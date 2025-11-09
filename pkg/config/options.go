@@ -108,7 +108,7 @@ type KanikoOptions struct {
 	SignImages          bool             // --sign-images[=true|false]
 
 	// User configuration options
-	DefaultUser       string // --default-user=kaniko (default user when no USER instruction)
+	DefaultUser       string // --default-user (default: root, Docker-compatible)
 	CosignKeyPath     string // --cosign-key-path=/path/to/key
 	CosignKeyPassword string // --cosign-key-password=secret
 
@@ -131,16 +131,30 @@ type KanikoOptions struct {
 	GCThreshold           int   // --gc-threshold=80
 	MonitoringInterval    int   // --monitoring-interval=5s
 
-	// Parallel execution options (enabled by default for performance)
+	// Parallel execution options (disabled by default for stability)
 	MaxParallelCommands int           // --max-parallel-commands=4 (auto-detect CPU cores)
 	CommandTimeout      time.Duration // --command-timeout=30m
-	EnableParallelExec  bool          // --enable-parallel-exec=true (enabled by default)
+	EnableParallelExec  bool          // --enable-parallel-exec=false (disabled by default, sequential is default)
+	// --optimize-execution-order=true (use dependency graph to optimize order, enabled by default)
+	OptimizeExecutionOrder bool
+	// --enable-lazy-image-loading=true (load image layers on demand for memory optimization, enabled by default)
+	EnableLazyImageLoading bool
+
+	// Source policy for security (validates image sources before loading)
+	// Set via SetSourcePolicy() to avoid circular dependencies
+	SourcePolicy interface{} // *policy.SourcePolicy
+
+	// GenerateProvenance enables SLSA provenance attestation generation
+	GenerateProvenance bool // --generate-provenance (disabled by default)
 
 	// Smart cache options (optimized for 1GB cache)
 	MaxCacheEntries  int           // --max-cache-entries=2000 (optimized for 1GB)
 	MaxPreloadSize   int           // --max-preload-size=100 (increased for better performance)
 	PreloadTimeout   time.Duration // --preload-timeout=10m (increased for large cache)
 	EnableSmartCache bool          // --enable-smart-cache=true (enabled by default)
+
+	// Unified cache options (for combining multiple cache sources)
+	EnableUnifiedCache bool // --enable-unified-cache=false (disabled by default)
 
 	// Debug options for enhanced debugging and development
 	DebugOptions

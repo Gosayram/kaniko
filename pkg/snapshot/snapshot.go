@@ -17,13 +17,13 @@ limitations under the License.
 package snapshot
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"sort"
-	"syscall"
+	"time"
+
+	"github.com/pkg/errors"
 
 	"github.com/Gosayram/kaniko/pkg/config"
 	"github.com/Gosayram/kaniko/pkg/filesystem"
@@ -55,14 +55,54 @@ func NewSnapshotter(l *LayeredMap, d string) *Snapshotter {
 func (s *Snapshotter) EnableIncrementalSnapshots() {
 	s.useIncremental = true
 	s.incremental = NewIncrementalSnapshotter(s)
-	logrus.Info("📸 Incremental snapshots enabled")
+	logrus.Info("Incremental snapshots enabled")
+}
+
+// ConfigureIncrementalSnapshots configures incremental snapshotter with options
+func (s *Snapshotter) ConfigureIncrementalSnapshots(
+	maxExpectedChanges int,
+	integrityCheck, fullScanBackup bool,
+	fullScanInterval time.Duration,
+	scanCountThreshold int,
+) {
+	if s.incremental == nil {
+		s.EnableIncrementalSnapshots()
+	}
+
+	if maxExpectedChanges > 0 {
+		s.incremental.SetMaxExpectedChanges(maxExpectedChanges)
+	}
+	if fullScanInterval > 0 {
+		s.incremental.SetFullScanInterval(fullScanInterval)
+	}
+	if scanCountThreshold > 0 {
+		s.incremental.SetScanCountThreshold(scanCountThreshold)
+	}
+	s.incremental.SetIntegrityCheck(integrityCheck)
+	s.incremental.SetFullScanBackup(fullScanBackup)
+
+	// Enable filesystem watcher automatically if available (per plan - real-time change detection)
+	// This provides faster change detection without periodic scanning
+	if s.incremental != nil {
+		if err := s.incremental.EnableWatcher(); err != nil {
+			logrus.Debugf("Filesystem watcher not available: %v (will use hash-based detection)", err)
+		} else {
+			// Watch the root directory for changes
+			if err := s.incremental.WatchPath(s.directory); err != nil {
+				logrus.Debugf("Failed to watch root directory: %v (will use hash-based detection)", err)
+			}
+		}
+	}
+
+	logrus.Infof("Incremental snapshots configured: maxChanges=%d, integrity=%v, backup=%v, interval=%v, threshold=%d",
+		maxExpectedChanges, integrityCheck, fullScanBackup, fullScanInterval, scanCountThreshold)
 }
 
 // DisableIncrementalSnapshots disables incremental snapshotting
 func (s *Snapshotter) DisableIncrementalSnapshots() {
 	s.useIncremental = false
 	s.incremental = nil
-	logrus.Info("📸 Incremental snapshots disabled")
+	logrus.Info("Incremental snapshots disabled")
 }
 
 // Init initializes a new snapshotter
@@ -80,10 +120,20 @@ func (s *Snapshotter) Key() (string, error) {
 // TakeSnapshot takes a snapshot of the specified files, avoiding directories in the ignorelist, and creates
 // a tarball of the changed files. Return contents of the tarball, and whether or not any files were changed
 func (s *Snapshotter) TakeSnapshot(files []string, shdCheckDelete, forceBuildMetadata bool) (string, error) {
-	// Use incremental snapshots if enabled and no specific files are provided
-	if s.useIncremental && s.incremental != nil && len(files) == 0 && !forceBuildMetadata {
-		logrus.Debugf("📸 Using incremental snapshot")
-		return s.takeIncrementalSnapshot(shdCheckDelete)
+	// Use incremental snapshots if enabled
+	if s.useIncremental && s.incremental != nil {
+		// If no specific files provided, use full incremental snapshot
+		if len(files) == 0 && !forceBuildMetadata {
+			logrus.Debugf("Using incremental snapshot (full scan)")
+			return s.takeIncrementalSnapshot(shdCheckDelete)
+		}
+
+		// If specific files provided, use incremental detection for those files
+		// This uses hash cache to detect which files actually changed
+		if len(files) > 0 && !forceBuildMetadata {
+			logrus.Debugf("Using incremental snapshot for %d specified files", len(files))
+			return s.takeIncrementalSnapshotForFiles(files, shdCheckDelete)
+		}
 	}
 
 	// Fallback to regular snapshot
@@ -95,13 +145,34 @@ func (s *Snapshotter) takeIncrementalSnapshot(_ bool) (string, error) {
 	return s.incremental.TakeIncrementalSnapshot()
 }
 
+// takeIncrementalSnapshotForFiles performs an incremental snapshot for specific files
+// Uses hash cache to detect which files actually changed
+func (s *Snapshotter) takeIncrementalSnapshotForFiles(files []string, shdCheckDelete bool) (string, error) {
+	if s.incremental == nil {
+		return s.takeRegularSnapshot(files, shdCheckDelete, false)
+	}
+
+	// Detect changed files using incremental snapshotter's cache
+	changedFiles := s.incremental.DetectChangedFiles(files)
+
+	if len(changedFiles) == 0 {
+		logrus.Debugf("No files changed among %d specified files, skipping snapshot", len(files))
+		return "", nil
+	}
+
+	logrus.Debugf("Detected %d changed files out of %d specified", len(changedFiles), len(files))
+
+	// Use regular snapshot for changed files only
+	return s.takeRegularSnapshot(changedFiles, shdCheckDelete, false)
+}
+
 // verifyFilesExist checks if files exist before adding to layered map
 func verifyFilesExist(filesToAdd []string) {
 	for _, file := range filesToAdd {
 		if _, statErr := os.Lstat(file); statErr != nil {
 			if os.IsNotExist(statErr) {
-				logrus.Warnf("⚠️  File %s does not exist on filesystem when trying to add to layered map!", file)
-				logrus.Warnf("⚠️  This file will be skipped and NOT included in the snapshot!")
+				logrus.Warnf("File %s does not exist on filesystem when trying to add to layered map!", file)
+				logrus.Warnf("This file will be skipped and NOT included in the snapshot!")
 			} else {
 				logrus.Warnf("Failed to stat file %s: %v", file, statErr)
 			}
@@ -154,7 +225,7 @@ func verifyTarFile(tarFile *os.File, expectedFileCount int) {
 
 	logrus.Debugf("Tar file created: %s, size: %d bytes", tarFile.Name(), fi.Size())
 	if fi.Size() == 0 && expectedFileCount > 0 {
-		logrus.Warnf("⚠️  WARNING: Tar file is empty but %d files were supposed to be written!", expectedFileCount)
+		logrus.Warnf("WARNING: Tar file is empty but %d files were supposed to be written!", expectedFileCount)
 	}
 }
 
@@ -168,9 +239,9 @@ func (s *Snapshotter) takeRegularSnapshot(files []string, shdCheckDelete, forceB
 
 	s.l.Snapshot()
 	if len(files) == 0 && !forceBuildMetadata {
-		logrus.Warnf("⚠️  No files changed in this command (files list is empty), " +
+		logrus.Warnf("No files changed in this command (files list is empty), " +
 			"skipping snapshotting. This means NO LAYER will be created!")
-		logrus.Warnf("⚠️  If this is a COPY command, the copied files may not be included in the final image!")
+		logrus.Warnf("If this is a COPY command, the copied files may not be included in the final image!")
 		return "", nil
 	}
 
@@ -208,10 +279,8 @@ func (s *Snapshotter) takeRegularSnapshot(files []string, shdCheckDelete, forceB
 		logrus.Debugf("Files to write to tar: %v", filesToAdd)
 	}
 
-	// Sync filesystem before writing to tar to ensure all files are written to disk
-	if runtime.GOOS == "linux" {
-		syncFilesystem()
-	}
+	// Removed filesystem sync - simplified approach per plan
+	// Files are written directly, no need for explicit sync
 
 	if writeErr := writeToTar(t, filesToAdd, filesToWhiteout); writeErr != nil {
 		return "", fmt.Errorf("failed to write files to tar: %w", writeErr)
@@ -255,24 +324,9 @@ func (s *Snapshotter) getSnapshotPathPrefix() string {
 func (s *Snapshotter) scanFullFilesystem() (filesToAdd, filesToWhiteout []string, err error) {
 	logrus.Info("Taking snapshot of full filesystem...")
 
-	// Some of the operations that follow (e.g. hashing) depend on the file system being synced,
-	// for example the hashing function that determines if files are equal uses the mtime of the files,
-	// which can lag if sync is not called. Unfortunately there can still be lag if too much data needs
-	// to be flushed or the disk does its own caching/buffering.
-	if runtime.GOOS == "linux" {
-		dir, openErr := os.Open(s.directory)
-		if openErr != nil {
-			return nil, nil, openErr
-		}
-		defer dir.Close()
-		// Try to use syncfs for Linux systems - this is more efficient than syncing all filesystems
-		// The syncfs system call number varies by architecture, so we need to handle this carefully
-		// For most modern Linux systems, syncfs is available
-		trySyncFs(dir)
-	} else {
-		// fallback to full page cache sync for non-Linux systems
-		syncFilesystem()
-	}
+	// Removed filesystem sync - simplified approach per plan
+	// Files are read directly, no need for explicit sync
+	// The filesystem and OS handle buffering appropriately
 
 	s.l.Snapshot()
 
@@ -293,8 +347,8 @@ func (s *Snapshotter) scanFullFilesystem() (filesToAdd, filesToWhiteout []string
 
 	changedPaths, deletedPaths, err := optimizer.OptimizedWalkFS(s.directory, s.l.GetCurrentPaths())
 	if err != nil {
-		logrus.Warnf("SafeSnapshotOptimizer failed, falling back to standard WalkFS: %v", err)
-		changedPaths, deletedPaths = util.WalkFS(s.directory, s.l.GetCurrentPaths(), s.l.CheckFileChange)
+		// Simplified: no fallback - if optimizer fails, return error
+		return nil, nil, errors.Wrap(err, "optimized filesystem walk failed")
 	}
 	timer := timing.Start("Resolving Paths")
 
@@ -377,9 +431,9 @@ func writeToTar(t util.Tar, files, whiteouts []string) error {
 		// Verify file exists before adding to tar
 		if _, statErr := os.Lstat(path); statErr != nil {
 			if os.IsNotExist(statErr) {
-				logrus.Warnf("⚠️  CRITICAL: File %s does not exist when trying to write to tar! "+
+				logrus.Warnf("CRITICAL: File %s does not exist when trying to write to tar! "+
 					"This file will NOT be in the layer!", path)
-				logrus.Warnf("⚠️  This may cause files to be missing in subsequent stages or final image!")
+				logrus.Warnf("This may cause files to be missing in subsequent stages or final image!")
 				continue
 			}
 			logrus.Warnf("Failed to stat file %s: %v, skipping", path, statErr)
@@ -396,11 +450,11 @@ func writeToTar(t util.Tar, files, whiteouts []string) error {
 		}
 		logrus.Debugf("Adding file to tar: %s", path)
 		if err := t.AddFileToTar(path); err != nil {
-			logrus.Errorf("❌ CRITICAL: Failed to add file %s to tar: %v - this file will NOT be in the layer!", path, err)
+			logrus.Errorf("CRITICAL: Failed to add file %s to tar: %v - this file will NOT be in the layer!", path, err)
 			return fmt.Errorf("failed to add file %s to tar: %w", path, err)
 		}
 		addedPaths[path] = true
-		logrus.Debugf("✅ Successfully added file to tar: %s", path)
+		logrus.Debugf("Successfully added file to tar: %s", path)
 	}
 	logrus.Debugf("Total files written to tar: %d", len(addedPaths))
 	return nil
@@ -450,33 +504,4 @@ func filesWithLinks(path string) ([]string, error) {
 		return []string{path}, nil //nolint:nilerr // it's acceptable to ignore file not found errors for symlink targets
 	}
 	return []string{path, link}, nil
-}
-
-// trySyncFs attempts to use the syncfs system call on Linux systems
-// If syncfs is not available or fails, it falls back to syscall.Sync()
-func trySyncFs(dir *os.File) {
-	// syncfs system call numbers for different architectures
-	// These values are from the Linux kernel and may vary by architecture
-	var syncFsSyscallNum uintptr
-
-	// Determine the appropriate syscall number based on architecture
-	switch runtime.GOARCH {
-	case "amd64", "386":
-		syncFsSyscallNum = 306 // SYS_SYNCFS for x86/x86_64
-	case "arm", "arm64":
-		syncFsSyscallNum = 267 // SYS_SYNCFS for ARM
-	case "ppc64", "ppc64le":
-		syncFsSyscallNum = 348 // SYS_SYNCFS for PowerPC
-	default:
-		// For unknown architectures, use regular sync
-		syncFilesystem()
-		return
-	}
-
-	// Try the syncfs system call
-	_, _, errno := syscall.Syscall(syncFsSyscallNum, dir.Fd(), 0, 0)
-	if errno != 0 {
-		// If syncfs fails, fall back to regular sync
-		syncFilesystem()
-	}
 }

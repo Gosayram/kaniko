@@ -19,6 +19,7 @@ limitations under the License.
 package oci
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -34,7 +35,12 @@ import (
 
 	"github.com/Gosayram/kaniko/pkg/config"
 	"github.com/Gosayram/kaniko/pkg/debug"
-	"github.com/Gosayram/kaniko/pkg/util"
+	"github.com/Gosayram/kaniko/pkg/retry"
+)
+
+const (
+	// DefaultIndexPushRetryMaxDelay is the default maximum delay for index push retry operations
+	DefaultIndexPushRetryMaxDelay = 30 * time.Second
 )
 
 // BuildIndex creates an OCI Image Index or Docker Manifest List from platform digests
@@ -315,15 +321,32 @@ func PushIndex(index v1.ImageIndex, opts *config.KanikoOptions) error {
 			return remote.WriteIndex(destRef, index, getRemoteOptions(opts)...)
 		}
 
-		// Use configurable exponential backoff retry
-		initialDelay := opts.PushRetryInitialDelay
+		// Use new retry mechanism with exponential backoff
+		initialDelay := time.Duration(opts.PushRetryInitialDelay) * time.Millisecond
 		if initialDelay <= 0 {
-			initialDelay = 1000 // fallback to 1 second
+			initialDelay = 1 * time.Second // fallback to 1 second
 		}
 
+		maxDelay := time.Duration(opts.PushRetryMaxDelay) * time.Millisecond
+		if maxDelay <= 0 {
+			maxDelay = DefaultIndexPushRetryMaxDelay
+		}
+
+		backoffMultiplier := opts.PushRetryBackoffMultiplier
 		const defaultBackoffMultiplier = 2.0
-		err = util.RetryWithConfig(pushOperation, opts.PushRetry, initialDelay,
-			opts.PushRetryMaxDelay, opts.PushRetryBackoffMultiplier, defaultBackoffMultiplier)
+		if backoffMultiplier <= 0 {
+			backoffMultiplier = defaultBackoffMultiplier
+		}
+
+		retryConfig := retry.NewRetryConfigBuilder().
+			WithMaxAttempts(opts.PushRetry + 1). // +1 because first attempt is not a retry
+			WithInitialDelay(initialDelay).
+			WithMaxDelay(maxDelay).
+			WithBackoff(backoffMultiplier).
+			WithRetryableErrors(retry.IsRetryableError).
+			Build()
+
+		err = retry.Retry(context.Background(), retryConfig, pushOperation)
 		if err != nil {
 			return errors.Wrapf(err, "failed to push index to %s after %d attempts", destination, opts.PushRetry+1)
 		}

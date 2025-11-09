@@ -18,6 +18,7 @@ package executor
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -26,6 +27,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/empty"
@@ -43,6 +45,7 @@ import (
 	"github.com/Gosayram/kaniko/pkg/config"
 	"github.com/Gosayram/kaniko/pkg/constants"
 	"github.com/Gosayram/kaniko/pkg/creds"
+	"github.com/Gosayram/kaniko/pkg/retry"
 	"github.com/Gosayram/kaniko/pkg/timing"
 	"github.com/Gosayram/kaniko/pkg/util"
 	"github.com/Gosayram/kaniko/pkg/version"
@@ -77,6 +80,9 @@ const pushRetryDelay = 1000
 
 // defaultBackoffMultiplier is default multiplier for exponential backoff
 const defaultBackoffMultiplier = 2.0
+
+// defaultPushRetryMaxDelay is the default maximum delay for push retry operations
+const defaultPushRetryMaxDelay = 30 * time.Second
 
 var (
 	// known tag immutability errors
@@ -325,70 +331,130 @@ func handleTarballCreation(image v1.Image, opts *config.KanikoOptions, destRefs 
 
 func pushToDestinations(image v1.Image, opts *config.KanikoOptions, destRefs []name.Tag) error {
 	for _, destRef := range destRefs {
-		registryName := destRef.Registry.Name()
-		if opts.Insecure || opts.InsecureRegistries.Contains(registryName) {
-			newReg, err := name.NewRegistry(registryName, name.WeakValidation, name.Insecure)
-			if err != nil {
-				return errors.Wrap(err, "getting new insecure registry")
-			}
-			destRef.Registry = newReg
-		}
-
-		logrus.Infof("Attempting to resolve authentication for registry %s", registryName)
-		pushAuth, err := creds.GetKeychain().Resolve(destRef.Context().Registry)
-		if err != nil {
-			logrus.Errorf("Failed to resolve authentication for registry %s: %v", registryName, err)
-			return errors.Wrap(err, "resolving pushAuth")
-		}
-		logrus.Infof("Successfully resolved authentication for registry %s", registryName)
-
-		localRt, err := util.MakeTransport(&opts.RegistryOptions, registryName)
-		if err != nil {
-			return errors.Wrapf(err, "making transport for registry %q", registryName)
-		}
-		tr := newRetry(localRt)
-		rt := &withUserAgent{t: tr}
-
-		logrus.Infof("Pushing image to %s", destRef.String())
-		logrus.Infof("Using authentication for registry %s", registryName)
-
-		retryFunc := func() error {
-			dig, err := image.Digest()
-			if err != nil {
-				return err
-			}
-			digest := destRef.Context().Digest(dig.String())
-			if err := remote.Write(destRef, image, remote.WithAuth(pushAuth), remote.WithTransport(rt)); err != nil {
-				if !opts.PushIgnoreImmutableTagErrors {
-					return err
-				}
-
-				// check for known "tag immutable" errors
-				errStr := err.Error()
-				for _, candidate := range errTagImmutable {
-					if strings.Contains(errStr, candidate) {
-						logrus.Infof("Immutable tag error ignored for %s", digest)
-						return nil
-					}
-				}
-				return err
-			}
-			logrus.Infof("Pushed %s", digest)
-			return nil
-		}
-
-		// Use configurable exponential backoff retry
-		initialDelay := opts.PushRetryInitialDelay
-		if initialDelay <= 0 {
-			initialDelay = pushRetryDelay // fallback to default
-		}
-
-		if err := util.RetryWithConfig(retryFunc, opts.PushRetry, initialDelay,
-			opts.PushRetryMaxDelay, opts.PushRetryBackoffMultiplier, defaultBackoffMultiplier); err != nil {
-			return errors.Wrap(err, fmt.Sprintf("failed to push to destination %s", destRef))
+		if err := pushToDestination(image, opts, destRef); err != nil {
+			return err
 		}
 	}
 	return nil
+}
+
+func pushToDestination(image v1.Image, opts *config.KanikoOptions, destRef name.Tag) error {
+	registryName := destRef.Registry.Name()
+	if err := configureInsecureRegistry(opts, registryName, &destRef); err != nil {
+		return err
+	}
+
+	pushAuth, err := resolvePushAuth(destRef, registryName)
+	if err != nil {
+		return err
+	}
+
+	rt, err := createTransport(opts, registryName)
+	if err != nil {
+		return err
+	}
+
+	retryFunc := buildPushRetryFunc(image, destRef, pushAuth, rt, opts)
+	retryConfig := buildPushRetryConfig(opts)
+
+	if err := retry.Retry(context.Background(), retryConfig, retryFunc); err != nil {
+		return errors.Wrap(err, fmt.Sprintf("failed to push to destination %s", destRef))
+	}
+	return nil
+}
+
+func configureInsecureRegistry(opts *config.KanikoOptions, registryName string, destRef *name.Tag) error {
+	if opts.Insecure || opts.InsecureRegistries.Contains(registryName) {
+		newReg, err := name.NewRegistry(registryName, name.WeakValidation, name.Insecure)
+		if err != nil {
+			return errors.Wrap(err, "getting new insecure registry")
+		}
+		destRef.Registry = newReg
+	}
+	return nil
+}
+
+func resolvePushAuth(destRef name.Tag, registryName string) (authn.Authenticator, error) {
+	logrus.Infof("Attempting to resolve authentication for registry %s", registryName)
+	pushAuth, err := creds.GetKeychain().Resolve(destRef.Context().Registry)
+	if err != nil {
+		logrus.Errorf("Failed to resolve authentication for registry %s: %v", registryName, err)
+		return nil, errors.Wrap(err, "resolving pushAuth")
+	}
+	logrus.Infof("Successfully resolved authentication for registry %s", registryName)
+	return pushAuth, nil
+}
+
+func createTransport(opts *config.KanikoOptions, registryName string) (http.RoundTripper, error) {
+	localRt, err := util.MakeTransport(&opts.RegistryOptions, registryName)
+	if err != nil {
+		return nil, errors.Wrapf(err, "making transport for registry %q", registryName)
+	}
+	tr := newRetry(localRt)
+	return &withUserAgent{t: tr}, nil
+}
+
+func buildPushRetryFunc(
+	image v1.Image,
+	destRef name.Tag,
+	pushAuth authn.Authenticator,
+	rt http.RoundTripper,
+	opts *config.KanikoOptions,
+) func() error {
+	return func() error {
+		dig, err := image.Digest()
+		if err != nil {
+			return err
+		}
+		digest := destRef.Context().Digest(dig.String())
+		if err := remote.Write(destRef, image, remote.WithAuth(pushAuth), remote.WithTransport(rt)); err != nil {
+			if !opts.PushIgnoreImmutableTagErrors {
+				return err
+			}
+			if isImmutableTagError(err) {
+				logrus.Infof("Immutable tag error ignored for %s", digest)
+				return nil
+			}
+			return err
+		}
+		logrus.Infof("Pushed %s", digest)
+		return nil
+	}
+}
+
+func isImmutableTagError(err error) bool {
+	errStr := err.Error()
+	for _, candidate := range errTagImmutable {
+		if strings.Contains(errStr, candidate) {
+			return true
+		}
+	}
+	return false
+}
+
+func buildPushRetryConfig(opts *config.KanikoOptions) retry.RetryConfig {
+	initialDelay := time.Duration(opts.PushRetryInitialDelay) * time.Millisecond
+	if initialDelay <= 0 {
+		initialDelay = time.Duration(pushRetryDelay) * time.Millisecond
+	}
+
+	maxDelay := time.Duration(opts.PushRetryMaxDelay) * time.Millisecond
+	if maxDelay <= 0 {
+		maxDelay = defaultPushRetryMaxDelay
+	}
+
+	backoffMultiplier := opts.PushRetryBackoffMultiplier
+	if backoffMultiplier <= 0 {
+		backoffMultiplier = defaultBackoffMultiplier
+	}
+
+	return retry.NewRetryConfigBuilder().
+		WithMaxAttempts(opts.PushRetry + 1).
+		WithInitialDelay(initialDelay).
+		WithMaxDelay(maxDelay).
+		WithBackoff(backoffMultiplier).
+		WithRetryableErrors(retry.IsRetryableError).
+		Build()
 }
 
 func writeImageOutputs(image v1.Image, destRefs []name.Tag) error {
@@ -425,6 +491,20 @@ func writeImageOutputs(image v1.Image, destRefs []name.Tag) error {
 // pushLayerToCache pushes layer (tagged with cacheKey) to opts.CacheRepo
 // if opts.CacheRepo doesn't exist, infer the cache from the given destination
 func pushLayerToCache(opts *config.KanikoOptions, cacheKey, tarPath, createdBy string) error {
+	// Check file size before processing (optimization: skip very small files)
+	if tarPath != "" {
+		if fi, err := os.Stat(tarPath); err == nil {
+			// Skip pushing very small layers (< 1KB) to cache to save network/registry resources
+			// These are typically empty or metadata-only layers
+			const minCacheSize = 1024 // 1KB
+			if fi.Size() < minCacheSize {
+				logrus.Debugf("Skipping cache push for small layer (%d bytes < %d bytes): %s", fi.Size(), minCacheSize, cacheKey)
+				return nil
+			}
+			logrus.Debugf("Pushing layer to cache: %s (size: %d bytes)", cacheKey, fi.Size())
+		}
+	}
+
 	var layerOpts []tarball.LayerOption
 	if opts.CompressedCaching {
 		layerOpts = append(layerOpts, tarball.WithCompressedCaching)
@@ -444,7 +524,7 @@ func pushLayerToCache(opts *config.KanikoOptions, cacheKey, tarPath, createdBy s
 
 	layer, err := tarball.LayerFromFile(tarPath, layerOpts...)
 	if err != nil {
-		return err
+		return errors.Wrapf(err, "failed to create layer from file %s", tarPath)
 	}
 
 	cacheDest, err := cache.Destination(opts, cacheKey)
@@ -452,6 +532,8 @@ func pushLayerToCache(opts *config.KanikoOptions, cacheKey, tarPath, createdBy s
 		return errors.Wrap(err, "getting cache destination")
 	}
 	logrus.Infof("Pushing layer %s to cache now", cacheDest)
+
+	// Use empty.Image directly (it's a global constant, no allocation needed)
 	emptyImg := empty.Image
 	emptyImg, err = mutate.CreatedAt(emptyImg, v1.Time{Time: time.Now()})
 	if err != nil {
