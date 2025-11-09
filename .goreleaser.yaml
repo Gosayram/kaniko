@@ -104,14 +104,14 @@ release:
     ### Docker Images (signed with Cosign)
     
     Docker images are available at GitHub Container Registry. All images are signed with Cosign:
-    - `ghcr.io/{{ lower .Env.GITHUB_REPOSITORY }}/executor:{{ .Version }}` and `ghcr.io/{{ lower .Env.GITHUB_REPOSITORY }}/executor:latest`
-    - `ghcr.io/{{ lower .Env.GITHUB_REPOSITORY }}/executor:{{ .Version }}-debug` and `ghcr.io/{{ lower .Env.GITHUB_REPOSITORY }}/executor:debug`
-    - `ghcr.io/{{ lower .Env.GITHUB_REPOSITORY }}/executor:{{ .Version }}-slim` and `ghcr.io/{{ lower .Env.GITHUB_REPOSITORY }}/executor:slim`
-    - `ghcr.io/{{ lower .Env.GITHUB_REPOSITORY }}/warmer:{{ .Version }}` and `ghcr.io/{{ lower .Env.GITHUB_REPOSITORY }}/warmer:latest`
+    - `ghcr.io/{{ .Env.GITHUB_REPOSITORY }}/executor:{{ .Version }}` and `ghcr.io/{{ .Env.GITHUB_REPOSITORY }}/executor:latest`
+    - `ghcr.io/{{ .Env.GITHUB_REPOSITORY }}/executor:{{ .Version }}-debug` and `ghcr.io/{{ .Env.GITHUB_REPOSITORY }}/executor:debug`
+    - `ghcr.io/{{ .Env.GITHUB_REPOSITORY }}/executor:{{ .Version }}-slim` and `ghcr.io/{{ .Env.GITHUB_REPOSITORY }}/executor:slim`
+    - `ghcr.io/{{ .Env.GITHUB_REPOSITORY }}/warmer:{{ .Version }}` and `ghcr.io/{{ .Env.GITHUB_REPOSITORY }}/warmer:latest`
     
     Verify image signatures using the public key from the repository:
     ```bash
-    cosign verify --key cosign.pub ghcr.io/{{ lower .Env.GITHUB_REPOSITORY }}/executor:{{ .Version }}
+    cosign verify --key cosign.pub ghcr.io/{{ .Env.GITHUB_REPOSITORY }}/executor:{{ .Version }}
     ```
     
     The `cosign.pub` file is available in the repository root.
@@ -135,7 +135,7 @@ release:
     
     **Docker images are signed with Cosign.** Verify signatures using:
     ```bash
-    cosign verify --key cosign.pub ghcr.io/{{ lower .Env.GITHUB_REPOSITORY }}/executor:{{ .Version }}
+    cosign verify --key cosign.pub ghcr.io/{{ .Env.GITHUB_REPOSITORY }}/executor:{{ .Version }}
     ```
 
 # Docker images configuration (using dockers_v2)
@@ -143,7 +143,7 @@ release:
 dockers_v2:
   - id: executor
     images:
-      - "ghcr.io/{{ lower .Env.GITHUB_REPOSITORY }}/executor"
+      - "ghcr.io/{{ .Env.GITHUB_REPOSITORY }}/executor"
     tags:
       - "{{ .Version }}"
       - "latest"
@@ -161,7 +161,7 @@ dockers_v2:
 
   - id: executor-debug
     images:
-      - "ghcr.io/{{ lower .Env.GITHUB_REPOSITORY }}/executor"
+      - "ghcr.io/{{ .Env.GITHUB_REPOSITORY }}/executor"
     tags:
       - "{{ .Version }}-debug"
       - "debug"
@@ -180,7 +180,7 @@ dockers_v2:
 
   - id: executor-slim
     images:
-      - "ghcr.io/{{ lower .Env.GITHUB_REPOSITORY }}/executor"
+      - "ghcr.io/{{ .Env.GITHUB_REPOSITORY }}/executor"
     tags:
       - "{{ .Version }}-slim"
       - "slim"
@@ -198,7 +198,7 @@ dockers_v2:
 
   - id: warmer
     images:
-      - "ghcr.io/{{ lower .Env.GITHUB_REPOSITORY }}/warmer"
+      - "ghcr.io/{{ .Env.GITHUB_REPOSITORY }}/warmer"
     tags:
       - "{{ .Version }}"
       - "latest"

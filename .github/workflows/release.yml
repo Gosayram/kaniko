@@ -60,6 +60,7 @@ jobs:
           fi
           # Convert repository name to lowercase for Docker registry
           REPO_LOWER=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+          echo "repository=$REPO_LOWER" >> $GITHUB_OUTPUT
           echo "GITHUB_REPOSITORY=$REPO_LOWER" >> $GITHUB_ENV
           echo "Repository name (lowercase): $REPO_LOWER"
 
@@ -87,6 +88,7 @@ jobs:
           GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
           RELEASE_VERSION: ${{ steps.version.outputs.version }}
           # GITHUB_REPOSITORY is set in lowercase in the version step above
+          GITHUB_REPOSITORY: ${{ steps.version.outputs.repository }}
           # Cosign signing for Docker images
           COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
           COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
