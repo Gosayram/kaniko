@@ -80,6 +80,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # GPG signing for binaries and checksums
           GPG_FINGERPRINT: ${{ steps.import_gpg.outputs.fingerprint }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
           RELEASE_VERSION: ${{ steps.version.outputs.version }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           # Cosign signing for Docker images
