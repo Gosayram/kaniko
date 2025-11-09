@@ -1,20 +1,20 @@
 # {{VERSION}} Release {{DATE}}
 The executor images in this release are:
 ```
-gcr.io/Gosayram/kaniko/executor:{{VERSION}}
-gcr.io/Gosayram/kaniko/executor:latest
+ghcr.io/Gosayram/kaniko/executor:{{VERSION}}
+ghcr.io/Gosayram/kaniko/executor:latest
 ```
 
 The debug images are available at:
 ```
-gcr.io/Gosayram/kaniko/executor:debug
-gcr.io/Gosayram/kaniko/executor:{{VERSION}}-debug
+ghcr.io/Gosayram/kaniko/executor:debug
+ghcr.io/Gosayram/kaniko/executor:{{VERSION}}-debug
 ```
 
 The slim executor images which don't contain any authentication binaries are available at:
 ```
-gcr.io/Gosayram/kaniko/executor:slim
-gcr.io/Gosayram/kaniko/executor:{{VERSION}}-slim
+ghcr.io/Gosayram/kaniko/executor:slim
+ghcr.io/Gosayram/kaniko/executor:{{VERSION}}-slim
 ```
 
 {{PULL_REQUESTS}}

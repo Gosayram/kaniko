@@ -1,0 +1,246 @@
+# GoReleaser configuration for Kaniko
+# Version is read from .release-version file and passed via RELEASE_VERSION env var
+
+version: 2
+
+project_name: kaniko
+
+# Build configuration
+builds:
+  - id: executor
+    binary: executor
+    main: ./cmd/executor
+    env:
+      - CGO_ENABLED=0
+      - GOFLAGS=-mod=vendor
+    flags:
+      - -trimpath
+    ldflags:
+      - -extldflags "-static"
+      - -X 'github.com/Gosayram/kaniko/internal/version.Version={{ .Env.RELEASE_VERSION }}'
+      - -X 'github.com/Gosayram/kaniko/internal/version.Commit={{ .Commit }}'
+      - -X 'github.com/Gosayram/kaniko/internal/version.Date={{ .Date }}'
+      - -s
+      - -w
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    goarm:
+      - "7"
+    ignore:
+      - goos: darwin
+        goarch: arm64
+        goarm: "7"
+      - goos: windows
+        goarch: arm64
+
+  - id: warmer
+    binary: warmer
+    main: ./cmd/warmer
+    env:
+      - CGO_ENABLED=0
+      - GOFLAGS=-mod=vendor
+    flags:
+      - -trimpath
+    ldflags:
+      - -extldflags "-static"
+      - -X 'github.com/Gosayram/kaniko/internal/version.Version={{ .Env.RELEASE_VERSION }}'
+      - -X 'github.com/Gosayram/kaniko/internal/version.Commit={{ .Commit }}'
+      - -X 'github.com/Gosayram/kaniko/internal/version.Date={{ .Date }}'
+      - -s
+      - -w
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    goarm:
+      - "7"
+    ignore:
+      - goos: darwin
+        goarch: arm64
+        goarm: "7"
+      - goos: windows
+        goarch: arm64
+
+# Archive configuration
+archives:
+  - id: default
+    format_overrides:
+      - goos: windows
+        format: zip
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}{{ if .Arm }}v{{ .Arm }}{{ end }}"
+    files:
+      - README.md
+      - LICENSE
+
+# Checksums
+checksum:
+  name_template: "{{ .ProjectName }}_{{ .Version }}_checksums.txt"
+  algorithm: sha256
+
+# GPG signing
+signs:
+  - artifacts: checksum
+    signature: "${artifact}.sig"
+    cmd: gpg
+    args:
+      - "--batch"
+      - "--pinentry-mode=loopback"
+      - "--passphrase={{ .Env.GPG_PASSPHRASE }}"
+      - "--default-key={{ .Env.GPG_FINGERPRINT }}"
+      - "--output"
+      - "${signature}"
+      - "--detach-sign"
+      - "${artifact}"
+    ids:
+      - checksum
+
+# Release configuration
+release:
+  mode: replace
+  header: |
+    ## Kaniko {{ .Tag }}
+    
+    Release {{ .Tag }} of Kaniko container image builder.
+    
+    ### Docker Images (signed with Cosign)
+    
+    Docker images are available at GitHub Container Registry. All images are signed with Cosign:
+    - `ghcr.io/{{ .Env.GITHUB_REPOSITORY }}/executor:{{ .Version }}` and `ghcr.io/{{ .Env.GITHUB_REPOSITORY }}/executor:latest`
+    - `ghcr.io/{{ .Env.GITHUB_REPOSITORY }}/executor:{{ .Version }}-debug` and `ghcr.io/{{ .Env.GITHUB_REPOSITORY }}/executor:debug`
+    - `ghcr.io/{{ .Env.GITHUB_REPOSITORY }}/executor:{{ .Version }}-slim` and `ghcr.io/{{ .Env.GITHUB_REPOSITORY }}/executor:slim`
+    - `ghcr.io/{{ .Env.GITHUB_REPOSITORY }}/warmer:{{ .Version }}` and `ghcr.io/{{ .Env.GITHUB_REPOSITORY }}/warmer:latest`
+    
+    Verify image signatures using the public key from the repository:
+    ```bash
+    cosign verify --key cosign.pub ghcr.io/{{ .Env.GITHUB_REPOSITORY }}/executor:{{ .Version }}
+    ```
+    
+    The `cosign.pub` file is available in the repository root.
+    
+    ### Binaries (signed with GPG)
+    
+    This release includes the following binaries, all signed with GPG:
+    - `executor` - Main Kaniko executor
+    - `warmer` - Kaniko warmer for cache warming
+    
+    ### Installation
+    
+    Download the appropriate binary for your platform from the assets below.
+    
+    ### Verification
+    
+    **Binaries and checksums are GPG signed.** Verify signatures using:
+    ```bash
+    gpg --verify {{ .ProjectName }}_{{ .Version }}_checksums.txt.sig {{ .ProjectName }}_{{ .Version }}_checksums.txt
+    ```
+    
+    **Docker images are signed with Cosign.** Verify signatures using:
+    ```bash
+    cosign verify --key cosign.pub ghcr.io/{{ .Env.GITHUB_REPOSITORY }}/executor:{{ .Version }}
+    ```
+
+# Docker images configuration (using dockers_v2)
+# dockers_v2 is in alpha and will replace dockers in GoReleaser v3
+dockers_v2:
+  - id: executor
+    images:
+      - "ghcr.io/{{ .Env.GITHUB_REPOSITORY }}/executor"
+    tags:
+      - "{{ .Version }}"
+      - "latest"
+    dockerfile: deploy/Dockerfile
+    ids:
+      - executor
+    flags:
+      - "--target=kaniko-executor"
+    build_args:
+      VERSION: "{{ .Env.RELEASE_VERSION }}"
+      COMMIT: "{{ .Commit }}"
+      DATE: "{{ .Date }}"
+    platforms:
+      - linux/amd64
+
+  - id: executor-debug
+    images:
+      - "ghcr.io/{{ .Env.GITHUB_REPOSITORY }}/executor"
+    tags:
+      - "{{ .Version }}-debug"
+      - "debug"
+    dockerfile: deploy/Dockerfile
+    ids:
+      - executor
+      - warmer
+    flags:
+      - "--target=kaniko-debug"
+    build_args:
+      VERSION: "{{ .Env.RELEASE_VERSION }}"
+      COMMIT: "{{ .Commit }}"
+      DATE: "{{ .Date }}"
+    platforms:
+      - linux/amd64
+
+  - id: executor-slim
+    images:
+      - "ghcr.io/{{ .Env.GITHUB_REPOSITORY }}/executor"
+    tags:
+      - "{{ .Version }}-slim"
+      - "slim"
+    dockerfile: deploy/Dockerfile
+    ids:
+      - executor
+    flags:
+      - "--target=kaniko-slim"
+    build_args:
+      VERSION: "{{ .Env.RELEASE_VERSION }}"
+      COMMIT: "{{ .Commit }}"
+      DATE: "{{ .Date }}"
+    platforms:
+      - linux/amd64
+
+  - id: warmer
+    images:
+      - "ghcr.io/{{ .Env.GITHUB_REPOSITORY }}/warmer"
+    tags:
+      - "{{ .Version }}"
+      - "latest"
+    dockerfile: deploy/Dockerfile
+    ids:
+      - warmer
+    flags:
+      - "--target=kaniko-warmer"
+    build_args:
+      VERSION: "{{ .Env.RELEASE_VERSION }}"
+      COMMIT: "{{ .Commit }}"
+      DATE: "{{ .Date }}"
+    platforms:
+      - linux/amd64
+
+# Docker image signing with Cosign
+docker_signs:
+  - artifacts: all
+    cmd: cosign
+    args:
+      - "sign"
+      - "--key=env://COSIGN_PRIVATE_KEY"
+      - "${artifact}@${digest}"
+      - "--yes"
+    stdin: "{{ .Env.COSIGN_PASSWORD }}"
+
+# Changelog
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^chore:'
+      - '^ci:'
+

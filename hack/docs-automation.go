@@ -493,20 +493,20 @@ func (dg *DocumentationGenerator) generateChangelogMarkdown(sections []Changelog
 	fmt.Fprintf(&buf, "# %s Release %s\n\n", version, time.Now().Format("2006-01-02"))
 	fmt.Fprintf(&buf, "The executor images in this release are:\n")
 	fmt.Fprintf(&buf, "```\n")
-	fmt.Fprintf(&buf, "gcr.io/Gosayram/executor:%s\n", version)
-	fmt.Fprintf(&buf, "gcr.io/Gosayram/executor:latest\n")
+	fmt.Fprintf(&buf, "ghcr.io/Gosayram/kaniko/executor:%s\n", version)
+	fmt.Fprintf(&buf, "ghcr.io/Gosayram/kaniko/executor:latest\n")
 	fmt.Fprintf(&buf, "```\n\n")
 
 	fmt.Fprintf(&buf, "The debug images are available at:\n")
 	fmt.Fprintf(&buf, "```\n")
-	fmt.Fprintf(&buf, "gcr.io/Gosayram/executor:debug\n")
-	fmt.Fprintf(&buf, "gcr.io/Gosayram/executor:%s-debug\n", version)
+	fmt.Fprintf(&buf, "ghcr.io/Gosayram/kaniko/executor:debug\n")
+	fmt.Fprintf(&buf, "ghcr.io/Gosayram/kaniko/executor:%s-debug\n", version)
 	fmt.Fprintf(&buf, "```\n\n")
 
 	fmt.Fprintf(&buf, "The slim executor images which don't contain any authentication binaries are available at:\n")
 	fmt.Fprintf(&buf, "```\n")
-	fmt.Fprintf(&buf, "gcr.io/Gosayram/executor:slim\n")
-	fmt.Fprintf(&buf, "gcr.io/Gosayram/executor:%s-slim\n", version)
+	fmt.Fprintf(&buf, "ghcr.io/Gosayram/kaniko/executor:slim\n")
+	fmt.Fprintf(&buf, "ghcr.io/Gosayram/kaniko/executor:%s-slim\n", version)
 	fmt.Fprintf(&buf, "```\n\n")
 
 	// Write changelog sections
@@ -1201,20 +1201,20 @@ func (dg *DocumentationGenerator) generateVersionEntry(version string, prs []str
 	// Write image information
 	sb.WriteString("The executor images in this release are:\n")
 	sb.WriteString("```\n")
-	sb.WriteString(fmt.Sprintf("gcr.io/Gosayram/executor:%s\n", version))
-	sb.WriteString("gcr.io/Gosayram/executor:latest\n")
+	sb.WriteString(fmt.Sprintf("ghcr.io/Gosayram/kaniko/executor:%s\n", version))
+	sb.WriteString("ghcr.io/Gosayram/kaniko/executor:latest\n")
 	sb.WriteString("```\n\n")
 
 	sb.WriteString("The debug images are available at:\n")
 	sb.WriteString("```\n")
-	sb.WriteString("gcr.io/Gosayram/executor:debug\n")
-	sb.WriteString(fmt.Sprintf("gcr.io/Gosayram/executor:%s-debug\n", version))
+	sb.WriteString("ghcr.io/Gosayram/kaniko/executor:debug\n")
+	sb.WriteString(fmt.Sprintf("ghcr.io/Gosayram/kaniko/executor:%s-debug\n", version))
 	sb.WriteString("```\n\n")
 
 	sb.WriteString("The slim executor images which don't contain any authentication binaries are available at:\n")
 	sb.WriteString("```\n")
-	sb.WriteString("gcr.io/Gosayram/executor:slim\n")
-	sb.WriteString(fmt.Sprintf("gcr.io/Gosayram/executor:%s-slim\n", version))
+	sb.WriteString("ghcr.io/Gosayram/kaniko/executor:slim\n")
+	sb.WriteString(fmt.Sprintf("ghcr.io/Gosayram/kaniko/executor:%s-slim\n", version))
 	sb.WriteString("```\n\n")
 
 	// Write PRs if any
