@@ -278,35 +278,38 @@ func (li *LazyImage) SetLayerProvider(digest string, provider LayerProvider) {
 }
 
 // Mount loads layers only when mounting (BuildKit-style)
-func (li *LazyImage) Mount(ctx context.Context, path string) error {
+func (li *LazyImage) Mount(ctx context.Context, _ string) error {
 	li.mutex.Lock()
 	defer li.mutex.Unlock()
 
 	// Load layers only when mounting
-	for i, layer := range li.layers {
-		if !layer.loaded {
-			var loaded v1.Layer
-			var err error
-
-			// Try provider first if available
-			if layer.Provider != nil {
-				loaded, err = layer.Provider.Load(ctx, layer.Descriptor)
-				if err != nil {
-					return errors.Wrapf(err, "failed to load layer %d from provider", i)
-				}
-			} else if loader := layer.Loader; loader != nil {
-				loaded, err = loader()
-				if err != nil {
-					return errors.Wrapf(err, "failed to load layer %d", i)
-				}
-			} else {
-				return errors.Errorf("no loader or provider for layer %d", i)
-			}
-
-			li.loadedLayers[i] = loaded
-			li.layers[i].loaded = true
-			logrus.Debugf("Mounted layer %d (digest: %s)", i, layer.Descriptor.Digest.String())
+	for i := range li.layers {
+		layer := &li.layers[i]
+		if layer.loaded {
+			continue
 		}
+
+		var loaded v1.Layer
+		var err error
+
+		// Try provider first if available
+		if layer.Provider != nil {
+			loaded, err = layer.Provider.Load(ctx, layer.Descriptor)
+			if err != nil {
+				return errors.Wrapf(err, "failed to load layer %d from provider", i)
+			}
+		} else if loader := layer.Loader; loader != nil {
+			loaded, err = loader()
+			if err != nil {
+				return errors.Wrapf(err, "failed to load layer %d", i)
+			}
+		} else {
+			return errors.Errorf("no loader or provider for layer %d", i)
+		}
+
+		li.loadedLayers[i] = loaded
+		li.layers[i].loaded = true
+		logrus.Debugf("Mounted layer %d (digest: %s)", i, layer.Descriptor.Digest.String())
 	}
 
 	return nil

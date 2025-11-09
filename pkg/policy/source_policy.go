@@ -154,7 +154,18 @@ func (sp *SourcePolicy) matchesPattern(str, pattern string) bool {
 		return true
 	}
 
-	// Wildcard matching
+	// Simple prefix/suffix wildcard matching (most common cases)
+	if strings.HasPrefix(pattern, "*") {
+		suffix := strings.TrimPrefix(pattern, "*")
+		return strings.HasSuffix(str, suffix)
+	}
+
+	if strings.HasSuffix(pattern, "*") {
+		prefix := strings.TrimSuffix(pattern, "*")
+		return strings.HasPrefix(str, prefix)
+	}
+
+	// Complex wildcard matching (multiple wildcards)
 	if strings.Contains(pattern, "*") {
 		// Convert pattern to regex-like matching
 		patternParts := strings.Split(pattern, "*")
@@ -193,17 +204,6 @@ func (sp *SourcePolicy) matchesPattern(str, pattern string) bool {
 		}
 
 		return matched
-	}
-
-	// Prefix matching (common case)
-	if strings.HasPrefix(pattern, "*") {
-		suffix := strings.TrimPrefix(pattern, "*")
-		return strings.HasSuffix(str, suffix)
-	}
-
-	if strings.HasSuffix(pattern, "*") {
-		prefix := strings.TrimSuffix(pattern, "*")
-		return strings.HasPrefix(str, prefix)
 	}
 
 	return false

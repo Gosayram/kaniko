@@ -17,6 +17,7 @@ limitations under the License.
 package executor
 
 import (
+	"context"
 	"fmt"
 	"sync"
 
@@ -27,6 +28,8 @@ import (
 	"github.com/Gosayram/kaniko/pkg/commands"
 	"github.com/Gosayram/kaniko/pkg/config"
 	"github.com/Gosayram/kaniko/pkg/dockerfile"
+	"github.com/Gosayram/kaniko/pkg/llb"
+	"github.com/Gosayram/kaniko/pkg/scheduler"
 	"github.com/Gosayram/kaniko/pkg/timing"
 )
 
@@ -42,6 +45,11 @@ type SimpleExecutor struct {
 	// Optional dependency graph for execution order optimization
 	dependencyGraph *DependencyGraph
 	useGraph        bool
+
+	// LLB graph and scheduler for BuildKit-style optimization
+	llbGraph  *llb.Graph
+	scheduler *scheduler.Scheduler
+	useLLB    bool
 }
 
 // NewSimpleExecutor creates a new simple sequential executor
@@ -67,6 +75,36 @@ func NewSimpleExecutor(
 			executor.dependencyGraph = graph
 			executor.useGraph = true
 			logrus.Debugf("Using dependency graph for execution order optimization")
+		}
+
+		// Build LLB graph for BuildKit-style optimization (edge merging, etc.)
+		llbGraph, err := llb.BuildGraphFromCommands(cmds)
+		if err != nil {
+			logrus.Warnf("Failed to build LLB graph: %v, using dependency graph only", err)
+		} else {
+			// Optimize LLB graph (edge merging, etc.)
+			ctx := context.Background()
+			if err := llbGraph.Optimize(ctx); err != nil {
+				logrus.Warnf("Failed to optimize LLB graph: %v", err)
+			} else {
+				executor.llbGraph = llbGraph
+				logrus.Debugf("LLB graph optimized: %d operations", len(llbGraph.Operations))
+
+				// Build scheduler from LLB graph
+				sched, err := scheduler.BuildFromGraph(llbGraph)
+				if err != nil {
+					logrus.Warnf("Failed to build scheduler: %v", err)
+				} else {
+					// Optimize scheduler (edge merging)
+					if err := sched.Optimize(ctx); err != nil {
+						logrus.Warnf("Failed to optimize scheduler: %v", err)
+					} else {
+						executor.scheduler = sched
+						executor.useLLB = true
+						logrus.Debugf("Scheduler optimized with edge merging")
+					}
+				}
+			}
 		}
 	}
 
@@ -194,9 +232,28 @@ func (e *SimpleExecutor) ExecuteInParallel(compositeKey *CompositeCache, initSna
 }
 
 // getExecutionOrder returns the execution order for commands
-// Uses dependency graph if available (enabled by default per plan)
-// Falls back to original order if graph is not available or invalid
+// Uses LLB graph if available (BuildKit-style optimization)
+// Falls back to dependency graph, then original order
 func (e *SimpleExecutor) getExecutionOrder() []int {
+	// Use LLB graph if available (most optimized)
+	if e.useLLB && e.llbGraph != nil {
+		ops, err := e.llbGraph.GetExecutionOrder()
+		if err == nil {
+			// Convert operations to command indices
+			order := make([]int, 0, len(ops))
+			for _, op := range ops {
+				if op.Index < len(e.commands) {
+					order = append(order, op.Index)
+				}
+			}
+			if len(order) == len(e.commands) {
+				logrus.Debugf("Using optimized execution order from LLB graph")
+				return order
+			}
+			logrus.Warnf("LLB graph order length mismatch, falling back to dependency graph")
+		}
+	}
+
 	// Use dependency graph if available (enabled by default)
 	if e.useGraph && e.dependencyGraph != nil {
 		order := e.dependencyGraph.GetExecutionOrder()

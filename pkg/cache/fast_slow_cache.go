@@ -30,7 +30,14 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
+const (
+	// PercentageMultiplier is used to convert ratio to percentage
+	percentageMultiplier = 100.0
+)
+
 // CacheRecord represents a cache record with metadata
+//
+//nolint:revive // stuttering name is intentional for public API clarity
 type CacheRecord struct {
 	Key     string
 	Digest  string
@@ -39,6 +46,8 @@ type CacheRecord struct {
 }
 
 // CacheManager interface for cache operations
+//
+//nolint:revive // stuttering name is intentional for public API clarity
 type CacheManager interface {
 	Get(key string) (*CacheRecord, error)
 	Set(key string, record *CacheRecord) error
@@ -138,7 +147,7 @@ func (s *SlowCacheManager) Get(key string) (*CacheRecord, error) {
 
 // Set stores a cache record in slow cache
 // Note: Slow cache is typically read-only in Kaniko (registry-based)
-func (s *SlowCacheManager) Set(key string, record *CacheRecord) error {
+func (s *SlowCacheManager) Set(key string, _ *CacheRecord) error {
 	// Slow cache is typically read-only
 	// Writing would require pushing to registry, which is handled elsewhere
 	logrus.Debugf("Slow cache set called for key: %s (read-only cache)", key)
@@ -167,7 +176,7 @@ func NewRegistryRemoteCache(layerCache LayerCache) *RegistryRemoteCache {
 }
 
 // Get retrieves a cache record from remote cache
-func (r *RegistryRemoteCache) Get(ctx context.Context, key string) (*CacheRecord, error) {
+func (r *RegistryRemoteCache) Get(_ context.Context, key string) (*CacheRecord, error) {
 	img, err := r.layerCache.RetrieveLayer(key)
 	if err != nil {
 		return nil, err
@@ -187,7 +196,7 @@ func (r *RegistryRemoteCache) Get(ctx context.Context, key string) (*CacheRecord
 }
 
 // Probe checks if a key exists in remote cache
-func (r *RegistryRemoteCache) Probe(ctx context.Context, key string) (bool, error) {
+func (r *RegistryRemoteCache) Probe(_ context.Context, key string) (bool, error) {
 	_, err := r.layerCache.RetrieveLayer(key)
 	if err != nil {
 		return false, nil
@@ -197,7 +206,7 @@ func (r *RegistryRemoteCache) Probe(ctx context.Context, key string) (bool, erro
 
 // Set stores a cache record in remote cache
 // Note: This is typically handled by the push mechanism
-func (r *RegistryRemoteCache) Set(ctx context.Context, key string, record *CacheRecord) error {
+func (r *RegistryRemoteCache) Set(_ context.Context, key string, _ *CacheRecord) error {
 	// Remote cache writes are handled by push operations
 	logrus.Debugf("Remote cache set called for key: %s (handled by push)", key)
 	return nil
@@ -218,7 +227,7 @@ type FastSlowCache struct {
 }
 
 // NewFastSlowCache creates a new fast/slow cache system
-func NewFastSlowCache(slowCache LayerCache, remoteCache LayerCache) *FastSlowCache {
+func NewFastSlowCache(slowCache, remoteCache LayerCache) *FastSlowCache {
 	return &FastSlowCache{
 		fastCache:   NewFastCacheManager(),
 		slowCache:   NewSlowCacheManager(slowCache),
@@ -249,8 +258,8 @@ func (c *FastSlowCache) ProbeCache(key string) (*CacheRecord, error) {
 		logrus.Debugf("Slow cache hit for key: %s", key)
 
 		// Update fast cache for future lookups
-		if err := c.fastCache.Set(key, record); err != nil {
-			logrus.Warnf("Failed to update fast cache: %v", err)
+		if setErr := c.fastCache.Set(key, record); setErr != nil {
+			logrus.Warnf("Failed to update fast cache: %v", setErr)
 		}
 
 		return record, nil
@@ -294,7 +303,7 @@ func (c *FastSlowCache) GetStats() map[string]interface{} {
 	total := c.fastHits + c.slowHits + c.remoteHits + c.misses
 	hitRate := float64(0)
 	if total > 0 {
-		hitRate = float64(c.fastHits+c.slowHits+c.remoteHits) / float64(total) * 100
+		hitRate = float64(c.fastHits+c.slowHits+c.remoteHits) / float64(total) * percentageMultiplier
 	}
 
 	return map[string]interface{}{

@@ -26,6 +26,8 @@ import (
 )
 
 // CachePolicy defines cache selection policy
+//
+//nolint:revive // stuttering name is intentional for public API clarity
 type CachePolicy string
 
 const (
@@ -89,12 +91,12 @@ func (uc *UnifiedCache) Get(key string) (v1.Image, error) {
 		// Try all caches and return first success
 		var lastErr error
 		for i, cache := range caches {
-			if img, err := cache.RetrieveLayer(key); err == nil {
+			img, err := cache.RetrieveLayer(key)
+			if err == nil {
 				logrus.Debugf("Cache hit in cache %d for key: %s", i, key)
 				return img, nil
-			} else {
-				lastErr = err
 			}
+			lastErr = err
 		}
 		return nil, lastErr
 	case CachePolicyBalanced:

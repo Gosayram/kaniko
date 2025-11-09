@@ -107,7 +107,7 @@ func NewProvenanceGenerator(opts *config.KanikoOptions) *ProvenanceGenerator {
 }
 
 // Generate generates SLSA provenance for an image
-func (pg *ProvenanceGenerator) Generate(ctx context.Context, image v1.Image, buildInfo *BuildInfo) (*Provenance, error) {
+func (pg *ProvenanceGenerator) Generate(_ context.Context, image v1.Image, buildInfo *BuildInfo) (*Provenance, error) {
 	if buildInfo == nil {
 		return nil, errors.New("buildInfo is required")
 	}

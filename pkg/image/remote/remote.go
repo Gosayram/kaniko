@@ -18,11 +18,14 @@ limitations under the License.
 package remote
 
 import (
+	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/Gosayram/kaniko/pkg/config"
 	"github.com/Gosayram/kaniko/pkg/creds"
+	"github.com/Gosayram/kaniko/pkg/retry"
 	"github.com/Gosayram/kaniko/pkg/util"
 
 	"github.com/google/go-containerregistry/pkg/name"
@@ -30,6 +33,13 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 
 	"github.com/sirupsen/logrus"
+)
+
+const (
+	// DefaultImageRetryMaxDelay is the default maximum delay for image download retry operations
+	DefaultImageRetryMaxDelay = 30 * time.Second
+	// DefaultImageRetryBackoff is the default exponential backoff multiplier for image downloads
+	DefaultImageRetryBackoff = 2.0
 )
 
 var (
@@ -70,9 +80,17 @@ func RetrieveRemoteImage(image string, opts *config.RegistryOptions, customPlatf
 				return remoteImageFunc(remappedRef, remoteOptions(regToMapTo, opts, customPlatform)...)
 			}
 
+			// Use new retry mechanism with exponential backoff
+			retryConfig := retry.NewRetryConfigBuilder().
+				WithMaxAttempts(opts.ImageDownloadRetry + 1). // +1 because first attempt is not a retry
+				WithInitialDelay(1 * time.Second).
+				WithMaxDelay(DefaultImageRetryMaxDelay).
+				WithBackoff(DefaultImageRetryBackoff).
+				WithRetryableErrors(retry.IsRetryableError).
+				Build()
+
 			var remoteImage v1.Image
-			const retryDelayMs = 1000 //nolint:mnd // 1000ms is a reasonable default retry delay
-			if remoteImage, err = util.RetryWithResult(retryFunc, opts.ImageDownloadRetry, retryDelayMs); err != nil {
+			if remoteImage, err = retry.RetryWithResult(context.Background(), retryConfig, retryFunc); err != nil {
 				logrus.Warnf("Failed to retrieve image %s from remapped registry %s: %s. "+
 					"Will try with the next registry, or fallback to the original registry.",
 					remappedRef, regToMapTo, err)
@@ -104,9 +122,17 @@ func RetrieveRemoteImage(image string, opts *config.RegistryOptions, customPlatf
 		return remoteImageFunc(ref, remoteOptions(registryName, opts, customPlatform)...)
 	}
 
+	// Use new retry mechanism with exponential backoff
+	retryConfig := retry.NewRetryConfigBuilder().
+		WithMaxAttempts(opts.ImageDownloadRetry + 1). // +1 because first attempt is not a retry
+		WithInitialDelay(1 * time.Second).
+		WithMaxDelay(DefaultImageRetryMaxDelay).
+		WithBackoff(DefaultImageRetryBackoff).
+		WithRetryableErrors(retry.IsRetryableError).
+		Build()
+
 	var remoteImage v1.Image
-	const retryDelayMs = 1000 //nolint:mnd // 1000ms is a reasonable default retry delay
-	if remoteImage, err = util.RetryWithResult(retryFunc, opts.ImageDownloadRetry, retryDelayMs); remoteImage != nil {
+	if remoteImage, err = retry.RetryWithResult(context.Background(), retryConfig, retryFunc); remoteImage != nil {
 		manifestCache[image] = remoteImage
 	}
 

@@ -97,26 +97,55 @@ func NewSBOMGenerator(opts *config.KanikoOptions) *SBOMGenerator {
 }
 
 // Generate generates SBOM for an image
-func (sg *SBOMGenerator) Generate(ctx context.Context, image v1.Image, imageName string) (*SBOM, error) {
-	// Get image digest
+func (sg *SBOMGenerator) Generate(_ context.Context, image v1.Image, imageName string) (*SBOM, error) {
+	digest, configFile, layers, err := sg.getImageInfo(image)
+	if err != nil {
+		return nil, err
+	}
+
+	packages := sg.buildLayerPackages(layers, imageName)
+	mainPackage := sg.buildMainPackage(imageName, digest)
+	packages = sg.addOSPackage(packages, configFile)
+	relationships := sg.buildRelationships(packages)
+	creationInfo := sg.buildCreationInfo()
+
+	sbom := &SBOM{
+		SPDXVersion:       "SPDX-2.3",
+		DataLicense:       "CC0-1.0",
+		SPDXID:            "SPDXRef-DOCUMENT",
+		Name:              fmt.Sprintf("SBOM for %s", imageName),
+		DocumentNamespace: fmt.Sprintf("https://kaniko.dev/sbom/%s/%s", imageName, digest.Hex),
+		CreationInfo:      creationInfo,
+		Packages:          append([]Package{mainPackage}, packages...),
+		Relationships:     relationships,
+	}
+
+	logrus.Debugf("Generated SBOM for image: %s", digest.String())
+	return sbom, nil
+}
+
+// getImageInfo retrieves basic image information
+func (sg *SBOMGenerator) getImageInfo(image v1.Image) (v1.Hash, *v1.ConfigFile, []v1.Layer, error) {
 	digest, err := image.Digest()
 	if err != nil {
-		return nil, errors.Wrap(err, "failed to get image digest")
+		return v1.Hash{}, nil, nil, errors.Wrap(err, "failed to get image digest")
 	}
 
-	// Get config file
 	configFile, err := image.ConfigFile()
 	if err != nil {
-		return nil, errors.Wrap(err, "failed to get config file")
+		return v1.Hash{}, nil, nil, errors.Wrap(err, "failed to get config file")
 	}
 
-	// Get layers
 	layers, err := image.Layers()
 	if err != nil {
-		return nil, errors.Wrap(err, "failed to get layers")
+		return v1.Hash{}, nil, nil, errors.Wrap(err, "failed to get layers")
 	}
 
-	// Build packages from layers
+	return digest, configFile, layers, nil
+}
+
+// buildLayerPackages builds packages from image layers
+func (sg *SBOMGenerator) buildLayerPackages(layers []v1.Layer, imageName string) []Package {
 	packages := []Package{}
 	for i, layer := range layers {
 		layerDigest, err := layer.Digest()
@@ -156,9 +185,12 @@ func (sg *SBOMGenerator) Generate(ctx context.Context, image v1.Image, imageName
 		}
 		packages = append(packages, pkg)
 	}
+	return packages
+}
 
-	// Create main package for the image
-	mainPackage := Package{
+// buildMainPackage creates the main package for the image
+func (sg *SBOMGenerator) buildMainPackage(imageName string, digest v1.Hash) Package {
+	return Package{
 		SPDXID:           "SPDXRef-Image",
 		Name:             imageName,
 		VersionInfo:      digest.Hex,
@@ -178,8 +210,10 @@ func (sg *SBOMGenerator) Generate(ctx context.Context, image v1.Image, imageName
 			},
 		},
 	}
+}
 
-	// Add OS information if available
+// addOSPackage adds OS package information if available
+func (sg *SBOMGenerator) addOSPackage(packages []Package, configFile *v1.ConfigFile) []Package {
 	if configFile != nil && configFile.OS != "" {
 		osPackage := Package{
 			SPDXID:        "SPDXRef-OS",
@@ -189,8 +223,11 @@ func (sg *SBOMGenerator) Generate(ctx context.Context, image v1.Image, imageName
 		}
 		packages = append(packages, osPackage)
 	}
+	return packages
+}
 
-	// Build relationships
+// buildRelationships builds relationships between packages
+func (sg *SBOMGenerator) buildRelationships(packages []Package) []Relationship {
 	relationships := []Relationship{}
 	for i := range packages {
 		if packages[i].SPDXID != "SPDXRef-Image" {
@@ -201,31 +238,21 @@ func (sg *SBOMGenerator) Generate(ctx context.Context, image v1.Image, imageName
 			})
 		}
 	}
+	return relationships
+}
 
-	// Build creation info
+// buildCreationInfo builds creation information for SBOM
+func (sg *SBOMGenerator) buildCreationInfo() *CreationInfo {
 	creators := []string{
 		"Tool: kaniko",
 	}
 	if sg.opts != nil && len(sg.opts.Destinations) > 0 {
 		creators = append(creators, fmt.Sprintf("Organization: %s", sg.opts.Destinations[0]))
 	}
-
-	sbom := &SBOM{
-		SPDXVersion:       "SPDX-2.3",
-		DataLicense:       "CC0-1.0",
-		SPDXID:            "SPDXRef-DOCUMENT",
-		Name:              fmt.Sprintf("SBOM for %s", imageName),
-		DocumentNamespace: fmt.Sprintf("https://kaniko.dev/sbom/%s/%s", imageName, digest.Hex),
-		CreationInfo: &CreationInfo{
-			Created:  time.Now(),
-			Creators: creators,
-		},
-		Packages:      append([]Package{mainPackage}, packages...),
-		Relationships: relationships,
+	return &CreationInfo{
+		Created:  time.Now(),
+		Creators: creators,
 	}
-
-	logrus.Debugf("Generated SBOM for image: %s", digest.String())
-	return sbom, nil
 }
 
 // ToJSON converts SBOM to JSON
@@ -233,7 +260,7 @@ func (s *SBOM) ToJSON() ([]byte, error) {
 	return json.MarshalIndent(s, "", "  ")
 }
 
-// FromJSON parses SBOM from JSON
+// SBOMFromJSON parses SBOM from JSON
 func SBOMFromJSON(data []byte) (*SBOM, error) {
 	var s SBOM
 	if err := json.Unmarshal(data, &s); err != nil {

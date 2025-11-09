@@ -36,14 +36,14 @@ const (
 	UnknownRegistry = "unknown"
 	// UnknownPlatform represents an unknown platform name
 	UnknownPlatform = "unknown"
-	// DefaultMaxAttempts is the default maximum number of retry attempts
-	DefaultMaxAttempts = 3
-	// DefaultInitialDelay is the default initial delay for retries
-	DefaultInitialDelay = 1 * time.Second
-	// DefaultMaxDelay is the default maximum delay for retries
-	DefaultMaxDelay = 60 * time.Second
-	// DefaultBaseMultiplier is the default base multiplier for exponential backoff
-	DefaultBaseMultiplier = 2.0
+	// IntelligentDefaultMaxAttempts is the default maximum number of retry attempts for intelligent retry
+	IntelligentDefaultMaxAttempts = 3
+	// IntelligentDefaultInitialDelay is the default initial delay for intelligent retries
+	IntelligentDefaultInitialDelay = 1 * time.Second
+	// IntelligentDefaultMaxDelay is the default maximum delay for intelligent retries
+	IntelligentDefaultMaxDelay = 60 * time.Second
+	// IntelligentDefaultBaseMultiplier is the default base multiplier for intelligent exponential backoff
+	IntelligentDefaultBaseMultiplier = 2.0
 	// NetworkMaxAttempts is the maximum number of attempts for network errors
 	NetworkMaxAttempts = 5
 	// NetworkInitialDelay is the initial delay for network errors
@@ -250,13 +250,13 @@ func (ir *IntelligentRetry) initializeDefaultStrategies() {
 	strategies := map[string]*Strategy{
 		"default": {
 			BackoffAlgorithm: "exponential",
-			MaxAttempts:      DefaultMaxAttempts,
-			InitialDelay:     DefaultInitialDelay,
-			MaxDelay:         DefaultMaxDelay,
+			MaxAttempts:      IntelligentDefaultMaxAttempts,
+			InitialDelay:     IntelligentDefaultInitialDelay,
+			MaxDelay:         IntelligentDefaultMaxDelay,
 			Jitter:           true,
 			ContextAware:     true,
 			Adaptive:         true,
-			BaseMultiplier:   DefaultBaseMultiplier,
+			BaseMultiplier:   IntelligentDefaultBaseMultiplier,
 		},
 		"network": {
 			BackoffAlgorithm: "exponential",

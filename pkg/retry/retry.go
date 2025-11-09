@@ -27,7 +27,20 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
+const (
+	// DefaultMaxAttempts is the default maximum number of retry attempts
+	DefaultMaxAttempts = 3
+	// DefaultMaxDelay is the default maximum delay between retries
+	DefaultMaxDelay = 30 * time.Second
+	// DefaultBackoff is the default exponential backoff multiplier
+	DefaultBackoff = 2.0
+	// PercentageMultiplier is used to convert ratio to percentage
+	PercentageMultiplier = 100.0
+)
+
 // RetryConfig defines retry configuration
+//
+//nolint:revive // stuttering name is intentional for public API clarity
 type RetryConfig struct {
 	// MaxAttempts is the maximum number of retry attempts
 	MaxAttempts int
@@ -48,11 +61,11 @@ type RetryConfig struct {
 // DefaultRetryConfig returns a default retry configuration
 func DefaultRetryConfig() RetryConfig {
 	return RetryConfig{
-		MaxAttempts:  3,
+		MaxAttempts:  DefaultMaxAttempts,
 		InitialDelay: 1 * time.Second,
-		MaxDelay:     30 * time.Second,
-		Backoff:      2.0,
-		RetryableErrors: func(err error) bool {
+		MaxDelay:     DefaultMaxDelay,
+		Backoff:      DefaultBackoff,
+		RetryableErrors: func(_ error) bool {
 			// Default: retry on all errors
 			return true
 		},
@@ -119,6 +132,8 @@ func Retry(ctx context.Context, config RetryConfig, fn func() error) error {
 }
 
 // RetryWithResult executes a function with retry logic and returns a result
+//
+//nolint:revive // stuttering name is intentional for public API clarity
 func RetryWithResult[T any](ctx context.Context, config RetryConfig, fn func() (T, error)) (T, error) {
 	var zero T
 	if config.MaxAttempts <= 0 {
@@ -204,7 +219,7 @@ func IsRetryableError(err error) bool {
 
 // contains checks if a string contains a substring (case-insensitive)
 func contains(s, substr string) bool {
-	if len(substr) == 0 {
+	if substr == "" {
 		return true
 	}
 	if len(s) < len(substr) {
@@ -235,6 +250,8 @@ func toLower(s string) string {
 }
 
 // RetryConfigBuilder helps build retry configurations
+//
+//nolint:revive // stuttering name is intentional for public API clarity
 type RetryConfigBuilder struct {
 	config RetryConfig
 }

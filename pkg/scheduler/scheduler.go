@@ -217,15 +217,14 @@ func BuildFromGraph(graph *llb.Graph) (*Scheduler, error) {
 // MergeEdges merges two identical edges
 // This is similar to BuildKit's edge merging optimization
 func (s *Scheduler) MergeEdges(edge1, edge2 *Edge) (*Edge, error) {
-	if edge1 == nil || edge2 == nil {
-		return nil, errors.New("cannot merge nil edges")
+	if err := validateMergeEdges(edge1, edge2); err != nil {
+		return nil, err
 	}
 
 	if edge1.ID == edge2.ID {
 		return edge1, nil
 	}
 
-	// Check if edges are identical
 	if !areEdgesIdentical(edge1, edge2) {
 		return nil, errors.New("edges are not identical, cannot merge")
 	}
@@ -235,10 +234,23 @@ func (s *Scheduler) MergeEdges(edge1, edge2 *Edge) (*Edge, error) {
 
 	logrus.Debugf("Merging edges %s and %s", edge1.ID, edge2.ID)
 
-	// Merge edge2 into edge1
-	// Update all references to edge2 to point to edge1
+	s.mergeIncomingPipes(edge1, edge2)
+	s.mergeOutgoingPipes(edge1, edge2)
+	s.updateDependentEdges(edge1, edge2)
+	s.removeEdge(edge2)
 
-	// Update incoming pipes
+	logrus.Debugf("Merged edge %s into %s", edge2.ID, edge1.ID)
+	return edge1, nil
+}
+
+func validateMergeEdges(edge1, edge2 *Edge) error {
+	if edge1 == nil || edge2 == nil {
+		return errors.New("cannot merge nil edges")
+	}
+	return nil
+}
+
+func (s *Scheduler) mergeIncomingPipes(edge1, edge2 *Edge) {
 	if pipes, ok := s.incoming[edge2]; ok {
 		for _, pipe := range pipes {
 			pipe.To = edge1
@@ -246,8 +258,9 @@ func (s *Scheduler) MergeEdges(edge1, edge2 *Edge) (*Edge, error) {
 		}
 		delete(s.incoming, edge2)
 	}
+}
 
-	// Update outgoing pipes
+func (s *Scheduler) mergeOutgoingPipes(edge1, edge2 *Edge) {
 	if pipes, ok := s.outgoing[edge2]; ok {
 		for _, pipe := range pipes {
 			pipe.From = edge1
@@ -255,47 +268,50 @@ func (s *Scheduler) MergeEdges(edge1, edge2 *Edge) (*Edge, error) {
 		}
 		delete(s.outgoing, edge2)
 	}
+}
 
-	// Update dependencies of edges that depend on edge2
+func (s *Scheduler) updateDependentEdges(edge1, edge2 *Edge) {
 	for _, edge := range s.edges {
-		deps := edge.GetDependencies()
-		hasEdge2 := false
-		for _, dep := range deps {
-			if dep.ID == edge2.ID {
-				hasEdge2 = true
-				break
-			}
-		}
-
-		if hasEdge2 {
-			// Replace edge2 with edge1 in dependencies
-			edge.mu.Lock()
-			newDeps := []*Edge{}
-			hasEdge1 := false
-			for _, dep := range edge.Deps {
-				if dep.ID == edge2.ID {
-					// Skip edge2
-					continue
-				}
-				if dep.ID == edge1.ID {
-					hasEdge1 = true
-				}
-				newDeps = append(newDeps, dep)
-			}
-			if !hasEdge1 {
-				newDeps = append(newDeps, edge1)
-			}
-			edge.Deps = newDeps
-			edge.mu.Unlock()
+		if s.hasDependency(edge, edge2) {
+			s.replaceDependency(edge, edge1, edge2)
 		}
 	}
+}
 
-	// Remove edge2 from edges map
+func (s *Scheduler) hasDependency(edge, dep *Edge) bool {
+	deps := edge.GetDependencies()
+	for _, d := range deps {
+		if d.ID == dep.ID {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Scheduler) replaceDependency(edge, edge1, edge2 *Edge) {
+	edge.mu.Lock()
+	defer edge.mu.Unlock()
+
+	newDeps := []*Edge{}
+	hasEdge1 := false
+	for _, dep := range edge.Deps {
+		if dep.ID == edge2.ID {
+			continue
+		}
+		if dep.ID == edge1.ID {
+			hasEdge1 = true
+		}
+		newDeps = append(newDeps, dep)
+	}
+	if !hasEdge1 {
+		newDeps = append(newDeps, edge1)
+	}
+	edge.Deps = newDeps
+}
+
+func (s *Scheduler) removeEdge(edge2 *Edge) {
 	delete(s.edges, edge2.ID)
 	delete(s.waitq, edge2)
-
-	logrus.Debugf("Merged edge %s into %s", edge2.ID, edge1.ID)
-	return edge1, nil
 }
 
 // areEdgesIdentical checks if two edges are identical
@@ -333,7 +349,7 @@ func areEdgesIdentical(e1, e2 *Edge) bool {
 }
 
 // Optimize optimizes the scheduler by merging identical edges
-func (s *Scheduler) Optimize(ctx context.Context) error {
+func (s *Scheduler) Optimize(_ context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 

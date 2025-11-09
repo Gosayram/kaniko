@@ -17,6 +17,7 @@ limitations under the License.
 package executor
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -40,6 +41,7 @@ import (
 
 	"github.com/google/go-containerregistry/pkg/v1/partial"
 
+	"github.com/Gosayram/kaniko/pkg/attestation"
 	"github.com/Gosayram/kaniko/pkg/cache"
 	"github.com/Gosayram/kaniko/pkg/commands"
 	"github.com/Gosayram/kaniko/pkg/config"
@@ -50,6 +52,7 @@ import (
 	"github.com/Gosayram/kaniko/pkg/logging"
 	"github.com/Gosayram/kaniko/pkg/multiplatform"
 	"github.com/Gosayram/kaniko/pkg/network"
+	"github.com/Gosayram/kaniko/pkg/retry"
 	"github.com/Gosayram/kaniko/pkg/rootless"
 	"github.com/Gosayram/kaniko/pkg/snapshot"
 	"github.com/Gosayram/kaniko/pkg/timing"
@@ -75,6 +78,10 @@ const (
 	keyValueParts       = 2
 	defaultRetryDelayMs = 1000
 	DefaultDirPerm      = 0o750
+	// DefaultRetryMaxDelay is the default maximum delay for retry operations
+	DefaultRetryMaxDelay = 30 * time.Second
+	// DefaultRetryBackoff is the default exponential backoff multiplier
+	DefaultRetryBackoff = 2.0
 )
 
 // Optimization constants
@@ -449,7 +456,27 @@ func newLayerCache(opts *config.KanikoOptions) cache.LayerCache {
 
 	// Use FastSlowCache for fast/slow/remote cache hierarchy (BuildKit-style)
 	// Remote cache uses the same base cache for now
-	return cache.NewFastSlowCache(slowCache, slowCache)
+	fastSlowCache := cache.NewFastSlowCache(slowCache, slowCache)
+
+	// If unified cache is enabled, wrap FastSlowCache in UnifiedCache
+	// This allows combining multiple cache sources (local, registry, S3, etc.)
+	if opts.EnableUnifiedCache {
+		logrus.Info("Unified cache enabled: combining multiple cache sources")
+		unifiedCache := cache.NewUnifiedCache(fastSlowCache)
+
+		// Add local file cache if CacheDir is specified
+		// Local file cache is typically faster than registry cache for local builds
+		if opts.CacheDir != "" {
+			localFileCache := cache.NewLocalFileCache(&opts.CacheOptions)
+			unifiedCache.AddCache(localFileCache)
+			logrus.Infof("Added local file cache (dir: %s) to unified cache", opts.CacheDir)
+		}
+
+		// Additional caches (S3, etc.) can be added here in the future via unifiedCache.AddCache()
+		return unifiedCache
+	}
+
+	return fastSlowCache
 }
 
 func isOCILayout(path string) bool {
@@ -641,8 +668,17 @@ func (s *stageBuilder) unpackFilesystemIfNeeded() error {
 		return nil
 	}
 
-	return errors.Wrap(util.Retry(retryFunc, s.opts.ImageFSExtractRetry, defaultRetryDelayMs),
-		"failed to get filesystem from image")
+	// Use new retry mechanism with exponential backoff
+	retryConfig := retry.NewRetryConfigBuilder().
+		WithMaxAttempts(s.opts.ImageFSExtractRetry + 1). // +1 because first attempt is not a retry
+		WithInitialDelay(time.Duration(defaultRetryDelayMs) * time.Millisecond).
+		WithMaxDelay(DefaultRetryMaxDelay).
+		WithBackoff(DefaultRetryBackoff).
+		WithRetryableErrors(retry.IsRetryableError).
+		Build()
+
+	err := retry.Retry(context.Background(), retryConfig, retryFunc)
+	return errors.Wrap(err, "failed to get filesystem from image")
 }
 
 func (s *stageBuilder) executeCommands(compositeKey *CompositeCache, initSnapshotTaken bool) error {
@@ -1406,6 +1442,47 @@ func handleFinalImage(sourceImage v1.Image, opts *config.KanikoOptions, t *timin
 		sourceImage, err = mutate.Canonical(sourceImage)
 		if err != nil {
 			return nil, err
+		}
+	}
+
+	// Generate SLSA provenance attestation if enabled
+	// This provides supply chain security and traceability
+	if opts.GenerateProvenance {
+		ctx := context.Background()
+		generator := attestation.NewProvenanceGenerator(opts)
+
+		// Build provenance information
+		buildInfo := &attestation.BuildInfo{
+			SourceURI:    opts.DockerfilePath,
+			BuilderID:    "kaniko",
+			BuildType:    "https://github.com/Gosayram/kaniko",
+			StartedOn:    time.Now(), // Should be tracked from build start
+			FinishedOn:   time.Now(),
+			Parameters:   make(map[string]interface{}),
+			Dependencies: []attestation.ResolvedDependency{},
+		}
+
+		// Get image digest for provenance
+		digest, digestErr := sourceImage.Digest()
+		if digestErr == nil {
+			buildInfo.Dependencies = append(buildInfo.Dependencies, attestation.ResolvedDependency{
+				URI: digest.String(),
+				Digest: map[string]string{
+					"sha256": digest.Hex,
+				},
+			})
+		}
+
+		provenance, provErr := generator.Generate(ctx, sourceImage, buildInfo)
+		if provErr != nil {
+			logrus.Warnf("Failed to generate provenance: %v", provErr)
+		} else {
+			// Provenance is generated but not yet attached to image
+			// In future, this can be attached as an attestation
+			provenanceJSON, jsonErr := provenance.ToJSON()
+			if jsonErr == nil {
+				logrus.Debugf("Generated SLSA provenance: %s", string(provenanceJSON))
+			}
 		}
 	}
 

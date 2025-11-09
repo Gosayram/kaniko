@@ -49,6 +49,33 @@ USER node
 CMD ["node", "app.js"]
 ```
 
+### Using Source Policy (Security)
+
+Control which image sources are allowed:
+
+```bash
+docker run -v $(pwd):/workspace \
+  ghcr.io/gosayram/kaniko:latest \
+  --dockerfile=/workspace/Dockerfile \
+  --destination=<your-registry/your-image:tag> \
+  --context=dir:///workspace \
+  --allowed-registries=gcr.io/*,docker.io/* \
+  --denied-registries=untrusted.io/*
+```
+
+### Generating SLSA Provenance
+
+Generate supply chain security attestations:
+
+```bash
+docker run -v $(pwd):/workspace \
+  ghcr.io/gosayram/kaniko:latest \
+  --dockerfile=/workspace/Dockerfile \
+  --destination=<your-registry/your-image:tag> \
+  --context=dir:///workspace \
+  --generate-provenance
+```
+
 ### In Kubernetes
 
 ```yaml
@@ -221,6 +248,8 @@ docker run -v $(pwd):/workspace \
   - [🚀 Quick Start](#-quick-start)
     - [Basic Usage](#basic-usage)
     - [Using Default User](#using-default-user)
+    - [Using Source Policy (Security)](#using-source-policy-security)
+    - [Generating SLSA Provenance](#generating-slsa-provenance)
     - [In Kubernetes](#in-kubernetes)
     - [Kubernetes with Default User](#kubernetes-with-default-user)
   - [🔒 Security Best Practices](#-security-best-practices)
@@ -241,6 +270,7 @@ docker run -v $(pwd):/workspace \
       - [**🔧 Advanced Build Engine**](#-advanced-build-engine)
       - [**🌐 Network \& Registry Intelligence**](#-network--registry-intelligence)
       - [**📊 Monitoring \& Profiling**](#-monitoring--profiling)
+      - [**🔒 Security \& Compliance**](#-security--compliance)
   - [🚨 Known Issues](#-known-issues)
   - [🎥 Demo](#-demo)
   - [📚 Tutorial](#-tutorial)
@@ -310,9 +340,7 @@ docker run -v $(pwd):/workspace \
       - [Flag `--require-native-nodes`](#flag---require-native-nodes)
       - [Flag `--oci-mode`](#flag---oci-mode)
       - [Flag `--compression`](#flag---compression)
-      - [Flag `--sign-images`](#flag---sign-images)
-      - [Flag `--cosign-key-path`](#flag---cosign-key-path)
-      - [Flag `--cosign-key-password`](#flag---cosign-key-password)
+      - [Flag `--compression-level`](#flag---compression-level)
       - [Flag `--push-retry`](#flag---push-retry)
       - [Flag `--push-retry-initial-delay`](#flag---push-retry-initial-delay)
       - [Flag `--push-retry-max-delay`](#flag---push-retry-max-delay)
@@ -336,6 +364,27 @@ docker run -v $(pwd):/workspace \
       - [Flag `--verbosity`](#flag---verbosity)
       - [Flag `--ignore-var-run`](#flag---ignore-var-run)
       - [Flag `--ignore-path`](#flag---ignore-path)
+      - [Flag `--kaniko-dir`](#flag---kaniko-dir)
+      - [Flag `--force-build-metadata`](#flag---force-build-metadata)
+      - [Flag `--max-file-size`](#flag---max-file-size)
+      - [Flag `--max-tar-file-size`](#flag---max-tar-file-size)
+      - [Flag `--max-total-archive-size`](#flag---max-total-archive-size)
+      - [Flag `--enable-unified-cache`](#flag---enable-unified-cache)
+      - [Flag `--optimize-execution-order`](#flag---optimize-execution-order)
+      - [Flag `--enable-lazy-image-loading`](#flag---enable-lazy-image-loading)
+    - [Debug Flags](#debug-flags)
+      - [Flag `--debug-full`](#flag---debug-full)
+      - [Flag `--debug-build-steps`](#flag---debug-build-steps)
+      - [Flag `--debug-multi-platform`](#flag---debug-multi-platform)
+      - [Flag `--debug-oci`](#flag---debug-oci)
+      - [Flag `--debug-drivers`](#flag---debug-drivers)
+      - [Flag `--debug-filesystem`](#flag---debug-filesystem)
+      - [Flag `--debug-cache`](#flag---debug-cache)
+      - [Flag `--debug-registry`](#flag---debug-registry)
+      - [Flag `--debug-signing`](#flag---debug-signing)
+      - [Flag `--debug-output-files`](#flag---debug-output-files)
+      - [Flag `--debug-level`](#flag---debug-level)
+      - [Flag `--debug-components`](#flag---debug-components)
       - [Flag `--image-fs-extract-retry`](#flag---image-fs-extract-retry)
       - [Flag `--image-download-retry`](#flag---image-download-retry)
       - [Flag `--incremental-snapshots`](#flag---incremental-snapshots)
@@ -355,23 +404,17 @@ docker run -v $(pwd):/workspace \
       - [Flag `--max-preload-size`](#flag---max-preload-size)
       - [Flag `--preload-timeout`](#flag---preload-timeout)
       - [Flag `--enable-smart-cache`](#flag---enable-smart-cache)
-      - [Flag `--max-cache-entries`](#flag---max-cache-entries-1)
-      - [Flag `--max-preload-size`](#flag---max-preload-size-1)
-      - [Flag `--preload-timeout`](#flag---preload-timeout-1)
-      - [Flag `--memory-monitoring`](#flag---memory-monitoring-1)
-      - [Flag `--gc-threshold`](#flag---gc-threshold-1)
-      - [Flag `--monitoring-interval`](#flag---monitoring-interval-1)
-      - [Flag `--max-parallel-commands`](#flag---max-parallel-commands-1)
-      - [Flag `--command-timeout`](#flag---command-timeout-1)
-      - [Flag `--enable-parallel-exec`](#flag---enable-parallel-exec-1)
+      - [Flag `--generate-provenance`](#flag---generate-provenance)
+      - [Flag `--allowed-registries`](#flag---allowed-registries)
+      - [Flag `--denied-registries`](#flag---denied-registries)
+      - [Flag `--allowed-repos`](#flag---allowed-repos)
+      - [Flag `--denied-repos`](#flag---denied-repos)
+      - [Flag `--require-signature`](#flag---require-signature)
     - [Debug Image](#debug-image)
   - [🔒 Security](#-security)
     - [Verifying Signed Kaniko Images](#verifying-signed-kaniko-images)
-    - [🛡️ **ADVANCED SECURITY** - Image Signing \& Verification](#️-advanced-security---image-signing--verification)
-      - [**Image Signing with Cosign**](#image-signing-with-cosign)
-      - [**Signing Configuration**](#signing-configuration)
+    - [🛡️ **ADVANCED SECURITY** - Security Features](#️-advanced-security---security-features)
       - [**Security Features**](#security-features)
-      - [**Verification Capabilities**](#verification-capabilities)
       - [**Security Best Practices**](#security-best-practices)
   - [📈 Kaniko Builds - Profiling](#-kaniko-builds---profiling)
     - [🚀 **PERFORMANCE OPTIMIZATION** - Advanced Build Features](#-performance-optimization---advanced-build-features)
@@ -482,6 +525,9 @@ Kaniko's modern implementation includes several advanced subsystems:
 - **Optimized Filesystem Operations** - Safe snapshot optimizer with 60-80% performance improvement
 - **Memory Management** - Automatic garbage collection and memory monitoring
 - **Build Optimization** - Pattern detection and automated suggestions
+- **LLB Graph Optimization** - BuildKit-inspired graph optimization with edge merging (enabled by default)
+- **Scheduler with Edge Merging** - Intelligent operation scheduling and deduplication
+- **Lazy Image Loading** - On-demand layer loading for memory efficiency (enabled by default)
 
 #### **🌐 Network & Registry Intelligence**
 - **Connection Pooling** - Optimized HTTP connection management with configurable limits
@@ -496,12 +542,18 @@ Kaniko's modern implementation includes several advanced subsystems:
 #### **📊 Monitoring & Profiling**
 - **Structured Logging** - JSON, text, color, and custom kaniko formats with context
 - **Performance Metrics** - Build timing, memory usage, and throughput tracking
-- **Progress Tracking** - Real-time build progress with emoji indicators and grouping
+- **Progress Tracking** - Real-time build progress with indicators and grouping
 - **Error Analysis** - Detailed error reporting with context and stack traces
 - **Build Profiling** - Integration with performance analysis tools
 - **Memory Monitoring** - Real-time memory usage tracking and garbage collection metrics
 - **Cache Analytics** - Hit rates, miss rates, and cache performance statistics
 - **Network Metrics** - Connection pool usage, retry statistics, and latency tracking
+
+#### **🔒 Security & Compliance**
+- **Source Policy** - Validate and control image sources before loading
+- **SLSA Provenance** - Generate supply chain security attestations
+- **Fast/Slow Cache** - BuildKit-inspired hierarchical cache system
+- **Unified Cache** - Automatic cache selection and predictive prefetching
 
 ## 🚨 Known Issues
 
@@ -1255,7 +1307,7 @@ Set this flag to specify a path to digest files for CI driver integration. Forma
 
 #### Flag `--require-native-nodes`
 
-Set this boolean flag to `true` to fail if non-native architecture is requested. This ensures builds only run on nodes with the correct architecture support. Defaults to `false`.
+Set this boolean flag to `true` to fail if non-native architecture is requested. This ensures builds only run on nodes with the correct architecture support. Defaults to `true`.
 
 #### Flag `--oci-mode`
 
@@ -1265,17 +1317,9 @@ Set this flag to specify OCI compliance mode. Options: `oci` (strict OCI 1.1 com
 
 Set this flag to specify layer compression format. Options: `gzip` (default), `zstd` (better compression ratio). Format: `--compression=zstd`.
 
-#### Flag `--sign-images`
+#### Flag `--compression-level`
 
-Set this boolean flag to `true` to enable optional image signing with cosign. This provides supply chain security for built images. Defaults to `false`.
-
-#### Flag `--cosign-key-path`
-
-Set this flag to specify the path to a cosign private key for image signing. Format: `--cosign-key-path=/path/to/private.key`. Requires `--sign-images=true`.
-
-#### Flag `--cosign-key-password`
-
-Set this flag to specify the password for a cosign private key. Format: `--cosign-key-password=secret`. Used when private key is password-protected.
+Set this flag to specify the compression level. Format: `--compression-level=<level>`. Default: `-1` (uses default compression level for the selected algorithm). Valid range depends on the compression algorithm.
 
 #### Flag `--push-retry`
 
@@ -1283,11 +1327,11 @@ Set this flag to the number of retries that should happen for the push of an ima
 
 #### Flag `--push-retry-initial-delay`
 
-Set this flag to specify the initial delay before the first retry attempt. Format: `--push-retry-initial-delay=1s`. Consecutive retries use exponential backoff. Defaults to `1s`.
+Set this flag to specify the initial delay in milliseconds before the first retry attempt. Format: `--push-retry-initial-delay=1000`. Consecutive retries use exponential backoff. Defaults to `1000` milliseconds (1 second).
 
 #### Flag `--push-retry-max-delay`
 
-Set this flag to specify the maximum delay between retry attempts. Format: `--push-retry-max-delay=30s`. This caps the exponential backoff growth. Defaults to `30s`.
+Set this flag to specify the maximum delay in milliseconds between retry attempts. Format: `--push-retry-max-delay=30000`. This caps the exponential backoff growth. Defaults to `30000` milliseconds (30 seconds).
 
 #### Flag `--push-retry-backoff-multiplier`
 
@@ -1405,23 +1449,118 @@ Ignore /var/run when taking image snapshot. Set it to false to preserve /var/run
 
 Set this flag as `--ignore-path=<path>` to ignore path when taking an image snapshot. Set it multiple times for multiple ignore paths.
 
+#### Flag `--kaniko-dir`
+
+Set this flag to specify the path to the kaniko directory. This takes precedence over the `KANIKO_DIR` environment variable. Defaults to `/kaniko`.
+
+#### Flag `--force-build-metadata`
+
+Set this boolean flag to `true` to force add metadata layers to the build image. Defaults to `false`.
+
+#### Flag `--max-file-size`
+
+Set this flag to specify the maximum size for individual files (e.g., `500MB`, `1GB`). Default: `500MB`. This helps prevent processing of extremely large files that could cause memory issues.
+
+#### Flag `--max-tar-file-size`
+
+Set this flag to specify the maximum size for files in tar archives (e.g., `5GB`, `10GB`). Default: `5GB`. This helps prevent processing of extremely large tar files.
+
+#### Flag `--max-total-archive-size`
+
+Set this flag to specify the maximum total size for all files in an archive (e.g., `10GB`, `20GB`). Default: `10GB`. This helps prevent out-of-memory errors with very large build contexts.
+
+#### Flag `--enable-unified-cache`
+
+Set this boolean flag to `true` to enable unified cache for combining multiple cache sources (local, registry, S3, etc.). Defaults to `false`.
+
+#### Flag `--optimize-execution-order`
+
+Set this boolean flag to use dependency graph to optimize command execution order. When enabled, Kaniko builds an LLB graph and uses a scheduler to optimize execution order and merge identical operations. This provides BuildKit-style optimization. Defaults to `true`.
+
+**Example**: `--optimize-execution-order=true`
+
+#### Flag `--enable-lazy-image-loading`
+
+Set this boolean flag to `true` to load image layers on demand for memory optimization. When enabled, layers are loaded only when needed, reducing memory usage for large images. Defaults to `true`.
+
+**Example**: `--enable-lazy-image-loading=true`
+
+### Debug Flags
+
+Kaniko provides comprehensive debug flags for troubleshooting and development:
+
+#### Flag `--debug-full`
+
+Enable comprehensive debug logging for all components. When enabled, all debug flags are activated. Defaults to `false`.
+
+#### Flag `--debug-build-steps`
+
+Debug individual build steps and commands. Provides detailed logging for each Dockerfile command execution. Defaults to `false`.
+
+#### Flag `--debug-multi-platform`
+
+Debug multi-platform build coordination. Provides detailed logging for multi-architecture build coordination. Defaults to `false`.
+
+#### Flag `--debug-oci`
+
+Debug OCI index and manifest operations. Provides detailed logging for OCI compliance operations. Defaults to `false`.
+
+#### Flag `--debug-drivers`
+
+Debug driver operations (local, k8s, ci). Provides detailed logging for execution driver operations. Defaults to `false`.
+
+#### Flag `--debug-filesystem`
+
+Debug filesystem operations and snapshots. Provides detailed logging for filesystem scanning and snapshot operations. Defaults to `false`.
+
+#### Flag `--debug-cache`
+
+Debug cache operations and layer management. Provides detailed logging for cache hit/miss and layer management. Defaults to `false`.
+
+#### Flag `--debug-registry`
+
+Debug registry push/pull operations. Provides detailed logging for registry communication. Defaults to `false`.
+
+#### Flag `--debug-signing`
+
+Debug image signing operations. Provides detailed logging for cosign signing operations. Defaults to `false`.
+
+#### Flag `--debug-output-files`
+
+Output debug information to files. When enabled, debug information is written to files for later analysis. Defaults to `false`.
+
+#### Flag `--debug-level`
+
+Set the debug log level. Options: `trace`, `debug`, `info`. Defaults to `debug`.
+
+#### Flag `--debug-components`
+
+Specify specific components to debug (comma-separated). Allows fine-grained control over which components produce debug output. Defaults to empty (all components).
+
+**Example**: `--debug-components=filesystem,cache`
+
+**Note**: Debug flags can also be configured via environment variables:
+- `KANIKO_DEBUG=true` - Enable full debug mode
+- `KANIKO_DEBUG_LEVEL=<level>` - Set debug log level
+- `KANIKO_DEBUG_COMPONENTS=<components>` - Set debug components (comma-separated)
+
 #### Flag `--image-fs-extract-retry`
 
 Set this flag to the number of retries that should happen for the extracting an image filesystem. Defaults to `0`.
 
 #### Flag `--image-download-retry`
 
-Set this flag to the number of retries that should happen when downloading the remote image. Consecutive retries occur with exponential backoff and an initial delay of 1 second. Defaults to 0`.
+Set this flag to the number of retries that should happen when downloading the remote image. Consecutive retries occur with exponential backoff and an initial delay of 1 second. Defaults to `0`.
 
 #### Flag `--incremental-snapshots`
 
-Set this flag to `true` to enable incremental snapshots for better performance. This experimental feature caches file metadata between snapshots to reduce filesystem scanning time by up to 60-80%. Kaniko will only scan changed files instead of the entire filesystem. Defaults to `false`.
+Set this flag to `true` to enable incremental snapshots for better performance. This feature caches file metadata between snapshots to reduce filesystem scanning time by up to 60-80%. Kaniko will only scan changed files instead of the entire filesystem. Defaults to `true`.
 
 **Note**: This feature includes automatic integrity checks and fallback to full scans when needed to ensure data integrity.
 
 #### Flag `--max-expected-changes`
 
-Set this flag to specify the maximum number of expected file changes before triggering a full scan when using incremental snapshots. If more files change than this threshold, kaniko will perform a full scan for safety. Defaults to `1000`.
+Set this flag to specify the maximum number of expected file changes before triggering a full scan when using incremental snapshots. If more files change than this threshold, kaniko will perform a full scan for safety. Defaults to `5000`.
 
 **Example**: `--max-expected-changes=2000`
 
@@ -1483,7 +1622,7 @@ Set this flag to specify the timeout for individual command execution. Commands 
 
 #### Flag `--enable-parallel-exec`
 
-Set this flag to `true` to enable parallel execution of independent Dockerfile commands. This can provide 20-40% performance improvement for builds with many independent commands. Defaults to `true`.
+Set this flag to `true` to enable parallel execution of independent Dockerfile commands. This can provide 20-40% performance improvement for builds with many independent commands. Defaults to `false` (sequential execution is default for stability).
 
 #### Flag `--max-cache-entries`
 
@@ -1507,41 +1646,43 @@ Set this flag to specify the timeout for preload operations. Supports formats li
 
 Set this flag to `true` to enable smart cache with LRU eviction and automatic preloading capabilities. The smart cache provides 40-60% better cache utilization compared to the basic cache. Defaults to `true`.
 
-#### Flag `--max-cache-entries`
+#### Flag `--generate-provenance`
 
-Set the maximum number of cache entries to store in memory. This controls the size of the LRU cache. Defaults to `1000`. Higher values provide better cache hit rates but use more memory.
+Generate SLSA provenance attestation for supply chain security. When enabled, Kaniko generates a SLSA provenance document after successful build, providing traceability and security compliance. Defaults to `false`.
 
-#### Flag `--max-preload-size`
+**Example**: `--generate-provenance`
 
-Set the maximum number of images to preload in the background. Preloading improves build performance by having popular base images ready in cache. Defaults to `50`.
+#### Flag `--allowed-registries`
 
-#### Flag `--preload-timeout`
+List of allowed registry patterns (wildcards supported). Only images from these registries will be allowed. Use comma-separated values for multiple registries.
 
-Set the timeout for preload operations. If preloading takes longer than this duration, it will be cancelled. Defaults to `5m`.
+**Example**: `--allowed-registries=gcr.io/*,docker.io/*`
 
-#### Flag `--memory-monitoring`
+#### Flag `--denied-registries`
 
-Enable real-time memory monitoring and automatic garbage collection. When enabled, Kaniko will monitor memory usage and trigger garbage collection when thresholds are reached. Defaults to `true`.
+List of denied registry patterns (wildcards supported). Images from these registries will be rejected. Use comma-separated values for multiple registries.
 
-#### Flag `--gc-threshold`
+**Example**: `--denied-registries=untrusted.io/*`
 
-Set the memory threshold percentage for triggering garbage collection. When memory usage exceeds this percentage, garbage collection will be triggered. Defaults to `80`.
+#### Flag `--allowed-repos`
 
-#### Flag `--monitoring-interval`
+List of allowed repository patterns (wildcards supported). Only images from these repositories will be allowed.
 
-Set the interval for performance monitoring and metrics collection. Defaults to `30s`.
+**Example**: `--allowed-repos=myproject/*`
 
-#### Flag `--max-parallel-commands`
+#### Flag `--denied-repos`
 
-Set the maximum number of commands that can run in parallel during multi-stage builds. Defaults to `4`.
+List of denied repository patterns (wildcards supported). Images from these repositories will be rejected.
 
-#### Flag `--command-timeout`
+**Example**: `--denied-repos=untrusted-project/*`
 
-Set the timeout for individual command execution. Commands that take longer than this duration will be cancelled. Defaults to `10m`.
+#### Flag `--require-signature`
 
-#### Flag `--enable-parallel-exec`
+Require images to be signed (source policy validation). When enabled, only signed images will be allowed. Defaults to `false`.
 
-Enable parallel execution of independent commands in multi-stage builds. This can significantly improve build performance. Defaults to `true`.
+**Example**: `--require-signature`
+
+**Note**: Source policy flags work together to provide fine-grained control over image sources. If any policy flag is set, source validation is automatically enabled.
 
 ### Debug Image
 
@@ -1584,29 +1725,9 @@ P+vLu3NnnBDHCfREQpV/AJuiZ1UtgGpFpHlJLCNPmFkzQTnfyN5idzNl6Q==
 $ cosign verify -key ./cosign.pub ghcr.io/gosayram/kaniko:latest
 ```
 
-### 🛡️ **ADVANCED SECURITY** - Image Signing & Verification
+### 🛡️ **ADVANCED SECURITY** - Security Features
 
-Kaniko includes comprehensive security features for supply chain security:
-
-#### **Image Signing with Cosign**
-- **Optional Image Signing** - Built-in cosign integration for supply chain security
-- **Key-based Signing** - Support for private key-based signing
-- **Keyless Signing** - Public good signing with automatic key generation
-- **Multi-Platform Signing** - Sign both individual images and image indices
-
-#### **Signing Configuration**
-```bash
-# Enable image signing
---sign-images=true
-
-# Key-based signing
---cosign-key-path=/path/to/private.key
---cosign-key-password=secret
-
-# Automatic signing for multi-platform builds
---sign-images=true
---publish-index=true
-```
+Kaniko includes comprehensive security features:
 
 #### **Security Features**
 - **Command Validation** - Security validation for all Dockerfile commands
@@ -1615,25 +1736,13 @@ Kaniko includes comprehensive security features for supply chain security:
 - **User Security** - Non-root user execution by default
 - **Registry Security** - TLS verification and certificate validation
 
-#### **Verification Capabilities**
-```bash
-# Verify signed images
-cosign verify --key ./cosign.pub ghcr.io/gosayram/kaniko:latest
-
-# Check if image is signed
-cosign verify --output json ghcr.io/gosayram/kaniko:latest
-
-# Verify multi-platform images
-cosign verify --key ./cosign.pub ghcr.io/gosayram/kaniko:latest@sha256:...
-```
-
 #### **Security Best Practices**
 - **Always specify non-root users** in Dockerfiles
 - **Use minimal base images** to reduce attack surface
-- **Enable image signing** for production deployments
-- **Verify image signatures** before deployment
 - **Regular security updates** of base images
 - **Use trusted registries** with proper authentication
+- **Use source policy** to control which image sources are allowed
+- **Generate SLSA provenance** for supply chain security
 
 ## 📈 Kaniko Builds - Profiling
 
@@ -1745,7 +1854,7 @@ Kaniko provides comprehensive logging and monitoring capabilities:
 
 #### **Enhanced Logging Formats**
 - **Structured JSON Logging** - Machine-readable logs for analysis and monitoring
-- **Custom Kaniko Format** - Clean, emoji-enhanced logs with progress indicators
+- **Custom Kaniko Format** - Clean, readable logs with progress indicators
 - **Compact Mode** - Minimal logging for CI/CD environments
 - **Color-coded Output** - Visual distinction between log levels
 - **Timestamp Control** - Configurable timestamp formatting
@@ -1756,7 +1865,7 @@ Kaniko provides comprehensive logging and monitoring capabilities:
 #### **Logging Configuration**
 ```bash
 # Logging format options
---log-format=kaniko          # Custom kaniko format with emojis
+--log-format=kaniko          # Custom kaniko format with clean output
 --log-format=kaniko-compact  # Compact mode for CI/CD
 --log-format=json            # Structured JSON logging
 --log-format=text            # Plain text logging

@@ -314,7 +314,12 @@ func determineOpType(cmd commands.DockerCommand) OpType {
 }
 
 // findOperationDependencies finds dependencies for an operation
-func findOperationDependencies(index int, cmd commands.DockerCommand, allCommands []commands.DockerCommand, ops []*Operation) []*Operation {
+func findOperationDependencies(
+	index int,
+	_ commands.DockerCommand,
+	allCommands []commands.DockerCommand,
+	ops []*Operation,
+) []*Operation {
 	dependencies := []*Operation{}
 
 	// Find the last operation that modifies filesystem
@@ -418,7 +423,7 @@ func (g *Graph) GetIndependentOperations(executed map[string]bool) []*Operation 
 
 // Optimize optimizes the graph by merging identical operations
 // This is similar to BuildKit's edge merging
-func (g *Graph) Optimize(ctx context.Context) error {
+func (g *Graph) Optimize(_ context.Context) error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
@@ -452,10 +457,7 @@ func (g *Graph) Optimize(ctx context.Context) error {
 
 				if areOperationsIdentical(ops[i], ops[j]) {
 					// Merge operation j into operation i
-					if err := g.mergeOperations(ops[i], ops[j]); err != nil {
-						logrus.Warnf("Failed to merge operations: %v", err)
-						continue
-					}
+					g.mergeOperations(ops[i], ops[j])
 					merged[ops[j].ID] = true
 					logrus.Debugf("Merged operation %s into %s", ops[j].ID, ops[i].ID)
 				}
@@ -511,7 +513,7 @@ func areOperationsIdentical(op1, op2 *Operation) bool {
 }
 
 // mergeOperations merges op2 into op1
-func (g *Graph) mergeOperations(op1, op2 *Operation) error {
+func (g *Graph) mergeOperations(op1, op2 *Operation) {
 	// Add op2's dependents to op1
 	dependents2 := op2.GetDependents()
 	for _, dependent := range dependents2 {
@@ -551,8 +553,6 @@ func (g *Graph) mergeOperations(op1, op2 *Operation) error {
 		}
 		op1.mu.Unlock()
 	}
-
-	return nil
 }
 
 // String returns a string representation of the graph

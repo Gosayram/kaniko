@@ -44,6 +44,7 @@ import (
 	"github.com/Gosayram/kaniko/pkg/logging"
 	"github.com/Gosayram/kaniko/pkg/multiplatform"
 	"github.com/Gosayram/kaniko/pkg/oci"
+	"github.com/Gosayram/kaniko/pkg/policy"
 	"github.com/Gosayram/kaniko/pkg/rootless"
 	"github.com/Gosayram/kaniko/pkg/timing"
 	"github.com/Gosayram/kaniko/pkg/util"
@@ -51,12 +52,14 @@ import (
 )
 
 var (
-	opts         = &config.KanikoOptions{}
-	ctxSubPath   string
-	force        bool
-	logLevel     string
-	logFormat    string
-	logTimestamp bool
+	opts                                                           = &config.KanikoOptions{}
+	ctxSubPath                                                     string
+	force                                                          bool
+	logLevel                                                       string
+	logFormat                                                      string
+	logTimestamp                                                   bool
+	allowedRegistries, deniedRegistries, allowedRepos, deniedRepos []string
+	requireSignature                                               bool
 )
 
 // Cache timeout and file permission constants
@@ -177,6 +180,39 @@ func configureDebugFromEnvironment() {
 	}
 }
 
+// initializeSourcePolicy initializes source policy from command line flags
+func initializeSourcePolicy() {
+	// Only create policy if at least one flag is set
+	if len(allowedRegistries) == 0 && len(deniedRegistries) == 0 &&
+		len(allowedRepos) == 0 && len(deniedRepos) == 0 && !requireSignature {
+		return // No policy configured
+	}
+
+	// Create new source policy
+	sourcePolicy := policy.NewSourcePolicy()
+
+	// Set policy values
+	if len(allowedRegistries) > 0 {
+		sourcePolicy.SetAllowedRegistries(allowedRegistries)
+	}
+	if len(deniedRegistries) > 0 {
+		sourcePolicy.SetDeniedRegistries(deniedRegistries)
+	}
+	if len(allowedRepos) > 0 {
+		sourcePolicy.SetAllowedRepos(allowedRepos)
+	}
+	if len(deniedRepos) > 0 {
+		sourcePolicy.SetDeniedRepos(deniedRepos)
+	}
+	if requireSignature {
+		sourcePolicy.SetRequireSignature(true)
+	}
+
+	opts.SourcePolicy = sourcePolicy
+	logrus.Infof("Source policy initialized: allowed-registries=%v, denied-registries=%v, require-signature=%v",
+		allowedRegistries, deniedRegistries, requireSignature)
+}
+
 // RootCmd is the kaniko command that is run
 var RootCmd = &cobra.Command{
 	Use: "executor",
@@ -214,6 +250,9 @@ var RootCmd = &cobra.Command{
 
 			// Set CLI size limits for the util package
 			util.SetCLISizeLimits(opts.MaxFileSize, opts.MaxTarFileSize, opts.MaxTotalArchiveSize)
+
+			// Initialize source policy if any policy flags are set
+			initializeSourcePolicy()
 
 			if !opts.NoPush && len(opts.Destinations) == 0 {
 				return errors.New("you must provide --destination, or use --no-push")
@@ -502,16 +541,43 @@ func addCacheFlags() {
 
 // addBuildFlags adds build-related flags
 func addBuildFlags() {
+	addBasicBuildFlags()
+	addOutputFlags()
+	addSnapshotFlags()
+	addUserConfigFlags()
+	addFileSizeLimitFlags()
+	addPerformanceFlags()
+	addResourceControlFlags()
+	addParallelExecutionFlags()
+	addSecurityFlags()
+	addUnifiedCacheFlags()
+}
+
+func addBasicBuildFlags() {
 	RootCmd.PersistentFlags().StringVarP(&opts.KanikoDir, "kaniko-dir", "", constants.DefaultKanikoPath,
 		"Path to the kaniko directory, this takes precedence over the KANIKO_DIR environment variable.")
 	RootCmd.PersistentFlags().StringVarP(&opts.TarPath, "tar-path", "", "",
 		"Path to save the image in as a tarball instead of pushing")
-	RootCmd.PersistentFlags().BoolVarP(&opts.SingleSnapshot, "single-snapshot", "", false,
-		"Take a single snapshot at the end of the build.")
 	RootCmd.PersistentFlags().BoolVarP(&opts.Reproducible, "reproducible", "", false,
 		"Strip timestamps out of the image to make it reproducible")
 	RootCmd.PersistentFlags().BoolVarP(&opts.NoPush, "no-push", "", false,
 		"Do not push the image to the registry")
+	RootCmd.PersistentFlags().VarP(&opts.Compression, "compression", "",
+		"Compression algorithm (gzip, zstd)")
+	RootCmd.PersistentFlags().IntVarP(&opts.CompressionLevel, "compression-level", "", -1,
+		"Compression level")
+	RootCmd.PersistentFlags().BoolVarP(&opts.Cleanup, "cleanup", "", false,
+		"Clean the filesystem at the end")
+	RootCmd.PersistentFlags().VarP(&opts.Labels, "label", "",
+		"Set metadata for an image. Set it repeatedly for multiple labels.")
+	RootCmd.PersistentFlags().BoolVarP(&opts.SkipUnusedStages, "skip-unused-stages", "", false,
+		"Build only used stages if defined to true. Otherwise it builds by default all stages, "+
+			"even the unnecessaries ones until it reaches the target stage / end of Dockerfile")
+	RootCmd.PersistentFlags().BoolVarP(&opts.RunV2, "use-new-run", "", false,
+		"Use the experimental run implementation for detecting changes without requiring file system snapshots.")
+}
+
+func addOutputFlags() {
 	RootCmd.PersistentFlags().StringVarP(&opts.DigestFile, "digest-file", "", "",
 		"Specify a file to save the digest of the built image to.")
 	RootCmd.PersistentFlags().StringVarP(&opts.ImageNameDigestFile, "image-name-with-digest-file", "", "",
@@ -520,12 +586,11 @@ func addBuildFlags() {
 		"Specify a file to save the image name w/ image tag w/ digest of the built image to.")
 	RootCmd.PersistentFlags().StringVarP(&opts.OCILayoutPath, "oci-layout-path", "", "",
 		"Path to save the OCI image layout of the built image.")
-	RootCmd.PersistentFlags().VarP(&opts.Compression, "compression", "",
-		"Compression algorithm (gzip, zstd)")
-	RootCmd.PersistentFlags().IntVarP(&opts.CompressionLevel, "compression-level", "", -1,
-		"Compression level")
-	RootCmd.PersistentFlags().BoolVarP(&opts.Cleanup, "cleanup", "", false,
-		"Clean the filesystem at the end")
+}
+
+func addSnapshotFlags() {
+	RootCmd.PersistentFlags().BoolVarP(&opts.SingleSnapshot, "single-snapshot", "", false,
+		"Take a single snapshot at the end of the build.")
 	RootCmd.PersistentFlags().BoolVarP(&opts.IgnoreVarRun, "ignore-var-run", "", true,
 		"Ignore /var/run directory when taking image snapshot. "+
 			"Set it to false to preserve /var/run/ in destination image.")
@@ -533,31 +598,25 @@ func addBuildFlags() {
 		"Ignore these paths when taking a snapshot. Set it repeatedly for multiple paths.")
 	RootCmd.PersistentFlags().BoolVarP(&opts.ForceBuildMetadata, "force-build-metadata", "", false,
 		"Force add metadata layers to build image")
-	RootCmd.PersistentFlags().BoolVarP(&opts.SkipPushPermissionCheck, "skip-push-permission-check", "", false,
-		"Skip check of the push permission")
-	RootCmd.PersistentFlags().VarP(&opts.Labels, "label", "",
-		"Set metadata for an image. Set it repeatedly for multiple labels.")
-	RootCmd.PersistentFlags().BoolVarP(&opts.SkipUnusedStages, "skip-unused-stages", "", false,
-		"Build only used stages if defined to true. Otherwise it builds by default all stages, "+
-			"even the unnecessaries ones until it reaches the target stage / end of Dockerfile")
-	RootCmd.PersistentFlags().BoolVarP(&opts.RunV2, "use-new-run", "", false,
-		"Use the experimental run implementation for detecting changes without requiring file system snapshots.")
+}
 
-	// User configuration flags
+func addUserConfigFlags() {
 	RootCmd.PersistentFlags().StringVarP(&opts.DefaultUser, "default-user", "", "",
 		"Default user to use when no USER instruction is present (default: root, Docker-compatible). "+
 			"Examples: --default-user=appuser, --default-user=nobody. "+
 			"⚠️ SECURITY: For production, specify non-root users in your Dockerfile with USER instruction.")
+}
 
-	// File size limit flags for security and resource control
+func addFileSizeLimitFlags() {
 	RootCmd.PersistentFlags().StringVarP(&opts.MaxFileSize, "max-file-size", "", "",
 		"Maximum size for individual files (e.g., 500MB, 1GB). Default: 500MB")
 	RootCmd.PersistentFlags().StringVarP(&opts.MaxTarFileSize, "max-tar-file-size", "", "",
 		"Maximum size for files in tar archives (e.g., 5GB, 10GB). Default: 5GB")
 	RootCmd.PersistentFlags().StringVarP(&opts.MaxTotalArchiveSize, "max-total-archive-size", "", "",
 		"Maximum total size for all files in an archive (e.g., 10GB, 20GB). Default: 10GB")
+}
 
-	// Performance optimization flags
+func addPerformanceFlags() {
 	RootCmd.PersistentFlags().BoolVarP(&opts.IncrementalSnapshots, "incremental-snapshots", "", true,
 		"Enable incremental snapshots for better performance (enabled by default per plan)")
 	RootCmd.PersistentFlags().IntVarP(&opts.MaxExpectedChanges, "max-expected-changes", "", maxExpectedChanges,
@@ -566,8 +625,9 @@ func addBuildFlags() {
 		"Enable integrity checks for incremental snapshots")
 	RootCmd.PersistentFlags().BoolVarP(&opts.FullScanBackup, "full-scan-backup", "", true,
 		"Enable full scan backup when integrity concerns are detected")
+}
 
-	// Resource control flags
+func addResourceControlFlags() {
 	RootCmd.PersistentFlags().Int64VarP(&opts.MaxMemoryUsageBytes, "max-memory-usage-bytes", "", maxMemoryUsageBytes,
 		"Maximum memory usage in bytes (e.g., 2GB, 4GB). Default: 2GB")
 	RootCmd.PersistentFlags().Int64VarP(&opts.MaxFileSizeBytes, "max-file-size-bytes", "", maxFileSizeBytes,
@@ -580,8 +640,9 @@ func addBuildFlags() {
 		"Memory usage percentage threshold for triggering garbage collection (1-100). Default: 80")
 	RootCmd.PersistentFlags().IntVarP(&opts.MonitoringInterval, "monitoring-interval", "", monitoringInterval,
 		"Memory monitoring interval in seconds. Default: 5")
+}
 
-	// Parallel execution flags (disabled by default for stability)
+func addParallelExecutionFlags() {
 	RootCmd.PersistentFlags().IntVarP(&opts.MaxParallelCommands, "max-parallel-commands", "", 0,
 		"Maximum number of commands to execute in parallel (0 = auto-detect based on CPU cores). Default: auto-detect")
 	RootCmd.PersistentFlags().DurationVarP(&opts.CommandTimeout, "command-timeout", "", defaultCommandTimeout*time.Minute,
@@ -592,8 +653,28 @@ func addBuildFlags() {
 		"Use dependency graph to optimize command execution order. Default: true (enabled per plan)")
 	RootCmd.PersistentFlags().BoolVarP(&opts.EnableLazyImageLoading, "enable-lazy-image-loading", "", true,
 		"Load image layers on demand for memory optimization. Default: true (enabled per plan)")
+}
 
-	// Smart cache flags (optimized for 1GB cache)
+func addSecurityFlags() {
+	RootCmd.PersistentFlags().BoolVarP(&opts.GenerateProvenance, "generate-provenance", "", false,
+		"Generate SLSA provenance attestation for supply chain security. Default: false")
+	RootCmd.PersistentFlags().BoolVarP(&opts.SkipPushPermissionCheck, "skip-push-permission-check", "", false,
+		"Skip check of the push permission")
+	RootCmd.PersistentFlags().StringSliceVar(&allowedRegistries, "allowed-registries", []string{},
+		"List of allowed registry patterns (wildcards supported). Example: --allowed-registries=gcr.io/*,docker.io/*")
+	RootCmd.PersistentFlags().StringSliceVar(&deniedRegistries, "denied-registries", []string{},
+		"List of denied registry patterns (wildcards supported). Example: --denied-registries=untrusted.io/*")
+	RootCmd.PersistentFlags().StringSliceVar(&allowedRepos, "allowed-repos", []string{},
+		"List of allowed repository patterns (wildcards supported)")
+	RootCmd.PersistentFlags().StringSliceVar(&deniedRepos, "denied-repos", []string{},
+		"List of denied repository patterns (wildcards supported)")
+	RootCmd.PersistentFlags().BoolVar(&requireSignature, "require-signature", false,
+		"Require images to be signed (source policy validation)")
+}
+
+func addUnifiedCacheFlags() {
+	RootCmd.PersistentFlags().BoolVarP(&opts.EnableUnifiedCache, "enable-unified-cache", "", false,
+		"Enable unified cache for combining multiple cache sources (local, registry, S3, etc.). Default: false")
 	RootCmd.PersistentFlags().IntVarP(&opts.MaxCacheEntries, "max-cache-entries", "", defaultMaxCacheEntries,
 		"Maximum number of entries in the LRU cache. Default: 2000 (optimized for 1GB cache)")
 	RootCmd.PersistentFlags().IntVarP(&opts.MaxPreloadSize, "max-preload-size", "", defaultMaxPreloadSize,
