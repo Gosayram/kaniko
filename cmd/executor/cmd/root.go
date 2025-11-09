@@ -78,7 +78,7 @@ const (
 	maxTotalFileSizeBytes = 10 * 1024 * 1024 * 1024 // 10GB
 
 	// Performance optimization constants
-	maxExpectedChanges = 1000 // Maximum expected changes for incremental snapshots
+	maxExpectedChanges = 5000 // Maximum expected changes for incremental snapshots (optimized per plan)
 	gcThreshold        = 80   // Memory usage percentage threshold for GC
 	monitoringInterval = 5    // Memory monitoring interval in seconds
 
@@ -545,10 +545,9 @@ func addBuildFlags() {
 
 	// User configuration flags
 	RootCmd.PersistentFlags().StringVarP(&opts.DefaultUser, "default-user", "", "",
-		"Default user to use when no USER instruction is present (e.g., appuser, nobody). "+
-			"⚠️ SECURITY WARNING: Using 'root' is unsafe and prohibited in production! "+
-			"By default, Kaniko uses 'kaniko:kaniko' for security when no user is specified. "+
-			"Always specify non-root users in your Dockerfile with USER instruction.")
+		"Default user to use when no USER instruction is present (default: root, Docker-compatible). "+
+			"Examples: --default-user=appuser, --default-user=nobody. "+
+			"⚠️ SECURITY: For production, specify non-root users in your Dockerfile with USER instruction.")
 
 	// File size limit flags for security and resource control
 	RootCmd.PersistentFlags().StringVarP(&opts.MaxFileSize, "max-file-size", "", "",
@@ -559,8 +558,8 @@ func addBuildFlags() {
 		"Maximum total size for all files in an archive (e.g., 10GB, 20GB). Default: 10GB")
 
 	// Performance optimization flags
-	RootCmd.PersistentFlags().BoolVarP(&opts.IncrementalSnapshots, "incremental-snapshots", "", false,
-		"Enable incremental snapshots for better performance (experimental)")
+	RootCmd.PersistentFlags().BoolVarP(&opts.IncrementalSnapshots, "incremental-snapshots", "", true,
+		"Enable incremental snapshots for better performance (enabled by default per plan)")
 	RootCmd.PersistentFlags().IntVarP(&opts.MaxExpectedChanges, "max-expected-changes", "", maxExpectedChanges,
 		"Maximum expected changes before triggering full scan (incremental snapshots)")
 	RootCmd.PersistentFlags().BoolVarP(&opts.IntegrityCheck, "integrity-check", "", true,
@@ -582,13 +581,17 @@ func addBuildFlags() {
 	RootCmd.PersistentFlags().IntVarP(&opts.MonitoringInterval, "monitoring-interval", "", monitoringInterval,
 		"Memory monitoring interval in seconds. Default: 5")
 
-	// Parallel execution flags (enabled by default for performance)
+	// Parallel execution flags (disabled by default for stability)
 	RootCmd.PersistentFlags().IntVarP(&opts.MaxParallelCommands, "max-parallel-commands", "", 0,
 		"Maximum number of commands to execute in parallel (0 = auto-detect based on CPU cores). Default: auto-detect")
 	RootCmd.PersistentFlags().DurationVarP(&opts.CommandTimeout, "command-timeout", "", defaultCommandTimeout*time.Minute,
 		"Timeout for command execution (e.g., 30m, 1h). Default: 30m")
-	RootCmd.PersistentFlags().BoolVarP(&opts.EnableParallelExec, "enable-parallel-exec", "", true,
-		"Enable parallel execution of independent commands. Default: enabled for better performance")
+	RootCmd.PersistentFlags().BoolVarP(&opts.EnableParallelExec, "enable-parallel-exec", "", false,
+		"Enable parallel execution of independent commands (experimental). Default: false (sequential execution is default)")
+	RootCmd.PersistentFlags().BoolVarP(&opts.OptimizeExecutionOrder, "optimize-execution-order", "", true,
+		"Use dependency graph to optimize command execution order. Default: true (enabled per plan)")
+	RootCmd.PersistentFlags().BoolVarP(&opts.EnableLazyImageLoading, "enable-lazy-image-loading", "", true,
+		"Load image layers on demand for memory optimization. Default: true (enabled per plan)")
 
 	// Smart cache flags (optimized for 1GB cache)
 	RootCmd.PersistentFlags().IntVarP(&opts.MaxCacheEntries, "max-cache-entries", "", defaultMaxCacheEntries,

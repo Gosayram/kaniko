@@ -108,7 +108,7 @@ type KanikoOptions struct {
 	SignImages          bool             // --sign-images[=true|false]
 
 	// User configuration options
-	DefaultUser       string // --default-user=kaniko (default user when no USER instruction)
+	DefaultUser       string // --default-user (default: root, Docker-compatible)
 	CosignKeyPath     string // --cosign-key-path=/path/to/key
 	CosignKeyPassword string // --cosign-key-password=secret
 
@@ -131,10 +131,14 @@ type KanikoOptions struct {
 	GCThreshold           int   // --gc-threshold=80
 	MonitoringInterval    int   // --monitoring-interval=5s
 
-	// Parallel execution options (enabled by default for performance)
+	// Parallel execution options (disabled by default for stability)
 	MaxParallelCommands int           // --max-parallel-commands=4 (auto-detect CPU cores)
 	CommandTimeout      time.Duration // --command-timeout=30m
-	EnableParallelExec  bool          // --enable-parallel-exec=true (enabled by default)
+	EnableParallelExec  bool          // --enable-parallel-exec=false (disabled by default, sequential is default)
+	// --optimize-execution-order=true (use dependency graph to optimize order, enabled by default)
+	OptimizeExecutionOrder bool
+	// --enable-lazy-image-loading=true (load image layers on demand for memory optimization, enabled by default)
+	EnableLazyImageLoading bool
 
 	// Smart cache options (optimized for 1GB cache)
 	MaxCacheEntries  int           // --max-cache-entries=2000 (optimized for 1GB)

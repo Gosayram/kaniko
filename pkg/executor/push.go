@@ -425,6 +425,20 @@ func writeImageOutputs(image v1.Image, destRefs []name.Tag) error {
 // pushLayerToCache pushes layer (tagged with cacheKey) to opts.CacheRepo
 // if opts.CacheRepo doesn't exist, infer the cache from the given destination
 func pushLayerToCache(opts *config.KanikoOptions, cacheKey, tarPath, createdBy string) error {
+	// Check file size before processing (optimization: skip very small files)
+	if tarPath != "" {
+		if fi, err := os.Stat(tarPath); err == nil {
+			// Skip pushing very small layers (< 1KB) to cache to save network/registry resources
+			// These are typically empty or metadata-only layers
+			const minCacheSize = 1024 // 1KB
+			if fi.Size() < minCacheSize {
+				logrus.Debugf("Skipping cache push for small layer (%d bytes < %d bytes): %s", fi.Size(), minCacheSize, cacheKey)
+				return nil
+			}
+			logrus.Debugf("Pushing layer to cache: %s (size: %d bytes)", cacheKey, fi.Size())
+		}
+	}
+
 	var layerOpts []tarball.LayerOption
 	if opts.CompressedCaching {
 		layerOpts = append(layerOpts, tarball.WithCompressedCaching)
@@ -444,7 +458,7 @@ func pushLayerToCache(opts *config.KanikoOptions, cacheKey, tarPath, createdBy s
 
 	layer, err := tarball.LayerFromFile(tarPath, layerOpts...)
 	if err != nil {
-		return err
+		return errors.Wrapf(err, "failed to create layer from file %s", tarPath)
 	}
 
 	cacheDest, err := cache.Destination(opts, cacheKey)
@@ -452,6 +466,8 @@ func pushLayerToCache(opts *config.KanikoOptions, cacheKey, tarPath, createdBy s
 		return errors.Wrap(err, "getting cache destination")
 	}
 	logrus.Infof("Pushing layer %s to cache now", cacheDest)
+
+	// Use empty.Image directly (it's a global constant, no allocation needed)
 	emptyImg := empty.Image
 	emptyImg, err = mutate.CreatedAt(emptyImg, v1.Time{Time: time.Now()})
 	if err != nil {

@@ -95,8 +95,21 @@ func RetrieveSourceImage(stage *config.KanikoStage, opts *config.KanikoOptions) 
 		// Log warning instead of error for registry issues
 		logrus.Warnf("Failed to retrieve image %s: %v", currentBaseName, err)
 		logrus.Warnf("This might be due to registry unavailability.")
+		return nil, err
 	}
-	return image, err
+
+	// Optionally wrap with LazyImage for memory optimization
+	if opts.EnableLazyImageLoading {
+		lazyImg, lazyErr := NewLazyImage(image)
+		if lazyErr != nil {
+			logrus.Warnf("Failed to create lazy image wrapper: %v, using original image", lazyErr)
+			return image, nil
+		}
+		logrus.Debugf("Using lazy image loading for %s (memory optimization)", currentBaseName)
+		return lazyImg, nil
+	}
+
+	return image, nil
 }
 
 func tarballImage(index int) (v1.Image, error) {
