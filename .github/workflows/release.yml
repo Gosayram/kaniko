@@ -58,6 +58,10 @@ jobs:
             echo "RELEASE_VERSION=$VERSION" >> $GITHUB_ENV
             echo "Using tag version: $VERSION"
           fi
+          # Convert repository name to lowercase for Docker registry
+          REPO_LOWER=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+          echo "GITHUB_REPOSITORY=$REPO_LOWER" >> $GITHUB_ENV
+          echo "Repository name (lowercase): $REPO_LOWER"
 
       # Import GPG key for signing binaries and checksums
       - name: Import GPG key
@@ -82,7 +86,7 @@ jobs:
           GPG_FINGERPRINT: ${{ steps.import_gpg.outputs.fingerprint }}
           GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
           RELEASE_VERSION: ${{ steps.version.outputs.version }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
+          # GITHUB_REPOSITORY is set in lowercase in the version step above
           # Cosign signing for Docker images
           COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
           COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
