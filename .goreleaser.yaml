@@ -25,7 +25,6 @@ builds:
     goos:
       - linux
       - darwin
-      - windows
     goarch:
       - amd64
       - arm64
@@ -35,8 +34,6 @@ builds:
       - goos: darwin
         goarch: arm64
         goarm: "7"
-      - goos: windows
-        goarch: arm64
 
   - id: warmer
     binary: warmer
@@ -56,7 +53,6 @@ builds:
     goos:
       - linux
       - darwin
-      - windows
     goarch:
       - amd64
       - arm64
@@ -66,15 +62,10 @@ builds:
       - goos: darwin
         goarch: arm64
         goarm: "7"
-      - goos: windows
-        goarch: arm64
 
 # Archive configuration
 archives:
   - id: default
-    format_overrides:
-      - goos: windows
-        format: zip
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}{{ if .Arm }}v{{ .Arm }}{{ end }}"
     files:
       - README.md
