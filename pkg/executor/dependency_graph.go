@@ -28,6 +28,7 @@ import (
 	"github.com/sirupsen/logrus"
 
 	"github.com/Gosayram/kaniko/pkg/commands"
+	"github.com/Gosayram/kaniko/pkg/dockerfile"
 )
 
 // CommandNode represents a command in the dependency graph
@@ -56,7 +57,11 @@ func NewDependencyGraph() *DependencyGraph {
 }
 
 // BuildDependencyGraph builds a dependency graph from a list of commands
-func BuildDependencyGraph(cmds []commands.DockerCommand) (*DependencyGraph, error) {
+func BuildDependencyGraph(
+	cmds []commands.DockerCommand,
+	config *v1.Config,
+	buildArgs *dockerfile.BuildArgs,
+) (*DependencyGraph, error) {
 	graph := NewDependencyGraph()
 
 	// Create nodes for all commands
@@ -83,7 +88,7 @@ func BuildDependencyGraph(cmds []commands.DockerCommand) (*DependencyGraph, erro
 		}
 
 		// Analyze dependencies
-		deps := findCommandDependencies(i, cmd, cmds)
+		deps := findCommandDependencies(i, cmd, cmds, config, buildArgs)
 		node.Dependencies = deps
 
 		// Update dependents for each dependency
@@ -106,15 +111,24 @@ func BuildDependencyGraph(cmds []commands.DockerCommand) (*DependencyGraph, erro
 }
 
 // findCommandDependencies finds dependencies for a specific command
-func findCommandDependencies(index int, cmd commands.DockerCommand, allCommands []commands.DockerCommand) []int {
+func findCommandDependencies(
+	index int,
+	cmd commands.DockerCommand,
+	allCommands []commands.DockerCommand,
+	config *v1.Config,
+	buildArgs *dockerfile.BuildArgs,
+) []int {
 	dependencies := []int{}
 
 	// Try to get files used by this command for more accurate dependency detection
 	var filesUsed []string
-	if cfg, err := getCommandConfig(cmd); err == nil {
-		if files, err := cmd.FilesUsedFromContext(cfg, nil); err == nil {
-			filesUsed = files
-		}
+	// Use provided config and buildArgs, or create empty ones if not provided
+	cfg := config
+	if cfg == nil {
+		cfg = &v1.Config{}
+	}
+	if files, err := cmd.FilesUsedFromContext(cfg, buildArgs); err == nil {
+		filesUsed = files
 	}
 
 	// Find dependencies based on file usage (more accurate)
@@ -150,13 +164,6 @@ func findCommandDependencies(index int, cmd commands.DockerCommand, allCommands 
 	}
 
 	return dependencies
-}
-
-// getCommandConfig attempts to get config from command for dependency analysis
-func getCommandConfig(_ commands.DockerCommand) (*v1.Config, error) {
-	// This is a helper to get config if available
-	// In real usage, config would be passed from stageBuilder
-	return &v1.Config{}, nil
 }
 
 // hasFileConflict checks if a command might conflict with files used by another command

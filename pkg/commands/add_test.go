@@ -175,3 +175,158 @@ func Test_AddCommand(t *testing.T) {
 		})
 	}
 }
+
+// TestAddCommand_FilesUsedFromContext_NilBuildArgs tests that AddCommand.FilesUsedFromContext
+// handles nil buildArgs gracefully without panicking
+func TestAddCommand_FilesUsedFromContext_NilBuildArgs(t *testing.T) {
+	tempDir := t.TempDir()
+
+	// Create a test file
+	testFile := filepath.Join(tempDir, "test.txt")
+	err := os.WriteFile(testFile, []byte("test content"), 0644)
+	if err != nil {
+		t.Fatalf("Failed to create test file: %v", err)
+	}
+
+	fileContext := util.FileContext{Root: tempDir}
+	cfg := &v1.Config{
+		Env: []string{"PATH=/usr/bin"},
+	}
+
+	addCmd := AddCommand{
+		cmd: &instructions.AddCommand{
+			SourcesAndDest: instructions.SourcesAndDest{
+				SourcePaths: []string{"test.txt"},
+				DestPath:    "/app/",
+			},
+		},
+		fileContext: fileContext,
+	}
+
+	// This should not panic even with nil buildArgs
+	var nilBuildArgs *dockerfile.BuildArgs = nil
+	files, err := addCmd.FilesUsedFromContext(cfg, nilBuildArgs)
+
+	if err != nil {
+		t.Errorf("FilesUsedFromContext should not return error with nil buildArgs, got: %v", err)
+	}
+
+	// Should return the file path
+	expectedFile := filepath.Join(tempDir, "test.txt")
+	if len(files) != 1 {
+		t.Errorf("Expected 1 file, got %d: %v", len(files), files)
+	} else if files[0] != expectedFile {
+		t.Errorf("Expected file %s, got %s", expectedFile, files[0])
+	}
+}
+
+// TestAddCommand_FilesUsedFromContext_WithBuildArgs tests that AddCommand.FilesUsedFromContext
+// works correctly with buildArgs
+func TestAddCommand_FilesUsedFromContext_WithBuildArgs(t *testing.T) {
+	tempDir := t.TempDir()
+
+	// Create a test file
+	testFile := filepath.Join(tempDir, "test.txt")
+	err := os.WriteFile(testFile, []byte("test content"), 0644)
+	if err != nil {
+		t.Fatalf("Failed to create test file: %v", err)
+	}
+
+	fileContext := util.FileContext{Root: tempDir}
+	cfg := &v1.Config{
+		Env: []string{"PATH=/usr/bin"},
+	}
+	buildArgs := dockerfile.NewBuildArgs([]string{"PNPM_VERSION=10.12.3"})
+
+	addCmd := AddCommand{
+		cmd: &instructions.AddCommand{
+			SourcesAndDest: instructions.SourcesAndDest{
+				SourcePaths: []string{"test.txt"},
+				DestPath:    "/app/",
+			},
+		},
+		fileContext: fileContext,
+	}
+
+	files, err := addCmd.FilesUsedFromContext(cfg, buildArgs)
+
+	if err != nil {
+		t.Errorf("FilesUsedFromContext should not return error, got: %v", err)
+	}
+
+	expectedFile := filepath.Join(tempDir, "test.txt")
+	if len(files) != 1 {
+		t.Errorf("Expected 1 file, got %d: %v", len(files), files)
+	} else if files[0] != expectedFile {
+		t.Errorf("Expected file %s, got %s", expectedFile, files[0])
+	}
+}
+
+// TestAddCommand_FilesUsedFromContext_RemoteURL tests that remote URLs are excluded
+func TestAddCommand_FilesUsedFromContext_RemoteURL(t *testing.T) {
+	tempDir := t.TempDir()
+	fileContext := util.FileContext{Root: tempDir}
+	cfg := &v1.Config{
+		Env: []string{},
+	}
+
+	addCmd := AddCommand{
+		cmd: &instructions.AddCommand{
+			SourcesAndDest: instructions.SourcesAndDest{
+				SourcePaths: []string{"https://example.com/file.txt"},
+				DestPath:    "/app/",
+			},
+		},
+		fileContext: fileContext,
+	}
+
+	// Should not panic with nil buildArgs
+	files, err := addCmd.FilesUsedFromContext(cfg, nil)
+
+	if err != nil {
+		t.Errorf("FilesUsedFromContext should not return error, got: %v", err)
+	}
+
+	// Remote URLs should be excluded
+	if len(files) != 0 {
+		t.Errorf("Expected 0 files (remote URL excluded), got %d: %v", len(files), files)
+	}
+}
+
+// TestAddCommand_FilesUsedFromContext_EmptyConfig tests edge case with empty config
+func TestAddCommand_FilesUsedFromContext_EmptyConfig(t *testing.T) {
+	tempDir := t.TempDir()
+
+	testFile := filepath.Join(tempDir, "test.txt")
+	err := os.WriteFile(testFile, []byte("test"), 0644)
+	if err != nil {
+		t.Fatalf("Failed to create test file: %v", err)
+	}
+
+	fileContext := util.FileContext{Root: tempDir}
+	cfg := &v1.Config{
+		Env: []string{}, // Empty env
+	}
+
+	addCmd := AddCommand{
+		cmd: &instructions.AddCommand{
+			SourcesAndDest: instructions.SourcesAndDest{
+				SourcePaths: []string{"test.txt"},
+				DestPath:    "/app/",
+			},
+		},
+		fileContext: fileContext,
+	}
+
+	// Should work with nil buildArgs and empty config
+	files, err := addCmd.FilesUsedFromContext(cfg, nil)
+
+	if err != nil {
+		t.Errorf("FilesUsedFromContext should not return error, got: %v", err)
+	}
+
+	expectedFile := filepath.Join(tempDir, "test.txt")
+	if len(files) != 1 || files[0] != expectedFile {
+		t.Errorf("Expected [%s], got %v", expectedFile, files)
+	}
+}

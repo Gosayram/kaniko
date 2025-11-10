@@ -77,6 +77,11 @@ func (b *BuildArgs) Clone() *BuildArgs {
 
 // ReplacementEnvs returns a list of filtered environment variables
 func (b *BuildArgs) ReplacementEnvs(envs []string) []string {
+	// Safety check: if BuildArgs is nil, return only the original envs
+	if b == nil {
+		return envs
+	}
+
 	// Ensure that we operate on a new array and do not modify the underlying array
 	resultEnv := make([]string, len(envs))
 	copy(resultEnv, envs)
@@ -101,6 +106,11 @@ func (b *BuildArgs) AddMetaArgs(metaArgs []instructions.ArgCommand) {
 }
 
 func (b *BuildArgs) FilterAllowed(envs []string) []string {
+	// Safety check: if BuildArgs is nil, return empty slice
+	if b == nil {
+		return []string{}
+	}
+
 	var filtered []string
 	for _, env := range envs {
 		parts := strings.SplitN(env, "=", 2)
@@ -119,6 +129,11 @@ func (b *BuildArgs) AddMetaArg(key string, value *string) {
 
 // GetAllAllowed returns all allowed build arguments as environment variables
 func (b *BuildArgs) GetAllAllowed() []string {
+	// Safety check: if BuildArgs is nil, return empty slice
+	if b == nil {
+		return []string{}
+	}
+
 	var result []string
 
 	// Add allowed args

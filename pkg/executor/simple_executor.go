@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"sync"
 
+	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/sync/errgroup"
@@ -68,7 +69,15 @@ func NewSimpleExecutor(
 
 	// Build dependency graph for execution order optimization (enabled by default per plan)
 	if opts.OptimizeExecutionOrder {
-		graph, err := BuildDependencyGraph(cmds)
+		// Get config and buildArgs from stageBuilder
+		var imageConfig *v1.Config
+		if sb != nil && sb.cf != nil {
+			imageConfig = &sb.cf.Config
+		} else {
+			imageConfig = &v1.Config{}
+		}
+
+		graph, err := BuildDependencyGraph(cmds, imageConfig, args)
 		if err != nil {
 			logrus.Warnf("Failed to build dependency graph: %v, using default order", err)
 		} else {
@@ -175,7 +184,17 @@ func (e *SimpleExecutor) ExecuteSequentially(compositeKey *CompositeCache, initS
 func (e *SimpleExecutor) ExecuteInParallel(compositeKey *CompositeCache, initSnapshotTaken bool) error {
 	// Build dependency graph if not already built
 	if e.dependencyGraph == nil {
-		graph, err := BuildDependencyGraph(e.commands)
+		// Get config and buildArgs from stageBuilder
+		var imageConfig *v1.Config
+		if e.stageBuilder != nil && e.stageBuilder.cf != nil {
+			e.stageBuilder.mutex.RLock()
+			imageConfig = &e.stageBuilder.cf.Config
+			e.stageBuilder.mutex.RUnlock()
+		} else {
+			imageConfig = &v1.Config{}
+		}
+
+		graph, err := BuildDependencyGraph(e.commands, imageConfig, e.args)
 		if err != nil {
 			return errors.Wrap(err, "failed to build dependency graph for parallel execution")
 		}
