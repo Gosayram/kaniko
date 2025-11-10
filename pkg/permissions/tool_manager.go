@@ -64,7 +64,7 @@ func (tm *ToolManager) ensureUserBinDirectory() error {
 		return fmt.Errorf("failed to create directory %s: %w", tm.userBin, err)
 	}
 
-	logrus.Debugf("✅ Created user bin directory: %s", tm.userBin)
+	logrus.Debugf("Created user bin directory: %s", tm.userBin)
 	return nil
 }
 
@@ -102,7 +102,7 @@ func (tm *ToolManager) createToolSymlink(tool string) error {
 		return fmt.Errorf("failed to create symlink %s -> %s: %w", linkPath, toolPath, err)
 	}
 
-	logrus.Debugf("✅ Created symlink: %s -> %s", linkPath, toolPath)
+	logrus.Debugf("Created symlink: %s -> %s", linkPath, toolPath)
 	return nil
 }
 
@@ -127,7 +127,7 @@ func (tm *ToolManager) setupEnvironmentVariables() {
 		}
 	}
 
-	logrus.Debugf("✅ Set up environment variables for tool execution")
+	logrus.Debugf("Set up environment variables for tool execution")
 }
 
 // deduplicate removes duplicate strings from a slice

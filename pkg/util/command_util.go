@@ -527,19 +527,19 @@ func getUIDAndGID(userStr, groupStr string) (uid, gid uint32, err error) {
 	// RADICAL FIX: Completely rewritten to work without system user/group lookups
 	// This prevents failures in containerized environments where /etc/passwd and /etc/group are missing
 
-	logrus.Debugf("🔍 Resolving UID/GID for user: '%s', group: '%s'", userStr, groupStr)
+	logrus.Debugf("Resolving UID/GID for user: '%s', group: '%s'", userStr, groupStr)
 
 	// CRITICAL FIX: Handle root user correctly
 	if userStr == rootUser {
-		logrus.Debugf("✅ Detected root user, using UID 0")
+		logrus.Debugf("Detected root user, using UID 0")
 		uid = 0
 	} else if uidNum, parseErr := getUID(userStr); parseErr == nil {
 		// Try to parse userStr as numeric UID first
-		logrus.Debugf("✅ Parsed user '%s' as numeric UID: %d", userStr, uidNum)
+		logrus.Debugf("Parsed user '%s' as numeric UID: %d", userStr, uidNum)
 		uid = uidNum
 	} else {
 		// Use safe fallback for non-numeric user strings
-		logrus.Debugf("⚠️ User '%s' is not numeric, using safe fallback", userStr)
+		logrus.Debugf("User '%s' is not numeric, using safe fallback", userStr)
 		uid = getSafeFallbackUID(userStr)
 	}
 
@@ -547,15 +547,15 @@ func getUIDAndGID(userStr, groupStr string) (uid, gid uint32, err error) {
 	if groupStr != "" {
 		// CRITICAL FIX: Handle root group correctly
 		if groupStr == rootUser {
-			logrus.Debugf("✅ Detected root group, using GID 0")
+			logrus.Debugf("Detected root group, using GID 0")
 			gid = 0
 		} else if gidNum, parseErr := getGID(groupStr); parseErr == nil {
 			// Try to parse groupStr as numeric GID first
-			logrus.Debugf("✅ Parsed group '%s' as numeric GID: %d", groupStr, gidNum)
+			logrus.Debugf("Parsed group '%s' as numeric GID: %d", groupStr, gidNum)
 			gid = gidNum
 		} else {
 			// Use safe fallback for non-numeric group strings
-			logrus.Debugf("⚠️ Group '%s' is not numeric, using safe fallback", groupStr)
+			logrus.Debugf("Group '%s' is not numeric, using safe fallback", groupStr)
 			gid = getSafeFallbackUID(groupStr)
 		}
 	} else {
@@ -563,7 +563,7 @@ func getUIDAndGID(userStr, groupStr string) (uid, gid uint32, err error) {
 		gid = uid
 	}
 
-	logrus.Debugf("🎯 Final UID/GID for user '%s', group '%s': %d/%d", userStr, groupStr, uid, gid)
+	logrus.Debugf("Final UID/GID for user '%s', group '%s': %d/%d", userStr, groupStr, uid, gid)
 	return uid, gid, nil
 }
 
@@ -579,11 +579,11 @@ func getGID(groupStr string) (uint32, error) {
 // LookupUser will try to lookup the userStr inside the passwd file.
 // RADICAL FIX: Completely rewritten to work without system user lookups
 func LookupUser(userStr string) (*user.User, error) {
-	logrus.Debugf("🔍 Looking up user: '%s'", userStr)
+	logrus.Debugf("Looking up user: '%s'", userStr)
 
 	// CRITICAL FIX: Handle root user correctly
 	if userStr == rootUser {
-		logrus.Debugf("✅ Detected root user, using UID 0")
+		logrus.Debugf("Detected root user, using UID 0")
 		return &user.User{
 			Uid:      "0",
 			Gid:      "0",
@@ -595,7 +595,7 @@ func LookupUser(userStr string) (*user.User, error) {
 
 	// Try to parse as numeric UID first
 	if uid, parseErr := getUID(userStr); parseErr == nil {
-		logrus.Debugf("✅ Parsed user '%s' as numeric UID: %d", userStr, uid)
+		logrus.Debugf("Parsed user '%s' as numeric UID: %d", userStr, uid)
 		return &user.User{
 			Uid:      fmt.Sprint(uid),
 			Gid:      fmt.Sprint(uid),
@@ -606,7 +606,7 @@ func LookupUser(userStr string) (*user.User, error) {
 	}
 
 	// Use safe fallback for non-numeric user strings
-	logrus.Debugf("⚠️ User '%s' is not numeric, using safe fallback", userStr)
+	logrus.Debugf("User '%s' is not numeric, using safe fallback", userStr)
 	fallbackUID := getSafeFallbackUID(userStr)
 	return &user.User{
 		Uid:      fmt.Sprint(fallbackUID),

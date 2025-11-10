@@ -595,7 +595,7 @@ func extractLayers(root string, layers []v1.Layer, cfg *FSConfig) ([]string, err
 
 	logrus.Infof("Total extracted %d files from %d layers to %s", len(extractedFiles), len(layers), root)
 	if len(extractedFiles) == 0 {
-		logrus.Warnf("⚠️ No files extracted! This might indicate all files were ignored or layers are empty")
+		logrus.Warnf("No files extracted! This might indicate all files were ignored or layers are empty")
 		// Check if directory exists
 		if entries, listErr := os.ReadDir(root); listErr == nil {
 			logrus.Infof("   However, extraction directory %s contains %d entries", root, len(entries))
@@ -1546,7 +1546,7 @@ func CreateSymlinkWithFallback(target, linkPath string) error {
 
 		// Try to create symlink in user directory
 		if err := os.Symlink(target, userLinkPath); err == nil {
-			logrus.Infof("✅ Created symlink in user directory: %s -> %s", userLinkPath, target)
+			logrus.Infof("Created symlink in user directory: %s -> %s", userLinkPath, target)
 			// Update PATH to include user bin directory
 			updatePathForSymlink(userLinkPath)
 			return nil
@@ -1554,7 +1554,7 @@ func CreateSymlinkWithFallback(target, linkPath string) error {
 
 		// If symlink failed, try copying the target
 		if err := copyExecutableFile(target, userLinkPath); err == nil {
-			logrus.Infof("✅ Copied executable to user directory: %s", userLinkPath)
+			logrus.Infof("Copied executable to user directory: %s", userLinkPath)
 			updatePathForSymlink(userLinkPath)
 			return nil
 		}
@@ -2853,7 +2853,7 @@ func MakeDirectoryWritable(dirPath string) error {
 
 	// Cache this directory as writable
 	writableDirectoriesCache[dirPath] = true
-	logrus.Infof("✅ Made directory %s writable for all users", dirPath)
+	logrus.Infof("Made directory %s writable for all users", dirPath)
 	return nil
 }
 
@@ -2904,14 +2904,14 @@ func PrepareCommonSystemDirectoriesWritable() {
 			if mkErr := MakeDirectoryWritable(dir); mkErr != nil {
 				logrus.Debugf("Could not make %s writable: %v", dir, mkErr)
 			} else {
-				logrus.Debugf("✅ Made directory writable: %s", dir)
+				logrus.Debugf("Made directory writable: %s", dir)
 			}
 		} else if err != nil {
 			logrus.Debugf("Directory %s does not exist: %v", dir, err)
 		}
 	}
 
-	logrus.Debugf("📁 Prepared %d directories as writable using %s filesystem structure",
+	logrus.Debugf("Prepared %d directories as writable using %s filesystem structure",
 		len(dirsToMakeWritable), getStructureType(fsStructure))
 }
 
@@ -2939,7 +2939,7 @@ func MakeDirectoryWritableByPattern(dirPath string) bool {
 			continue
 		}
 		if pattern.MatchString(dirPath) {
-			logrus.Debugf("🔍 Directory %s matches pattern %s, making writable", dirPath, patternStr)
+			logrus.Debugf("Directory %s matches pattern %s, making writable", dirPath, patternStr)
 			if err := MakeDirectoryWritable(dirPath); err != nil {
 				logrus.Debugf("Could not make %s writable: %v", dirPath, err)
 				return false
@@ -2958,7 +2958,7 @@ func MakeDirectoryWritableByPattern(dirPath string) bool {
 	cleanPath := filepath.Clean(dirPath)
 	for _, dir := range allDirs {
 		if strings.HasPrefix(cleanPath, dir) {
-			logrus.Debugf("🔍 Directory %s is in %s, making writable", dirPath, dir)
+			logrus.Debugf("Directory %s is in %s, making writable", dirPath, dir)
 			if err := MakeDirectoryWritable(dirPath); err != nil {
 				logrus.Debugf("Could not make %s writable: %v", dirPath, err)
 				return false
@@ -2981,7 +2981,7 @@ func truncateLogString(s string, maxLen int) string {
 // ParsePermissionErrorAndFix parses permission errors from command output and fixes them
 // Returns the directory path that was fixed, or empty string if no fix was needed
 func ParsePermissionErrorAndFix(errorOutput string) []string {
-	logrus.Infof("🔍 Checking permission error output for paths to fix (length: %d bytes)", len(errorOutput))
+	logrus.Infof("Checking permission error output for paths to fix (length: %d bytes)", len(errorOutput))
 
 	var fixedDirs []string
 
@@ -2992,7 +2992,7 @@ func ParsePermissionErrorAndFix(errorOutput string) []string {
 	// - "permission denied: /some/path"
 
 	lines := strings.Split(errorOutput, "\n")
-	logrus.Debugf("📄 Parsing %d lines from error output", len(lines))
+	logrus.Debugf("Parsing %d lines from error output", len(lines))
 
 	for _, line := range lines {
 		// Look for EACCES or "permission denied"
@@ -3041,7 +3041,7 @@ func ParsePermissionErrorAndFix(errorOutput string) []string {
 func extractDirectoryPathsFromError(errorLine string) []string {
 	var paths []string
 
-	logrus.Debugf("🔍 Extracting paths from error: %s", errorLine)
+	logrus.Debugf("Extracting paths from error: %s", errorLine)
 
 	// Extract paths using different patterns
 	paths = append(paths, extractMkdirPaths(errorLine)...)
@@ -3050,7 +3050,7 @@ func extractDirectoryPathsFromError(errorLine string) []string {
 	paths = append(paths, extractPermissionDeniedPaths(errorLine)...)
 	paths = append(paths, extractCorepackPaths(errorLine)...)
 
-	logrus.Debugf("🎯 Extracted %d paths from error", len(paths))
+	logrus.Debugf("Extracted %d paths from error", len(paths))
 	return paths
 }
 
@@ -3061,7 +3061,7 @@ func extractMkdirPaths(errorLine string) []string {
 		if start := strings.Index(errorLine, "'"); start != -1 {
 			if end := strings.Index(errorLine[start+1:], "'"); end != -1 {
 				path := errorLine[start+1 : start+1+end]
-				logrus.Debugf("📁 Found mkdir path: %s", path)
+				logrus.Debugf("Found mkdir path: %s", path)
 				paths = append(paths, filepath.Dir(path)) // Get parent directory
 			}
 		}
@@ -3094,7 +3094,7 @@ func extractOpendirPaths(errorLine string) []string {
 		if start := strings.Index(errorLine, "'"); start != -1 {
 			if end := strings.Index(errorLine[start+1:], "'"); end != -1 {
 				path := errorLine[start+1 : start+1+end]
-				logrus.Debugf("📂 Found opendir path: %s", path)
+				logrus.Debugf("Found opendir path: %s", path)
 				paths = append(paths, path) // Use the directory itself
 			}
 		}
@@ -3132,7 +3132,7 @@ func extractCorepackPaths(errorLine string) []string {
 		if start := strings.Index(errorLine, "'"); start != -1 {
 			if end := strings.Index(errorLine[start+1:], "'"); end != -1 {
 				path := errorLine[start+1 : start+1+end]
-				logrus.Debugf("📦 Found Corepack path in error: %s", path)
+				logrus.Debugf("Found Corepack path in error: %s", path)
 				paths = append(paths, filepath.Dir(path))
 			}
 		}
@@ -3142,7 +3142,7 @@ func extractCorepackPaths(errorLine string) []string {
 			lastPath := paths[len(paths)-1]
 			parentDir := filepath.Dir(lastPath)
 			for parentDir != "/" && parentDir != "." && parentDir != "" {
-				logrus.Debugf("📦 Adding parent directory: %s", parentDir)
+				logrus.Debugf("Adding parent directory: %s", parentDir)
 				paths = append(paths, parentDir)
 				parentDir = filepath.Dir(parentDir)
 			}

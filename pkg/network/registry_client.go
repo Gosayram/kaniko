@@ -117,20 +117,20 @@ func NewRegistryClient(config *RegistryClientConfig, pool *ConnectionPool) *Regi
 		client.manifestCache = NewManifestCache(config.ManifestCacheTimeout)
 	}
 
-	logrus.Info("🏗️ Registry client initialized with optimizations")
+	logrus.Info("Registry client initialized with optimizations")
 	return client
 }
 
 // PullImage pulls an image from registry with optimizations
 func (rc *RegistryClient) PullImage(_ context.Context, ref name.Reference, options ...remote.Option) (v1.Image, error) {
 	start := time.Now()
-	logrus.Infof("🏗️ Pulling image: %s", ref.String())
+	logrus.Infof("Pulling image: %s", ref.String())
 
 	// Check manifest cache first
 	if rc.manifestCache != nil {
 		if cachedImage := rc.manifestCache.Get(ref.String()); cachedImage != nil {
 			rc.recordCacheHit()
-			logrus.Debugf("🏗️ Manifest cache hit for %s", ref.String())
+			logrus.Debugf("Manifest cache hit for %s", ref.String())
 			return cachedImage, nil
 		}
 		rc.recordCacheMiss()
@@ -153,7 +153,7 @@ func (rc *RegistryClient) PullImage(_ context.Context, ref name.Reference, optio
 
 	// Update statistics
 	rc.updateStats(time.Since(start), 0, true)
-	logrus.Infof("🏗️ Successfully pulled image: %s (%v)", ref.String(), time.Since(start))
+	logrus.Infof("Successfully pulled image: %s (%v)", ref.String(), time.Since(start))
 
 	return image, nil
 }
@@ -165,7 +165,7 @@ func (rc *RegistryClient) PullImageParallel(ctx context.Context, refs []name.Ref
 		return nil, fmt.Errorf("no references provided")
 	}
 
-	logrus.Infof("🏗️ Pulling %d images in parallel", len(refs))
+	logrus.Infof("Pulling %d images in parallel", len(refs))
 	start := time.Now()
 
 	// Create parallel requests
@@ -194,12 +194,12 @@ func (rc *RegistryClient) PullImageParallel(ctx context.Context, refs []name.Ref
 
 	for i, response := range responses {
 		if response.Error != nil {
-			logrus.Warnf("🏗️ Failed to pull image %s: %v", refs[i].String(), response.Error)
+			logrus.Warnf("Failed to pull image %s: %v", refs[i].String(), response.Error)
 			continue
 		}
 
 		if response.StatusCode != http.StatusOK {
-			logrus.Warnf("🏗️ Unexpected status code %d for %s", response.StatusCode, refs[i].String())
+			logrus.Warnf("Unexpected status code %d for %s", response.StatusCode, refs[i].String())
 			continue
 		}
 
@@ -211,7 +211,7 @@ func (rc *RegistryClient) PullImageParallel(ctx context.Context, refs []name.Ref
 	}
 
 	totalTime := time.Since(start)
-	logrus.Infof("🏗️ Parallel pull completed: %d/%d successful (%v)", successCount, len(refs), totalTime)
+	logrus.Infof("Parallel pull completed: %d/%d successful (%v)", successCount, len(refs), totalTime)
 
 	return images, nil
 }
@@ -220,7 +220,7 @@ func (rc *RegistryClient) PullImageParallel(ctx context.Context, refs []name.Ref
 func (rc *RegistryClient) PushImage(_ context.Context, ref name.Reference, image v1.Image,
 	options ...remote.Option) error {
 	start := time.Now()
-	logrus.Infof("🏗️ Pushing image: %s", ref.String())
+	logrus.Infof("Pushing image: %s", ref.String())
 
 	// Create optimized remote options
 	remoteOptions := rc.createRemoteOptions(options...)
@@ -233,7 +233,7 @@ func (rc *RegistryClient) PushImage(_ context.Context, ref name.Reference, image
 
 	// Update statistics
 	rc.updateStats(time.Since(start), 0, true)
-	logrus.Infof("🏗️ Successfully pushed image: %s (%v)", ref.String(), time.Since(start))
+	logrus.Infof("Successfully pushed image: %s (%v)", ref.String(), time.Since(start))
 
 	return nil
 }
@@ -298,7 +298,7 @@ func (rc *RegistryClient) GetStats() *RegistryClientStats {
 func (rc *RegistryClient) LogStats() {
 	stats := rc.GetStats()
 
-	logrus.Infof("🏗️ Registry Client Statistics:")
+	logrus.Infof("Registry Client Statistics:")
 	logrus.Infof("   Total Requests: %d", stats.TotalRequests)
 	logrus.Infof("   Manifest Requests: %d", stats.ManifestRequests)
 	logrus.Infof("   Layer Requests: %d", stats.LayerRequests)
@@ -314,13 +314,13 @@ func (rc *RegistryClient) LogStats() {
 
 // Close closes the registry client and cleans up resources
 func (rc *RegistryClient) Close() error {
-	logrus.Info("🏗️ Closing registry client")
+	logrus.Info("Closing registry client")
 
 	// Close manifest cache if enabled
 	if rc.manifestCache != nil {
 		rc.manifestCache.Close()
 	}
 
-	logrus.Info("✅ Registry client closed successfully")
+	logrus.Info("Registry client closed successfully")
 	return nil
 }

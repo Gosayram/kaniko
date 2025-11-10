@@ -294,7 +294,7 @@ func TestPrepareWritableOverlayForSystemDirs(t *testing.T) {
 	if writeErr := os.WriteFile(testWriteFile, []byte("test"), 0o600); writeErr != nil {
 		t.Errorf("Directory %s is still not writable: %v", sysDir, writeErr)
 	} else {
-		t.Logf("✅ Directory %s is now writable", sysDir)
+		t.Logf("Directory %s is now writable", sysDir)
 	}
 }
 
@@ -325,7 +325,7 @@ func TestParsePermissionErrorAndFix(t *testing.T) {
 	if len(fixedDirs) == 0 {
 		t.Errorf("Expected to fix at least one directory, got none")
 	} else {
-		t.Logf("✅ Fixed %d directories: %v", len(fixedDirs), fixedDirs)
+		t.Logf("Fixed %d directories: %v", len(fixedDirs), fixedDirs)
 
 		// Verify parent directory is now writable
 		testFile := filepath.Join(parentDir, "test-file")

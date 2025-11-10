@@ -25,9 +25,9 @@ import (
 
 // Status constants
 const (
-	StatusCompleted = "✅ completed"
-	StatusFailed    = "❌ failed"
-	StatusSuccess   = "✅ success"
+	StatusCompleted = "completed"
+	StatusFailed    = "failed"
+	StatusSuccess   = "success"
 )
 
 // GlobalManager provides global access to structured logging across Kaniko
@@ -73,7 +73,7 @@ func (gm *GlobalManager) Initialize(level, format string, enableStructured bool)
 	}
 
 	gm.initialized = true
-	logrus.Info("📊 Global logging manager initialized")
+	logrus.Info("Global logging manager initialized")
 	return nil
 }
 
@@ -96,7 +96,7 @@ func (gm *GlobalManager) LogBuildStart(buildID, dockerfilePath string, stages in
 	if gm.IsInitialized() {
 		gm.integrationManager.LogBuildStart(buildID, dockerfilePath, stages)
 	} else {
-		logrus.Infof("🚀 Starting build %s with %d stages", buildID, stages)
+		logrus.Infof("Starting build %s with %d stages", buildID, stages)
 	}
 }
 
@@ -110,7 +110,7 @@ func (gm *GlobalManager) LogBuildComplete(buildID string, duration int64, succes
 		if !success {
 			status = StatusFailed
 		}
-		logrus.Infof("🏁 Build %s %s in %dms", buildID, status, duration)
+		logrus.Infof("Build %s %s in %dms", buildID, status, duration)
 	}
 }
 
@@ -119,7 +119,7 @@ func (gm *GlobalManager) LogStageStart(stageIndex int, stageName, baseImage stri
 	if gm.IsInitialized() {
 		gm.integrationManager.LogStageStart(stageIndex, stageName, baseImage)
 	} else {
-		logrus.Infof("🏗️ Building stage %d: %s (base: %s)", stageIndex, stageName, baseImage)
+		logrus.Infof("Building stage %d: %s (base: %s)", stageIndex, stageName, baseImage)
 	}
 }
 
@@ -133,7 +133,7 @@ func (gm *GlobalManager) LogStageComplete(stageIndex int, stageName string, dura
 		if !success {
 			status = StatusFailed
 		}
-		logrus.Infof("🏁 Stage %d (%s) %s in %dms", stageIndex, stageName, status, duration)
+		logrus.Infof("Stage %d (%s) %s in %dms", stageIndex, stageName, status, duration)
 	}
 }
 
@@ -142,7 +142,7 @@ func (gm *GlobalManager) LogCommandStart(commandIndex int, command, stageName st
 	if gm.IsInitialized() {
 		gm.integrationManager.LogCommandStart(commandIndex, command, stageName)
 	} else {
-		logrus.Infof("🔄 Executing command %d: %s", commandIndex, command)
+		logrus.Infof("Executing command %d: %s", commandIndex, command)
 	}
 }
 
@@ -156,7 +156,7 @@ func (gm *GlobalManager) LogCommandComplete(commandIndex int, command string, du
 		if !success {
 			status = StatusFailed
 		}
-		logrus.Infof("🏁 Command %d %s in %dms", commandIndex, status, duration)
+		logrus.Infof("Command %d %s in %dms", commandIndex, status, duration)
 	}
 }
 
@@ -170,7 +170,7 @@ func (gm *GlobalManager) LogCacheOperation(operation, key string, hit bool, dura
 		if !hit {
 			status = "miss"
 		}
-		logrus.Debugf("💾 Cache %s: %s (%s) in %dms", operation, key, status, duration)
+		logrus.Debugf("Cache %s: %s (%s) in %dms", operation, key, status, duration)
 	}
 }
 
@@ -184,7 +184,7 @@ func (gm *GlobalManager) LogNetworkOperation(operation, url string, statusCode i
 		if !success {
 			status = StatusFailed
 		}
-		logrus.Debugf("🌐 Network %s: %s (%d) %s in %dms", operation, url, statusCode, status, duration)
+		logrus.Debugf("Network %s: %s (%d) %s in %dms", operation, url, statusCode, status, duration)
 	}
 }
 
@@ -198,7 +198,7 @@ func (gm *GlobalManager) LogSnapshotOperation(operation string, files int, durat
 		if !success {
 			status = StatusFailed
 		}
-		logrus.Debugf("📸 Snapshot %s: %d files %s in %dms", operation, files, status, duration)
+		logrus.Debugf("Snapshot %s: %d files %s in %dms", operation, files, status, duration)
 	}
 }
 
@@ -207,7 +207,7 @@ func (gm *GlobalManager) LogError(component, operation string, err error, contex
 	if gm.IsInitialized() {
 		gm.integrationManager.LogError(component, operation, err, context)
 	} else {
-		logrus.Errorf("❌ %s %s failed: %v", component, operation, err)
+		logrus.Errorf("%s %s failed: %v", component, operation, err)
 	}
 }
 
@@ -216,7 +216,7 @@ func (gm *GlobalManager) LogPerformance(component, metric string, value float64,
 	if gm.IsInitialized() {
 		gm.integrationManager.LogPerformance(component, metric, value, unit)
 	} else {
-		logrus.Debugf("📊 %s %s: %.2f %s", component, metric, value, unit)
+		logrus.Debugf("%s %s: %.2f %s", component, metric, value, unit)
 	}
 }
 
@@ -237,5 +237,5 @@ func (gm *GlobalManager) Close() {
 	}
 
 	gm.initialized = false
-	logrus.Info("📊 Global logging manager closed")
+	logrus.Info("Global logging manager closed")
 }

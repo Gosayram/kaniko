@@ -219,7 +219,7 @@ func initializeResourceLimits(opts *config.KanikoOptions) *util.ResourceLimits {
 	// Start monitoring if enabled
 	if opts.MemoryMonitoring {
 		resourceLimits.StartMonitoring()
-		logrus.Info("🛡️ Resource monitoring enabled for this build")
+		logrus.Info("Resource monitoring enabled for this build")
 	}
 
 	return resourceLimits
@@ -1545,7 +1545,7 @@ func getFilesFromStage(
 		}
 		stageSnapshot.ExtractDir = extractDir
 		stageSnapshot.Extracted = true
-		logrus.Infof("📦 Extracted stage image to %s", extractDir)
+		logrus.Infof("Extracted stage image to %s", extractDir)
 	}
 
 	// Find files in the extracted directory
@@ -1703,7 +1703,7 @@ func filesToSaveWithArgs(deps []string, buildArgs *dockerfile.BuildArgs) []strin
 // searching from the specified root directory. This is critical for finding files in extracted image layers.
 func filesToSaveWithArgsFromRoot(deps []string, buildArgs *dockerfile.BuildArgs, searchRoot string) []string {
 	srcFiles := []string{}
-	logrus.Infof("🔍 Searching for cross-stage dependencies in root: %s", searchRoot)
+	logrus.Infof("Searching for cross-stage dependencies in root: %s", searchRoot)
 	logrus.Infof("   Patterns to search: %v", deps)
 
 	// First, verify that searchRoot exists and is accessible
@@ -1720,7 +1720,7 @@ func filesToSaveWithArgsFromRoot(deps []string, buildArgs *dockerfile.BuildArgs,
 		// If src starts with /, we need to remove it before joining
 		cleanSrc := strings.TrimPrefix(src, "/")
 		searchPath := filepath.Join(searchRoot, cleanSrc)
-		logrus.Infof("🔍 Searching for file: %s (original: %s, clean: %s, root: %s)", searchPath, src, cleanSrc, searchRoot)
+		logrus.Infof("Searching for file: %s (original: %s, clean: %s, root: %s)", searchPath, src, cleanSrc, searchRoot)
 
 		files, err := findFilesForDependencyWithArgsFromRoot(searchPath, buildArgs, searchRoot)
 		if err != nil {
@@ -1742,7 +1742,7 @@ func findFilesForDependencyWithArgsFromRoot(
 	buildArgs *dockerfile.BuildArgs,
 	searchRoot string,
 ) ([]string, error) {
-	logrus.Debugf("🔍 Searching for files: %s (root: %s)", searchPath, searchRoot)
+	logrus.Debugf("Searching for files: %s (root: %s)", searchPath, searchRoot)
 
 	// CRITICAL FIX: Handle variable substitution in paths using build args
 	// For example: /app/apps/${APP_TYPE}/.output should be resolved to /app/apps/webview/.output
@@ -1765,7 +1765,7 @@ func findFilesForDependencyWithArgsFromRoot(
 	parentDir := filepath.Dir(searchPath)
 	parentInfo, parentErr := os.Stat(parentDir)
 	if parentErr == nil {
-		logrus.Infof("   ℹ️ Parent directory exists: %s (dir: %v)", parentDir, parentInfo.IsDir())
+		logrus.Infof("   Parent directory exists: %s (dir: %v)", parentDir, parentInfo.IsDir())
 		// List contents of parent directory for debugging
 		entries, listErr := os.ReadDir(parentDir)
 		if listErr == nil {
@@ -1853,7 +1853,7 @@ func processExistingPathFromRoot(searchPath string, info os.FileInfo, searchRoot
 	relPath := calculateRelativePath(searchPath, searchRoot)
 	if relPath != "" {
 		srcFiles = append(srcFiles, relPath)
-		logrus.Infof("   📁 Added file to cross-stage dependencies: %s "+
+		logrus.Infof("   Added file to cross-stage dependencies: %s "+
 			"(absolute: %s, root: %s)", relPath, searchPath, searchRoot)
 	} else {
 		logrus.Warnf("    Failed to calculate relative path from %s to %s",
@@ -1876,7 +1876,7 @@ func walkDirectoryFromRoot(searchPath, searchRoot string) ([]string, error) {
 			relPath := calculateRelativePath(path, searchRoot)
 			if relPath != "" {
 				srcFiles = append(srcFiles, relPath)
-				logrus.Debugf("📁 Added file to cross-stage dependencies: %s (from root: %s)", relPath, searchRoot)
+				logrus.Debugf("Added file to cross-stage dependencies: %s (from root: %s)", relPath, searchRoot)
 			}
 		}
 		return nil
@@ -1893,7 +1893,7 @@ func walkDirectoryFromRoot(searchPath, searchRoot string) ([]string, error) {
 func findSimilarPathsFromRoot(searchPath, searchRoot string) ([]string, error) {
 	var srcFiles []string
 
-	logrus.Debugf("🔍 Path %s does not exist, trying to find similar paths (root: %s)", searchPath, searchRoot)
+	logrus.Debugf("Path %s does not exist, trying to find similar paths (root: %s)", searchPath, searchRoot)
 
 	// Try to find build output directories dynamically
 	buildOutputFiles := findBuildOutputDirectoriesFromRoot(searchPath, searchRoot)
@@ -1925,7 +1925,7 @@ func findBuildOutputDirectoriesFromRoot(searchPath, searchRoot string) []string 
 
 	if parentDir != "/" && parentDir != "." {
 		if parentInfo, err := os.Stat(parentDir); err == nil && parentInfo.IsDir() {
-			logrus.Debugf("🔍 Searching for build output patterns in: %s", parentDir)
+			logrus.Debugf("Searching for build output patterns in: %s", parentDir)
 
 			err := filepath.Walk(parentDir, func(path string, info os.FileInfo, err error) error {
 				if err != nil {
@@ -1964,7 +1964,7 @@ func processMatchingFile(path string, info os.FileInfo, searchRoot string, srcFi
 	relPath := calculateRelativePath(path, searchRoot)
 	if relPath != "" {
 		srcFiles = append(srcFiles, relPath)
-		logrus.Debugf("📁 Found matching file: %s (from root: %s)", relPath, searchRoot)
+		logrus.Debugf("Found matching file: %s (from root: %s)", relPath, searchRoot)
 	}
 	return srcFiles
 }
@@ -1979,7 +1979,7 @@ func matchPattern(path, baseName string) bool {
 func walkPatternDirectory(parentDir, baseName, searchRoot string) []string {
 	var srcFiles []string
 
-	logrus.Debugf("🔍 Searching in parent directory: %s for pattern: %s (root: %s)",
+	logrus.Debugf("Searching in parent directory: %s for pattern: %s (root: %s)",
 		parentDir, baseName, searchRoot)
 
 	// Search for files matching the base name pattern
@@ -2028,7 +2028,7 @@ func processGlobSymlink(src, searchRoot string, srcFiles []string) []string {
 	linkRelPath := calculateRelativePath(link, searchRoot)
 	if linkRelPath != "" {
 		srcFiles = append(srcFiles, linkRelPath)
-		logrus.Debugf("📁 Found symlink target via glob: %s (from root: %s)", linkRelPath, searchRoot)
+		logrus.Debugf("Found symlink target via glob: %s (from root: %s)", linkRelPath, searchRoot)
 	}
 	return srcFiles
 }
@@ -2038,7 +2038,7 @@ func processGlobFile(src, searchRoot string, srcFiles []string) []string {
 	relPath := calculateRelativePath(src, searchRoot)
 	if relPath != "" {
 		srcFiles = append(srcFiles, relPath)
-		logrus.Debugf("📁 Found file via glob: %s (from root: %s)", relPath, searchRoot)
+		logrus.Debugf("Found file via glob: %s (from root: %s)", relPath, searchRoot)
 	}
 	return srcFiles
 }
@@ -2263,10 +2263,13 @@ func fetchExtraStagesParallel(extraStages []string, opts *config.KanikoOptions) 
 		}(stageName)
 	}
 
-	// Wait for all goroutines to complete
+	// Wait for all goroutines to complete and close error channel
+	// Use a separate goroutine to close the channel after all workers finish
+	done := make(chan struct{})
 	go func() {
 		wg.Wait()
 		close(errChan)
+		close(done)
 	}()
 
 	// Collect any errors
@@ -2274,6 +2277,9 @@ func fetchExtraStagesParallel(extraStages []string, opts *config.KanikoOptions) 
 	for err := range errChan {
 		errs = append(errs, err)
 	}
+
+	// Ensure the close goroutine has finished
+	<-done
 
 	if len(errs) > 0 {
 		return errs[0] // Return the first error
@@ -2420,7 +2426,7 @@ func optimizeForNoCache(opts *config.KanikoOptions) {
 	}
 
 	// 2. Enable comprehensive file processing for cross-stage dependencies
-	logrus.Info("🔍 Enabled comprehensive file processing for cross-stage dependencies")
+	logrus.Info("Enabled comprehensive file processing for cross-stage dependencies")
 
 	// 2. Removed: parallel execution is no longer supported
 	// Sequential execution is the default and only mode
@@ -2429,7 +2435,7 @@ func optimizeForNoCache(opts *config.KanikoOptions) {
 	// 4. Optimize snapshot mode for better performance
 	if opts.SnapshotMode == "" {
 		opts.SnapshotMode = SnapshotModeTime // Faster for large projects
-		logrus.Info("⏱️ Set snapshot mode to 'time' for faster no-cache builds")
+		logrus.Info("Set snapshot mode to 'time' for faster no-cache builds")
 	}
 
 	// 5. Set reasonable memory limits if not configured
@@ -2441,13 +2447,13 @@ func optimizeForNoCache(opts *config.KanikoOptions) {
 	// 6. Enable memory monitoring for better resource management
 	if !opts.MemoryMonitoring {
 		opts.MemoryMonitoring = true
-		logrus.Info("📊 Enabled memory monitoring for no-cache build")
+		logrus.Info("Enabled memory monitoring for no-cache build")
 	}
 
 	// 7. Set garbage collection threshold for better memory management
 	if opts.GCThreshold == 0 {
 		opts.GCThreshold = 80
-		logrus.Info("🗑️ Set GC threshold to 80% for no-cache build")
+		logrus.Info("Set GC threshold to 80% for no-cache build")
 	}
 
 	// 8. Increase command timeout for slower operations without cache
@@ -2465,12 +2471,12 @@ func optimizeForNoCache(opts *config.KanikoOptions) {
 	// 10. Set reasonable file size limits
 	if opts.MaxFileSizeBytes == 0 {
 		opts.MaxFileSizeBytes = MaxFileSizeBytes
-		logrus.Info("📁 Set max file size to 500MB for no-cache build")
+		logrus.Info("Set max file size to 500MB for no-cache build")
 	}
 
 	if opts.MaxTotalFileSizeBytes == 0 {
 		opts.MaxTotalFileSizeBytes = MaxTotalFileSizeBytes
-		logrus.Info("📦 Set max total file size to 10GB for no-cache build")
+		logrus.Info("Set max total file size to 10GB for no-cache build")
 	}
 
 	logrus.Info("No-cache optimizations applied successfully")
@@ -2478,18 +2484,18 @@ func optimizeForNoCache(opts *config.KanikoOptions) {
 
 // optimizePerformance applies additional performance optimizations
 func optimizePerformance(opts *config.KanikoOptions) {
-	logrus.Info("⚡ Applying performance optimizations")
+	logrus.Info("Applying performance optimizations")
 
 	// 1. Optimize compression for better speed/size balance
 	if opts.Compression == "" {
 		opts.Compression = CompressionZstd
-		logrus.Info("🗜️ Set compression to zstd for better performance")
+		logrus.Info("Set compression to zstd for better performance")
 	}
 
 	// 2. Set optimal compression level
 	if opts.CompressionLevel == 0 {
 		opts.CompressionLevel = 3 // Good balance between speed and compression
-		logrus.Info("📊 Set compression level to 3 for optimal performance")
+		logrus.Info("Set compression level to 3 for optimal performance")
 	}
 
 	// 3. Enable compressed caching for better layer handling
@@ -2501,13 +2507,13 @@ func optimizePerformance(opts *config.KanikoOptions) {
 	// 4. Set monitoring interval for better resource tracking
 	if opts.MonitoringInterval == 0 {
 		opts.MonitoringInterval = 5 // 5 seconds
-		logrus.Info("⏱️ Set monitoring interval to 5 seconds for better resource tracking")
+		logrus.Info("Set monitoring interval to 5 seconds for better resource tracking")
 	}
 
 	// 5. Enable integrity check for better reliability
 	if !opts.IntegrityCheck {
 		opts.IntegrityCheck = true
-		logrus.Info("🔒 Enabled integrity check for better reliability")
+		logrus.Info("Enabled integrity check for better reliability")
 	}
 
 	// 6. Set reasonable max expected changes
@@ -2519,7 +2525,7 @@ func optimizePerformance(opts *config.KanikoOptions) {
 	// 7. Enable full scan backup for safety
 	if !opts.FullScanBackup {
 		opts.FullScanBackup = true
-		logrus.Info("🛡️ Enabled full scan backup for safety")
+		logrus.Info("Enabled full scan backup for safety")
 	}
 
 	logrus.Info("Performance optimizations applied successfully")
@@ -2527,7 +2533,7 @@ func optimizePerformance(opts *config.KanikoOptions) {
 
 // optimizeNetwork applies network optimizations for better stability
 func optimizeNetwork(opts *config.KanikoOptions) {
-	logrus.Info("🌐 Applying network optimizations")
+	logrus.Info("Applying network optimizations")
 
 	// 1. Set reasonable push retry settings
 	if opts.PushRetry == 0 {
@@ -2538,7 +2544,7 @@ func optimizeNetwork(opts *config.KanikoOptions) {
 	// 2. Set initial delay for retries
 	if opts.PushRetryInitialDelay == 0 {
 		opts.PushRetryInitialDelay = 1000 // 1 second
-		logrus.Info("⏱️ Set push retry initial delay to 1 second")
+		logrus.Info("Set push retry initial delay to 1 second")
 	}
 
 	// 3. Set max delay for retries
@@ -2556,13 +2562,13 @@ func optimizeNetwork(opts *config.KanikoOptions) {
 	// 5. Set image download retry
 	if opts.ImageDownloadRetry == 0 {
 		opts.ImageDownloadRetry = 3
-		logrus.Info("⬇️ Set image download retry to 3")
+		logrus.Info("Set image download retry to 3")
 	}
 
 	// 6. Enable push ignore immutable tag errors for better compatibility
 	if !opts.PushIgnoreImmutableTagErrors {
 		opts.PushIgnoreImmutableTagErrors = true
-		logrus.Info("🏷️ Enabled push ignore immutable tag errors for better compatibility")
+		logrus.Info("Enabled push ignore immutable tag errors for better compatibility")
 	}
 
 	logrus.Info("Network optimizations applied successfully")
@@ -2570,7 +2576,7 @@ func optimizeNetwork(opts *config.KanikoOptions) {
 
 // initializeNetworkManager initializes the advanced network manager
 func initializeNetworkManager(_ *config.KanikoOptions) *network.Manager {
-	logrus.Info("🌐 Initializing advanced network manager")
+	logrus.Info("Initializing advanced network manager")
 
 	// Create optimized network manager configuration
 	networkConfig := &network.ManagerConfig{
@@ -2613,12 +2619,12 @@ func initializeNetworkManager(_ *config.KanikoOptions) *network.Manager {
 
 // optimizeFilesystem applies filesystem optimizations for better performance
 func optimizeFilesystem(opts *config.KanikoOptions) {
-	logrus.Info("📁 Applying filesystem optimizations")
+	logrus.Info("Applying filesystem optimizations")
 
 	// 1. Optimize snapshot mode for better performance
 	if opts.SnapshotMode == "" {
 		opts.SnapshotMode = SnapshotModeTime // Faster for most use cases
-		logrus.Info("⏱️ Set snapshot mode to 'time' for faster filesystem operations")
+		logrus.Info("Set snapshot mode to 'time' for faster filesystem operations")
 	}
 
 	// 2. Enable incremental snapshots for better performance (only when cache is not used)
@@ -2630,30 +2636,30 @@ func optimizeFilesystem(opts *config.KanikoOptions) {
 	// 3. Set reasonable max expected changes for integrity checking
 	if opts.MaxExpectedChanges == 0 {
 		opts.MaxExpectedChanges = 5000 // Good balance for most projects
-		logrus.Info("📊 Set max expected changes to 5000 for better integrity checking")
+		logrus.Info("Set max expected changes to 5000 for better integrity checking")
 	}
 
 	// 4. Enable integrity check for better reliability
 	if !opts.IntegrityCheck {
 		opts.IntegrityCheck = true
-		logrus.Info("🔒 Enabled integrity check for better filesystem reliability")
+		logrus.Info("Enabled integrity check for better filesystem reliability")
 	}
 
 	// 5. Enable full scan backup for safety
 	if !opts.FullScanBackup {
 		opts.FullScanBackup = true
-		logrus.Info("🛡️ Enabled full scan backup for filesystem safety")
+		logrus.Info("Enabled full scan backup for filesystem safety")
 	}
 
 	// 6. Set reasonable file size limits
 	if opts.MaxFileSizeBytes == 0 {
 		opts.MaxFileSizeBytes = MaxFileSizeBytes
-		logrus.Info("📁 Set max file size to 500MB for filesystem operations")
+		logrus.Info("Set max file size to 500MB for filesystem operations")
 	}
 
 	if opts.MaxTotalFileSizeBytes == 0 {
 		opts.MaxTotalFileSizeBytes = MaxTotalFileSizeBytes
-		logrus.Info("📦 Set max total file size to 10GB for filesystem operations")
+		logrus.Info("Set max total file size to 10GB for filesystem operations")
 	}
 
 	// 7. Enable compressed caching for better layer handling
@@ -2665,12 +2671,12 @@ func optimizeFilesystem(opts *config.KanikoOptions) {
 	// 8. Set optimal compression for filesystem operations
 	if opts.Compression == "" {
 		opts.Compression = CompressionZstd
-		logrus.Info("🗜️ Set compression to zstd for better filesystem performance")
+		logrus.Info("Set compression to zstd for better filesystem performance")
 	}
 
 	if opts.CompressionLevel == 0 {
 		opts.CompressionLevel = 3 // Good balance between speed and compression
-		logrus.Info("📊 Set compression level to 3 for optimal filesystem performance")
+		logrus.Info("Set compression level to 3 for optimal filesystem performance")
 	}
 
 	logrus.Info("Filesystem optimizations applied successfully")
@@ -2682,7 +2688,7 @@ func applyComprehensiveOptimizations(opts *config.KanikoOptions) {
 
 	// 1. Apply no-cache optimizations first (foundation) - only when cache is not used
 	if !opts.Cache {
-		logrus.Info("📦 Cache not enabled - applying no-cache optimizations for better performance")
+		logrus.Info("Cache not enabled - applying no-cache optimizations for better performance")
 		optimizeForNoCache(opts)
 	} else {
 		logrus.Info("Cache enabled - skipping no-cache optimizations")
@@ -2708,7 +2714,7 @@ func applyComprehensiveOptimizations(opts *config.KanikoOptions) {
 
 // validateOptimizations validates that all optimizations are properly configured
 func validateOptimizations(opts *config.KanikoOptions) {
-	logrus.Info("🔍 Validating optimization configuration")
+	logrus.Info("Validating optimization configuration")
 
 	// Validate no-cache optimizations
 	if !opts.Cache {

@@ -145,7 +145,7 @@ func NewOptimizedSafeSnapshotOptimizer(
 	optimizer.integrityChecker = NewIncrementalIntegrityChecker(opts.MaxExpectedChanges)
 	optimizer.symlinkResolver = NewSafeSymlinkResolver()
 
-	logrus.Info("🚀 Optimized safe snapshot optimizer initialized with LRU cache and adaptive worker pool")
+	logrus.Info("Optimized safe snapshot optimizer initialized with LRU cache and adaptive worker pool")
 	return optimizer
 }
 
@@ -193,16 +193,16 @@ func (osso *OptimizedSafeSnapshotOptimizer) OptimizedWalkFS(
 		osso.updateStats(time.Since(start))
 	}()
 
-	logrus.Debugf("🚀 Starting optimized filesystem walk for %s", dir)
+	logrus.Debugf("Starting optimized filesystem walk for %s", dir)
 
 	// 1. Check if incremental scan is possible
 	if osso.canPerformIncrementalScan(dir) {
-		logrus.Debugf("🔄 Performing incremental scan for %s", dir)
+		logrus.Debugf("Performing incremental scan for %s", dir)
 		return osso.incrementalScan(dir, existingPaths)
 	}
 
 	// 2. Perform full optimized scan
-	logrus.Debugf("🔍 Performing full optimized scan for %s", dir)
+	logrus.Debugf("Performing full optimized scan for %s", dir)
 	return osso.fullOptimizedScan(dir, existingPaths)
 }
 
@@ -286,7 +286,7 @@ func (osso *OptimizedSafeSnapshotOptimizer) fullOptimizedScan(
 	// Incremental integrity check
 	if osso.enableIntegrity {
 		if osso.integrityChecker.NeedsIncrementalCheck(changedFiles) {
-			logrus.Debugf("🔄 Performing incremental integrity check")
+			logrus.Debugf("Performing incremental integrity check")
 			osso.integrityChecker.PerformIncrementalCheck(changedFiles)
 		}
 	}
@@ -295,7 +295,7 @@ func (osso *OptimizedSafeSnapshotOptimizer) fullOptimizedScan(
 	var resolvedFiles []string
 	resolvedFiles, err = osso.symlinkResolver.SafeResolveSymlinks(changedFiles)
 	if err != nil {
-		logrus.Warnf("⚠️ Symlink resolution failed: %v, continuing with original paths", err)
+		logrus.Warnf("Symlink resolution failed: %v, continuing with original paths", err)
 		resolvedFiles = changedFiles
 	}
 
@@ -436,7 +436,7 @@ func (iic *IncrementalIntegrityChecker) PerformIncrementalCheck(files []string) 
 	iic.lastCheckTime = time.Now()
 	iic.statsMutex.Unlock()
 
-	logrus.Debugf("🔍 Performing incremental integrity check on %d files", len(files))
+	logrus.Debugf("Performing incremental integrity check on %d files", len(files))
 }
 
 // Statistics methods
@@ -513,7 +513,7 @@ func (osso *OptimizedSafeSnapshotOptimizer) LogStatistics() {
 	cacheStats := osso.lruCache.GetStats()
 	workerStats := osso.workerPool.GetStats()
 
-	logrus.Infof("🚀 Optimized Safe Snapshot Statistics:")
+	logrus.Infof("Optimized Safe Snapshot Statistics:")
 	logrus.Infof("   Total Snapshots: %d (Incremental: %d, Full: %d)",
 		stats.TotalSnapshots, stats.IncrementalSnapshots, stats.FullSnapshots)
 	logrus.Infof("   Average Time: %v", stats.AverageTime)

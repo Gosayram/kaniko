@@ -71,7 +71,7 @@ func NewDNSCache(timeout time.Duration) *DNSCache {
 	// Start cleanup goroutine
 	go cache.cleanup()
 
-	logrus.Info("🌐 DNS cache initialized")
+	logrus.Info("DNS cache initialized")
 	return cache
 }
 
@@ -84,13 +84,13 @@ func (dc *DNSCache) LookupIP(ctx context.Context, host string) ([]net.IP, error)
 
 	if exists && !entry.IsExpired() {
 		dc.recordHit()
-		logrus.Debugf("🌐 DNS cache hit for %s", host)
+		logrus.Debugf("DNS cache hit for %s", host)
 		return entry.Addresses, nil
 	}
 
 	// Cache miss - perform actual lookup
 	dc.recordMiss()
-	logrus.Debugf("🌐 DNS cache miss for %s, performing lookup", host)
+	logrus.Debugf("DNS cache miss for %s, performing lookup", host)
 
 	// Perform DNS lookup
 	addresses, err := net.DefaultResolver.LookupIPAddr(ctx, host)
@@ -113,7 +113,7 @@ func (dc *DNSCache) LookupIP(ctx context.Context, host string) ([]net.IP, error)
 	}
 	dc.mutex.Unlock()
 
-	logrus.Debugf("🌐 DNS lookup completed for %s, cached %d addresses", host, len(ips))
+	logrus.Debugf("DNS lookup completed for %s, cached %d addresses", host, len(ips))
 	return ips, nil
 }
 
@@ -136,7 +136,7 @@ func (dc *DNSCache) Invalidate(host string) {
 	defer dc.mutex.Unlock()
 
 	delete(dc.cache, host)
-	logrus.Debugf("🌐 DNS cache invalidated for %s", host)
+	logrus.Debugf("DNS cache invalidated for %s", host)
 }
 
 // Clear removes all entries from the cache
@@ -145,7 +145,7 @@ func (dc *DNSCache) Clear() {
 	defer dc.mutex.Unlock()
 
 	dc.cache = make(map[string]*DNSCacheEntry)
-	logrus.Info("🌐 DNS cache cleared")
+	logrus.Info("DNS cache cleared")
 }
 
 // GetStats returns DNS cache statistics
@@ -211,21 +211,21 @@ func (dc *DNSCache) cleanupExpired() {
 	}
 
 	if expiredCount > 0 {
-		logrus.Debugf("🌐 DNS cache cleanup: removed %d expired entries", expiredCount)
+		logrus.Debugf("DNS cache cleanup: removed %d expired entries", expiredCount)
 	}
 }
 
 // Close closes the DNS cache and stops cleanup goroutine
 func (dc *DNSCache) Close() {
 	close(dc.stopChan)
-	logrus.Info("🌐 DNS cache closed")
+	logrus.Info("DNS cache closed")
 }
 
 // LogStats logs DNS cache statistics
 func (dc *DNSCache) LogStats() {
 	stats := dc.GetStats()
 
-	logrus.Infof("🌐 DNS Cache Statistics:")
+	logrus.Infof("DNS Cache Statistics:")
 	logrus.Infof("   Hits: %d, Misses: %d", stats.Hits, stats.Misses)
 	logrus.Infof("   Evictions: %d", stats.Evictions)
 	logrus.Infof("   Total Size: %d entries", stats.TotalSize)

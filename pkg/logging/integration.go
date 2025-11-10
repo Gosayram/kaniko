@@ -44,19 +44,19 @@ func NewIntegrationManager() *IntegrationManager {
 // EnableStructuredLogging enables structured logging for Kaniko components
 func (im *IntegrationManager) EnableStructuredLogging() {
 	im.enabled = true
-	logrus.Info("📊 Structured logging enabled for Kaniko components")
+	logrus.Info("Structured logging enabled for Kaniko components")
 }
 
 // DisableStructuredLogging disables structured logging
 func (im *IntegrationManager) DisableStructuredLogging() {
 	im.enabled = false
-	logrus.Info("📊 Structured logging disabled")
+	logrus.Info("Structured logging disabled")
 }
 
 // LogBuildStart logs the start of a build process
 func (im *IntegrationManager) LogBuildStart(buildID, dockerfilePath string, stages int) {
 	if !im.enabled {
-		logrus.Infof("🚀 Starting build %s with %d stages", buildID, stages)
+		logrus.Infof("Starting build %s with %d stages", buildID, stages)
 		return
 	}
 
@@ -77,7 +77,7 @@ func (im *IntegrationManager) LogBuildComplete(buildID string, duration time.Dur
 		if !success {
 			status = StatusFailed
 		}
-		logrus.Infof("🏁 Build %s %s in %v", buildID, status, duration)
+		logrus.Infof("Build %s %s in %v", buildID, status, duration)
 		return
 	}
 
@@ -108,7 +108,7 @@ func (im *IntegrationManager) LogBuildComplete(buildID string, duration time.Dur
 // LogStageStart logs the start of a build stage
 func (im *IntegrationManager) LogStageStart(stageIndex int, stageName, baseImage string) {
 	if !im.enabled {
-		logrus.Infof("🏗️ Building stage %d: %s (base: %s)", stageIndex, stageName, baseImage)
+		logrus.Infof("Building stage %d: %s (base: %s)", stageIndex, stageName, baseImage)
 		return
 	}
 
@@ -129,7 +129,7 @@ func (im *IntegrationManager) LogStageComplete(stageIndex int, stageName string,
 		if !success {
 			status = StatusFailed
 		}
-		logrus.Infof("🏁 Stage %d (%s) %s in %v", stageIndex, stageName, status, duration)
+		logrus.Infof("Stage %d (%s) %s in %v", stageIndex, stageName, status, duration)
 		return
 	}
 
@@ -162,7 +162,7 @@ func (im *IntegrationManager) LogStageComplete(stageIndex int, stageName string,
 // LogCommandStart logs the start of a Docker command execution
 func (im *IntegrationManager) LogCommandStart(commandIndex int, command, stageName string) {
 	if !im.enabled {
-		logrus.Infof("🔄 Executing command %d: %s", commandIndex, command)
+		logrus.Infof("Executing command %d: %s", commandIndex, command)
 		return
 	}
 
@@ -182,7 +182,7 @@ func (im *IntegrationManager) LogCommandComplete(
 		if !success {
 			status = StatusFailed
 		}
-		logrus.Infof("🏁 Command %d %s in %v", commandIndex, status, duration)
+		logrus.Infof("Command %d %s in %v", commandIndex, status, duration)
 		return
 	}
 
@@ -217,7 +217,7 @@ func (im *IntegrationManager) LogCacheOperation(operation, key string, hit bool,
 		if !hit {
 			status = "miss"
 		}
-		logrus.Debugf("💾 Cache %s: %s (%s) in %v", operation, key, status, duration)
+		logrus.Debugf("Cache %s: %s (%s) in %v", operation, key, status, duration)
 		return
 	}
 
@@ -234,11 +234,11 @@ func (im *IntegrationManager) LogCacheOperation(operation, key string, hit bool,
 func (im *IntegrationManager) LogNetworkOperation(
 	operation, url string, statusCode int, duration time.Duration, success bool) {
 	if !im.enabled {
-		status := "✅ success"
+		status := "success"
 		if !success {
-			status = "❌ failed"
+			status = "failed"
 		}
-		logrus.Debugf("🌐 Network %s: %s (%d) %s in %v", operation, url, statusCode, status, duration)
+		logrus.Debugf("Network %s: %s (%d) %s in %v", operation, url, statusCode, status, duration)
 		return
 	}
 
@@ -271,11 +271,11 @@ func (im *IntegrationManager) LogNetworkOperation(
 // LogSnapshotOperation logs snapshot operations
 func (im *IntegrationManager) LogSnapshotOperation(operation string, files int, duration time.Duration, success bool) {
 	if !im.enabled {
-		status := "✅ success"
+		status := "success"
 		if !success {
-			status = "❌ failed"
+			status = "failed"
 		}
-		logrus.Debugf("📸 Snapshot %s: %d files %s in %v", operation, files, status, duration)
+		logrus.Debugf("Snapshot %s: %d files %s in %v", operation, files, status, duration)
 		return
 	}
 
@@ -306,7 +306,7 @@ func (im *IntegrationManager) LogSnapshotOperation(operation string, files int, 
 // LogError logs an error with structured context
 func (im *IntegrationManager) LogError(component, operation string, err error, ctx map[string]interface{}) {
 	if !im.enabled {
-		logrus.Errorf("❌ %s %s failed: %v", component, operation, err)
+		logrus.Errorf("%s %s failed: %v", component, operation, err)
 		return
 	}
 
@@ -328,7 +328,7 @@ func (im *IntegrationManager) LogError(component, operation string, err error, c
 // LogPerformance logs performance metrics
 func (im *IntegrationManager) LogPerformance(component, metric string, value float64, unit string) {
 	if !im.enabled {
-		logrus.Debugf("📊 %s %s: %.2f %s", component, metric, value, unit)
+		logrus.Debugf("%s %s: %.2f %s", component, metric, value, unit)
 		return
 	}
 
@@ -376,7 +376,7 @@ func (im *IntegrationManager) LogStatistics() {
 
 	// Log enhanced logger statistics
 	if im.enhancedLogger != nil {
-		logrus.Info("📊 Enhanced logger statistics logged")
+		logrus.Info("Enhanced logger statistics logged")
 	}
 }
 
@@ -385,5 +385,5 @@ func (im *IntegrationManager) Close() {
 	if im.structuredLogger != nil {
 		im.structuredLogger.Close()
 	}
-	logrus.Info("📊 Logging integration manager closed")
+	logrus.Info("Logging integration manager closed")
 }

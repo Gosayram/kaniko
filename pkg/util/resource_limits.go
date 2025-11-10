@@ -100,7 +100,7 @@ func NewResourceLimits(maxMemory, maxFileSize, maxTotalFileSize int64) *Resource
 	}
 
 	//nolint:mnd // Constants for MB conversion
-	logrus.Infof("🛡️ Resource limits initialized: Memory=%dMB, File=%dMB, Total=%dMB",
+	logrus.Infof("Resource limits initialized: Memory=%dMB, File=%dMB, Total=%dMB",
 		maxMemory/(1024*1024), maxFileSize/(1024*1024), maxTotalFileSize/(1024*1024))
 
 	return rl
@@ -115,7 +115,7 @@ func (rl *ResourceLimits) StartMonitoring() {
 	rl.monitoringEnabled = true
 	go rl.monitorResources()
 
-	logrus.Info("📊 Resource monitoring started")
+	logrus.Info("Resource monitoring started")
 }
 
 // StopMonitoring stops background resource monitoring
@@ -127,7 +127,7 @@ func (rl *ResourceLimits) StopMonitoring() {
 	rl.monitoringEnabled = false
 	rl.stopMonitoring <- true
 
-	logrus.Info("📊 Resource monitoring stopped")
+	logrus.Info("Resource monitoring stopped")
 }
 
 // monitorResources runs background monitoring
@@ -168,7 +168,7 @@ func (rl *ResourceLimits) checkResourceUsage() {
 
 	if memoryPercent >= float64(rl.GCThreshold) {
 		//nolint:mnd // Constants for MB conversion
-		logrus.Warnf("⚠️ High memory usage detected: %.1f%% (%dMB/%dMB). Triggering GC.",
+		logrus.Warnf("High memory usage detected: %.1f%% (%dMB/%dMB). Triggering GC.",
 			memoryPercent, currentUsage/(1024*1024), rl.MaxMemoryUsage/(1024*1024))
 
 		rl.triggerGC()
@@ -179,7 +179,7 @@ func (rl *ResourceLimits) checkResourceUsage() {
 	// Log resource usage periodically
 	if rl.stats.TotalFilesProcessed%100 == 0 && rl.stats.TotalFilesProcessed > 0 {
 		//nolint:mnd // Constants for MB conversion
-		logrus.Debugf("📊 Resource usage: Memory=%.1f%% (%dMB), Files=%d, TotalSize=%dMB",
+		logrus.Debugf("Resource usage: Memory=%.1f%% (%dMB), Files=%d, TotalSize=%dMB",
 			memoryPercent, currentUsage/(1024*1024), rl.stats.TotalFilesProcessed, rl.stats.TotalFileSize/(1024*1024))
 	}
 }
@@ -236,7 +236,7 @@ func (rl *ResourceLimits) CheckFileSize(filePath string, fileSize int64) error {
 	}
 
 	//nolint:mnd // Constants for MB conversion
-	logrus.Debugf("✅ File size check passed: %s (%dMB)", filePath, fileSize/(1024*1024))
+	logrus.Debugf("File size check passed: %s (%dMB)", filePath, fileSize/(1024*1024))
 	return nil
 }
 
@@ -278,15 +278,15 @@ func (rl *ResourceLimits) GetStats() ResourceStats {
 func (rl *ResourceLimits) LogStats() {
 	stats := rl.GetStats()
 
-	logrus.Infof("📊 Resource Statistics:")
+	logrus.Infof("Resource Statistics:")
 	//nolint:mnd // Constants for MB conversion
 	logrus.Infof("  🧠 Peak Memory Usage: %dMB", stats.PeakMemoryUsage/(1024*1024))
-	logrus.Infof("  📁 Total Files Processed: %d", stats.TotalFilesProcessed)
+	logrus.Infof("  Total Files Processed: %d", stats.TotalFilesProcessed)
 	//nolint:mnd // Constants for MB conversion
-	logrus.Infof("  💾 Total File Size: %dMB", stats.TotalFileSize/(1024*1024))
+	logrus.Infof("  Total File Size: %dMB", stats.TotalFileSize/(1024*1024))
 	logrus.Infof("  🧹 GC Triggered: %d times", stats.GCTriggered)
-	logrus.Infof("  ⚠️ Warnings Issued: %d", stats.WarningsIssued)
-	logrus.Infof("  ⏱️ Runtime: %v", time.Since(stats.StartTime))
+	logrus.Infof("  Warnings Issued: %d", stats.WarningsIssued)
+	logrus.Infof("  Runtime: %v", time.Since(stats.StartTime))
 
 	if !stats.LastGC.IsZero() {
 		logrus.Infof("  🧹 Last GC: %v ago", time.Since(stats.LastGC))
@@ -305,7 +305,7 @@ func (rl *ResourceLimits) ResetStats() {
 	rl.stats.TotalFilesProcessed = 0
 	rl.stats.TotalFileSize = 0
 
-	logrus.Info("📊 Resource statistics reset")
+	logrus.Info("Resource statistics reset")
 }
 
 // IsMonitoringEnabled returns whether monitoring is enabled
@@ -323,7 +323,7 @@ func (rl *ResourceLimits) SetGCThreshold(threshold int) {
 	defer rl.monitoringMutex.Unlock()
 
 	rl.GCThreshold = threshold
-	logrus.Infof("🛡️ GC threshold set to %d%%", threshold)
+	logrus.Infof("GC threshold set to %d%%", threshold)
 }
 
 // SetMonitoringInterval sets the monitoring interval
@@ -336,7 +336,7 @@ func (rl *ResourceLimits) SetMonitoringInterval(interval time.Duration) {
 	defer rl.monitoringMutex.Unlock()
 
 	rl.MonitoringInterval = interval
-	logrus.Infof("🛡️ Monitoring interval set to %v", interval)
+	logrus.Infof("Monitoring interval set to %v", interval)
 }
 
 // GetCurrentMemoryUsage returns current memory usage

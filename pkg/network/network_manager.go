@@ -115,7 +115,7 @@ func NewManager(config *ManagerConfig) *Manager {
 		},
 	}
 
-	logrus.Info("🌐 Network manager created")
+	logrus.Info("Network manager created")
 	return manager
 }
 
@@ -128,7 +128,7 @@ func (nm *Manager) Initialize() error {
 		return nil
 	}
 
-	logrus.Info("🌐 Initializing network manager components")
+	logrus.Info("Initializing network manager components")
 
 	// Create connection pool
 	poolConfig := &ConnectionPoolConfig{
@@ -164,7 +164,7 @@ func (nm *Manager) Initialize() error {
 	nm.registryClient = NewRegistryClient(registryConfig, nm.connectionPool)
 
 	nm.initialized = true
-	logrus.Info("✅ Network manager initialized successfully")
+	logrus.Info("Network manager initialized successfully")
 	return nil
 }
 
@@ -270,7 +270,7 @@ func (nm *Manager) GetStats() *ManagerStats {
 func (nm *Manager) LogStats() {
 	stats := nm.GetStats()
 
-	logrus.Infof("🌐 Network Manager Statistics:")
+	logrus.Infof("Network Manager Statistics:")
 	logrus.Infof("   Total Requests: %d", stats.TotalRequests)
 	logrus.Infof("   Successful: %d, Failed: %d", stats.SuccessfulRequests, stats.FailedRequests)
 	logrus.Infof("   Average Latency: %v", stats.AverageLatency)
@@ -292,7 +292,7 @@ func (nm *Manager) LogStats() {
 
 // Close closes the network manager and cleans up resources
 func (nm *Manager) Close() error {
-	logrus.Info("🌐 Closing network manager")
+	logrus.Info("Closing network manager")
 
 	// Close registry client
 	if nm.registryClient != nil {
@@ -308,6 +308,6 @@ func (nm *Manager) Close() error {
 		}
 	}
 
-	logrus.Info("✅ Network manager closed successfully")
+	logrus.Info("Network manager closed successfully")
 	return nil
 }

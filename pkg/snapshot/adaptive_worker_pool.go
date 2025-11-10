@@ -18,6 +18,7 @@ package snapshot
 
 import (
 	"errors"
+	"fmt"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -174,7 +175,12 @@ func (awp *AdaptiveWorkerPool) startWorker() {
 func (awp *AdaptiveWorkerPool) executeTask(task Task) {
 	start := time.Now()
 
-	err := task.Function()
+	var err error
+	if task.Function == nil {
+		err = fmt.Errorf("task function is nil for task ID: %s", task.ID)
+	} else {
+		err = task.Function()
+	}
 
 	duration := time.Since(start)
 	awp.updateStats(duration, err == nil)

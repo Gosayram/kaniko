@@ -47,23 +47,23 @@ func SyscallCredentials(userStr string) (*syscall.Credential, error) {
 	// Parse user string to extract UID and GID
 	uid, gid, err := getUIDAndGIDFromString(userStr)
 	if err != nil {
-		logrus.Warnf("❌ Failed to get UID/GID for user '%s': %v", userStr, err)
+		logrus.Warnf("Failed to get UID/GID for user '%s': %v", userStr, err)
 		return nil, errors.Wrap(err, "get uid/gid")
 	}
-	logrus.Debugf("✅ Resolved UID/GID for user '%s': %d/%d", userStr, uid, gid)
+	logrus.Debugf("Resolved UID/GID for user '%s': %d/%d", userStr, uid, gid)
 
 	// Use safe UID/GID values to prevent "invalid user/group IDs" errors
 	safeUID, safeGID := GetSafeUIDGID(int64(uid), int64(gid))
-	logrus.Debugf("🛡️ Using safe UID/GID: %d/%d (original: %d/%d) for user '%s'", safeUID, safeGID, uid, gid, userStr)
+	logrus.Debugf("Using safe UID/GID: %d/%d (original: %d/%d) for user '%s'", safeUID, safeGID, uid, gid, userStr)
 
 	// RADICAL FIX: Skip user lookup and group parsing in containerized environments
 	// This prevents failures when /etc/passwd and /etc/group are missing
-	logrus.Infof("🚀 Using direct UID/GID credentials for user '%s' (containerized mode)", userStr)
-	logrus.Infof("📋 Skipping user lookup and group parsing - using direct credentials")
+	logrus.Infof("Using direct UID/GID credentials for user '%s' (containerized mode)", userStr)
+	logrus.Infof("Skipping user lookup and group parsing - using direct credentials")
 
 	// Convert to safe uint32 values
 	finalUID, finalGID := convertToSafeCredentials(safeUID, safeGID)
-	logrus.Infof("🎯 Final credentials for user '%s': UID=%d, GID=%d", userStr, finalUID, finalGID)
+	logrus.Infof("Final credentials for user '%s': UID=%d, GID=%d", userStr, finalUID, finalGID)
 
 	// RADICAL FIX: Return minimal credentials without groups
 	// This prevents failures when /etc/group is missing

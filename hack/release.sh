@@ -45,12 +45,62 @@ DATE=$(date +'%Y-%m-%d')
 # Capture only the actual pull request data, redirect debug output to stderr
 PULL_REQS=$(go run ${DIR}/release_notes/listpullreqs.go 2>/dev/null | tr '\n' '|')
 # Get contributors - handle case when no tags exist
+# Try to get from Signed-off-by first (more reliable), fallback to author name
+CONTRIBUTORS=""
 if git describe --tags --abbrev=0 >/dev/null 2>&1; then
     LATEST_TAG=$(git describe --tags --abbrev=0)
-    CONTRIBUTORS=$(git log --format="%aN" --reverse "$LATEST_TAG"..HEAD | sort | uniq | grep -v "^--show-origin$" | awk '{printf "- %s\n", $0 }' | tr '\n' '|')
+    echo "Getting contributors between $LATEST_TAG and HEAD..."
+    # First try to get from Signed-off-by lines (more reliable)
+    CONTRIBUTORS=$(git log --no-merges --format="%B" --reverse "$LATEST_TAG"..HEAD 2>/dev/null | \
+        grep -i "^Signed-off-by:" | \
+        sed 's/^Signed-off-by:[[:space:]]*//' | \
+        sed 's/[[:space:]]*<.*>.*$//' | \
+        grep -v '^[[:space:]]*$' | \
+        sort -u | \
+        awk 'NF && length($0) > 0 {printf "- %s\n", $0}' | \
+        tr '\n' '|')
+    
+    # If no Signed-off-by found, try author names (but filter out --show-origin)
+    if [ -z "$CONTRIBUTORS" ] || [ "$CONTRIBUTORS" = "|" ]; then
+        echo "No Signed-off-by found, trying author names..."
+        CONTRIBUTORS=$(git log --no-merges --format="%aN" --reverse "$LATEST_TAG"..HEAD 2>/dev/null | \
+            grep -v '^[[:space:]]*$' | \
+            grep -v '^--show-origin$' | \
+            sort -u | \
+            awk 'NF && length($0) > 0 {printf "- %s\n", $0}' | \
+            tr '\n' '|')
+    fi
 else
-    # If no tags exist, get all contributors from beginning
-    CONTRIBUTORS=$(git log --format="%aN" --reverse | sort | uniq | grep -v "^--show-origin$" | awk '{printf "- %s\n", $0 }' | tr '\n' '|')
+    echo "No tags found, getting all contributors from beginning..."
+    # First try Signed-off-by
+    CONTRIBUTORS=$(git log --no-merges --format="%B" --reverse 2>/dev/null | \
+        grep -i "^Signed-off-by:" | \
+        sed 's/^Signed-off-by:[[:space:]]*//' | \
+        sed 's/[[:space:]]*<.*>.*$//' | \
+        grep -v '^[[:space:]]*$' | \
+        sort -u | \
+        awk 'NF && length($0) > 0 {printf "- %s\n", $0}' | \
+        tr '\n' '|')
+    
+    # Fallback to author names
+    if [ -z "$CONTRIBUTORS" ] || [ "$CONTRIBUTORS" = "|" ]; then
+        CONTRIBUTORS=$(git log --no-merges --format="%aN" --reverse 2>/dev/null | \
+            grep -v '^[[:space:]]*$' | \
+            grep -v '^--show-origin$' | \
+            sort -u | \
+            awk 'NF && length($0) > 0 {printf "- %s\n", $0}' | \
+            tr '\n' '|')
+    fi
+fi
+
+# Debug: show how many contributors were found
+CONTRIB_COUNT=$(echo "$CONTRIBUTORS" | tr '|' '\n' | grep -c '^-' || echo "0")
+echo "Found $CONTRIB_COUNT contributors"
+
+# If no contributors found, set empty string (will leave header but no list)
+if [ -z "$CONTRIBUTORS" ] || [ "$CONTRIBUTORS" = "|" ]; then
+    echo "Warning: No contributors found between tags. The contributors section will show only the header."
+    CONTRIBUTORS=""
 fi
 
 # Substitute placeholders with actual data in the template

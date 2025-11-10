@@ -92,7 +92,7 @@ func (fsa *FilesystemStructureAnalyzer) Analyze() error {
 		return nil
 	}
 
-	logrus.Debugf("🔍 Analyzing filesystem structure at %s", fsa.rootDir)
+	logrus.Debugf("Analyzing filesystem structure at %s", fsa.rootDir)
 
 	// OPTIMIZED: Use a single efficient scan to detect all directories at once
 	// This is much faster for large images than multiple os.Stat calls
@@ -102,7 +102,7 @@ func (fsa *FilesystemStructureAnalyzer) Analyze() error {
 
 	fsa.analyzed = true
 
-	logrus.Infof("✅ Filesystem analysis complete: %d system dirs, %d cache dirs, %d temp dirs, %d bin dirs, %d lib dirs",
+	logrus.Infof("Filesystem analysis complete: %d system dirs, %d cache dirs, %d temp dirs, %d bin dirs, %d lib dirs",
 		len(fsa.systemDirectories), len(fsa.cacheDirectories), len(fsa.tempDirectories),
 		len(fsa.binDirectories), len(fsa.libDirectories))
 
@@ -209,7 +209,7 @@ func (fsa *FilesystemStructureAnalyzer) containsPath(slice []string, path string
 // applyFallbacks sets default directories if nothing was detected
 func (fsa *FilesystemStructureAnalyzer) applyFallbacks() {
 	if len(fsa.systemDirectories) == 0 {
-		logrus.Warnf("⚠️ No system directories detected, using defaults")
+		logrus.Warnf("No system directories detected, using defaults")
 		fsa.systemDirectories = []string{"/etc", "/var", "/usr"}
 	}
 	if len(fsa.cacheDirectories) == 0 {

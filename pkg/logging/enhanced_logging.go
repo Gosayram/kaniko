@@ -26,16 +26,12 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-// Constants for log levels and emojis
+// Constants for log levels
 const (
 	LevelInfo  = "info"
 	LevelWarn  = "warn"
 	LevelError = "error"
 	LevelDebug = "debug"
-
-	EmojiError   = "❌"
-	EmojiWarning = "⚠️"
-	EmojiSuccess = "✅"
 
 	PercentageMultiplier = 100
 )
@@ -82,8 +78,8 @@ func (el *EnhancedLogger) StartGroup(name string) *LogGroup {
 	}
 	el.groups[name] = group
 
-	// Log group start with emoji and formatting
-	logrus.Infof("🚀 Starting %s", name)
+	// Log group start
+	logrus.Infof("Starting %s", name)
 	return group
 }
 
@@ -99,20 +95,20 @@ func (el *EnhancedLogger) EndGroup(name string) {
 
 	duration := time.Since(group.StartTime)
 
-	// Create summary with appropriate emoji
-	var statusEmoji string
+	// Create summary
+	var status string
 	switch {
 	case group.Errors > 0:
-		statusEmoji = EmojiError
+		status = "ERROR"
 	case group.Warnings > 0:
-		statusEmoji = EmojiWarning
+		status = "WARNING"
 	default:
-		statusEmoji = EmojiSuccess
+		status = "SUCCESS"
 	}
 
 	// Log group completion with summary
-	logrus.Infof("%s Completed %s in %v (%d messages, %d warnings, %d errors)",
-		statusEmoji, name, duration.Round(time.Millisecond),
+	logrus.Infof("[%s] Completed %s in %v (%d messages, %d warnings, %d errors)",
+		status, name, duration.Round(time.Millisecond),
 		group.MessageCount, group.Warnings, group.Errors)
 
 	delete(el.groups, name)
@@ -183,87 +179,62 @@ func (el *EnhancedLogger) LogProgress(groupName, operation string, current, tota
 		}
 	}
 
-	el.LogWithGroup(groupName, LevelInfo, "📊 %s: [%s] %.1f%% (%d/%d)",
+	el.LogWithGroup(groupName, LevelInfo, "%s: [%s] %.1f%% (%d/%d)",
 		operation, bar, percentage, current, total)
 }
 
-// LogFileOperation logs file operations with appropriate emojis
+// LogFileOperation logs file operations
 func (el *EnhancedLogger) LogFileOperation(groupName, operation, path string, size int64) {
-	var emoji string
-	switch operation {
-	case "create":
-		emoji = "📄"
-	case "copy":
-		emoji = "📋"
-	case "move":
-		emoji = "📦"
-	case "delete":
-		emoji = "🗑️"
-	case "permission":
-		emoji = "🔒"
-	default:
-		emoji = "📁"
-	}
-
 	if size > 0 {
-		el.LogWithGroup(groupName, LevelDebug, "%s %s %s (%d bytes)",
-			emoji, operation, path, size)
+		el.LogWithGroup(groupName, LevelDebug, "%s %s (%d bytes)",
+			operation, path, size)
 	} else {
-		el.LogWithGroup(groupName, LevelDebug, "%s %s %s",
-			emoji, operation, path)
+		el.LogWithGroup(groupName, LevelDebug, "%s %s",
+			operation, path)
 	}
 }
 
 // LogSecurityEvent logs security-related events with appropriate severity
 func (el *EnhancedLogger) LogSecurityEvent(groupName, event, severity string, details ...interface{}) {
-	var emoji string
 	var level string
 
 	switch severity {
 	case "critical":
-		emoji = "🚨"
 		level = LevelError
 	case "high":
-		emoji = "⚠️"
 		level = LevelWarn
 	case "medium":
-		emoji = "🔍"
 		level = LevelInfo
 	case "low":
-		emoji = "ℹ️"
 		level = LevelDebug
 	default:
-		emoji = "🔒"
 		level = LevelInfo
 	}
 
-	message := fmt.Sprintf("%s Security: %s", emoji, event)
+	message := fmt.Sprintf("Security: %s", event)
 	el.LogWithGroup(groupName, level, message, details...)
 }
 
 // LogBuildStep logs build steps with clear formatting
 func (el *EnhancedLogger) LogBuildStep(step, command string, success bool) {
-	var emoji string
-	if success {
-		emoji = "✅"
-	} else {
-		emoji = "❌"
+	status := "SUCCESS"
+	if !success {
+		status = "FAILED"
 	}
-
-	logrus.Infof("%s Step %s: %s", emoji, step, command)
+	logrus.Infof("[%s] Step %s: %s", status, step, command)
 }
 
 // LogSummary provides a final build summary
 func (el *EnhancedLogger) LogSummary(totalSteps, successfulSteps, failedSteps int, duration time.Duration) {
-	logrus.Infof("🎯 Build Summary:")
+	logrus.Infof("Build Summary:")
 	logrus.Infof("   Total steps: %d", totalSteps)
 	logrus.Infof("   Successful: %d", successfulSteps)
 	logrus.Infof("   Failed: %d", failedSteps)
 	logrus.Infof("   Duration: %v", duration.Round(time.Millisecond))
 
 	if failedSteps == 0 {
-		logrus.Infof("🎉 Build completed successfully!")
+		logrus.Infof("Build completed successfully!")
 	} else {
-		logrus.Errorf("💥 Build completed with %d errors", failedSteps)
+		logrus.Errorf("Build completed with %d errors", failedSteps)
 	}
 }

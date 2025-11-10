@@ -129,7 +129,7 @@ func NewBufferPoolWithSizes(smallSize, mediumSize, largeSize int) *BufferPool {
 	}
 
 	//nolint:mnd // Constants for KB conversion
-	logrus.Debugf("🔄 Buffer pool initialized: Small=%dKB, Medium=%dKB, Large=%dKB",
+	logrus.Debugf("Buffer pool initialized: Small=%dKB, Medium=%dKB, Large=%dKB",
 		smallSize/1024, mediumSize/1024, largeSize/1024)
 
 	return bp
@@ -185,7 +185,7 @@ func (bp *BufferPool) GetBuffer(size int) []byte {
 
 	// For sizes larger than our largest buffer, allocate directly
 	// This should be rare and indicates a need for larger buffer sizes
-	logrus.Warnf("⚠️ Requested buffer size %d exceeds maximum pool size %d, allocating directly",
+	logrus.Warnf("Requested buffer size %d exceeds maximum pool size %d, allocating directly",
 		size, bp.largeSize)
 
 	bp.statsMutex.Lock()
@@ -198,7 +198,7 @@ func (bp *BufferPool) GetBuffer(size int) []byte {
 // PutSmallBuffer returns a small buffer to the pool
 func (bp *BufferPool) PutSmallBuffer(buffer []byte) {
 	if len(buffer) != bp.smallSize {
-		logrus.Warnf("⚠️ Attempted to return buffer of size %d to small pool (expected %d)",
+		logrus.Warnf("Attempted to return buffer of size %d to small pool (expected %d)",
 			len(buffer), bp.smallSize)
 		return
 	}
@@ -215,7 +215,7 @@ func (bp *BufferPool) PutSmallBuffer(buffer []byte) {
 // PutMediumBuffer returns a medium buffer to the pool
 func (bp *BufferPool) PutMediumBuffer(buffer []byte) {
 	if len(buffer) != bp.mediumSize {
-		logrus.Warnf("⚠️ Attempted to return buffer of size %d to medium pool (expected %d)",
+		logrus.Warnf("Attempted to return buffer of size %d to medium pool (expected %d)",
 			len(buffer), bp.mediumSize)
 		return
 	}
@@ -232,7 +232,7 @@ func (bp *BufferPool) PutMediumBuffer(buffer []byte) {
 // PutLargeBuffer returns a large buffer to the pool
 func (bp *BufferPool) PutLargeBuffer(buffer []byte) {
 	if len(buffer) != bp.largeSize {
-		logrus.Warnf("⚠️ Attempted to return buffer of size %d to large pool (expected %d)",
+		logrus.Warnf("Attempted to return buffer of size %d to large pool (expected %d)",
 			len(buffer), bp.largeSize)
 		return
 	}
@@ -261,7 +261,7 @@ func (bp *BufferPool) PutBuffer(buffer []byte) {
 	} else {
 		// For custom-sized buffers, we don't return them to the pool
 		// This is expected for buffers allocated directly for large sizes
-		logrus.Debugf("🔄 Custom-sized buffer (%d bytes) not returned to pool", size)
+		logrus.Debugf("Custom-sized buffer (%d bytes) not returned to pool", size)
 	}
 }
 
@@ -277,21 +277,21 @@ func (bp *BufferPool) GetStats() BufferPoolStats {
 func (bp *BufferPool) LogStats() {
 	stats := bp.GetStats()
 
-	logrus.Infof("🔄 Buffer Pool Statistics:")
-	logrus.Infof("  📦 Small Buffers: Allocated=%d, Returned=%d",
+	logrus.Infof("Buffer Pool Statistics:")
+	logrus.Infof("  Small Buffers: Allocated=%d, Returned=%d",
 		stats.SmallBuffersAllocated, stats.SmallBuffersReturned)
-	logrus.Infof("  📦 Medium Buffers: Allocated=%d, Returned=%d",
+	logrus.Infof("  Medium Buffers: Allocated=%d, Returned=%d",
 		stats.MediumBuffersAllocated, stats.MediumBuffersReturned)
-	logrus.Infof("  📦 Large Buffers: Allocated=%d, Returned=%d",
+	logrus.Infof("  Large Buffers: Allocated=%d, Returned=%d",
 		stats.LargeBuffersAllocated, stats.LargeBuffersReturned)
-	logrus.Infof("  📊 Total: Allocated=%d, Returned=%d",
+	logrus.Infof("  Total: Allocated=%d, Returned=%d",
 		stats.TotalAllocations, stats.TotalReturns)
 
 	// Calculate efficiency
 	if stats.TotalAllocations > 0 {
 		//nolint:mnd // Percentage calculation
 		efficiency := float64(stats.TotalReturns) / float64(stats.TotalAllocations) * 100
-		logrus.Infof("  ⚡ Efficiency: %.1f%%", efficiency)
+		logrus.Infof("  Efficiency: %.1f%%", efficiency)
 	}
 }
 
@@ -301,7 +301,7 @@ func (bp *BufferPool) ResetStats() {
 	defer bp.statsMutex.Unlock()
 
 	bp.stats = BufferPoolStats{}
-	logrus.Info("🔄 Buffer pool statistics reset")
+	logrus.Info("Buffer pool statistics reset")
 }
 
 // GetSmallBufferSize returns the size of small buffers
@@ -343,7 +343,7 @@ func (bp *BufferPool) GetOptimalBufferSize(operationSize int) int {
 
 // PreallocateBuffers pre-allocates a number of buffers to warm up the pool
 func (bp *BufferPool) PreallocateBuffers(smallCount, mediumCount, largeCount int) {
-	logrus.Debugf("🔄 Pre-allocating buffers: Small=%d, Medium=%d, Large=%d",
+	logrus.Debugf("Pre-allocating buffers: Small=%d, Medium=%d, Large=%d",
 		smallCount, mediumCount, largeCount)
 
 	// Pre-allocate small buffers
@@ -364,7 +364,7 @@ func (bp *BufferPool) PreallocateBuffers(smallCount, mediumCount, largeCount int
 		bp.PutLargeBuffer(buffer)
 	}
 
-	logrus.Debugf("✅ Buffer pre-allocation completed")
+	logrus.Debugf("Buffer pre-allocation completed")
 }
 
 // Global buffer pool instance
@@ -377,7 +377,7 @@ var (
 func GetGlobalBufferPool() *BufferPool {
 	bufferPoolOnce.Do(func() {
 		globalBufferPool = NewBufferPool()
-		logrus.Info("🔄 Global buffer pool initialized")
+		logrus.Info("Global buffer pool initialized")
 	})
 	return globalBufferPool
 }
@@ -385,5 +385,5 @@ func GetGlobalBufferPool() *BufferPool {
 // SetGlobalBufferPool sets the global buffer pool instance
 func SetGlobalBufferPool(pool *BufferPool) {
 	globalBufferPool = pool
-	logrus.Info("🔄 Global buffer pool updated")
+	logrus.Info("Global buffer pool updated")
 }

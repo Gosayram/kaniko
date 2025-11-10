@@ -118,7 +118,7 @@ func (c *CopyCommand) ExecuteCommand(config *v1.Config, buildArgs *dockerfile.Bu
 			logrus.Warnf("   This may indicate that files were not created in stage %s, "+
 				"but build will continue (like original kaniko behavior).", c.cmd.From)
 		} else {
-			logrus.Warnf("COPY: ⚠️  WARNING: No files were added to snapshot for command %s! "+
+			logrus.Warnf("COPY: WARNING: No files were added to snapshot for command %s! "+
 				"This means NO LAYER will be created!", c.cmd.String())
 		}
 	}
@@ -180,10 +180,13 @@ func (c *CopyCommand) copySourcesParallel(
 		}(src)
 	}
 
-	// Wait for all goroutines to complete
+	// Wait for all goroutines to complete and close error channel
+	// Use a separate goroutine to close the channel after all workers finish
+	done := make(chan struct{})
 	go func() {
 		wg.Wait()
 		close(errChan)
+		close(done)
 	}()
 
 	// Collect any errors
@@ -191,6 +194,9 @@ func (c *CopyCommand) copySourcesParallel(
 	for err := range errChan {
 		errs = append(errs, err)
 	}
+
+	// Ensure the close goroutine has finished
+	<-done
 
 	if len(errs) > 0 {
 		return errs[0] // Return the first error

@@ -187,7 +187,7 @@ func NewSafeSnapshotOptimizer(snapshotter *Snapshotter, opts *config.KanikoOptio
 	optimizer.symlinkResolver = NewSafeSymlinkResolver()
 	optimizer.metadataCache = NewMetadataCache(defaultMetadataCacheSize) // Optimized for large projects
 
-	logrus.Info("🛡️ Safe snapshot optimizer initialized with integrity checking")
+	logrus.Info("Safe snapshot optimizer initialized with integrity checking")
 	return optimizer
 }
 
@@ -252,16 +252,16 @@ func (sso *SafeSnapshotOptimizer) OptimizedWalkFS(
 		sso.updateStats(time.Since(start))
 	}()
 
-	logrus.Debugf("🔍 Starting optimized filesystem walk for %s", dir)
+	logrus.Debugf("Starting optimized filesystem walk for %s", dir)
 
 	// 1. Parallel directory scanning
-	logrus.Debugf("🔍 Starting parallel directory scan for %s", dir)
+	logrus.Debugf("Starting parallel directory scan for %s", dir)
 	scanResults, err := sso.parallelDirectoryScan(dir)
 	if err != nil {
-		logrus.Warnf("⚠️ Parallel directory scan failed: %v, falling back to standard WalkFS", err)
+		logrus.Warnf("Parallel directory scan failed: %v, falling back to standard WalkFS", err)
 		return nil, nil, fmt.Errorf("parallel directory scan failed: %w", err)
 	}
-	logrus.Debugf("🔍 Parallel directory scan completed: found %d files", len(scanResults.files))
+	logrus.Debugf("Parallel directory scan completed: found %d files", len(scanResults.files))
 
 	// 2. Parallel file hashing with integrity verification
 	changedFiles, err = sso.parallelFileHashing(scanResults.files)
@@ -271,7 +271,7 @@ func (sso *SafeSnapshotOptimizer) OptimizedWalkFS(
 
 	// 3. Critical integrity check
 	if sso.enableIntegrity && sso.integrityChecker.NeedsFullScan(changedFiles) {
-		logrus.Warn("⚠️ Integrity concerns detected, falling back to full scan")
+		logrus.Warn("Integrity concerns detected, falling back to full scan")
 		sso.recordIntegrityFailure()
 		return sso.fullWalkFS(dir, existingPaths)
 	}
@@ -279,11 +279,11 @@ func (sso *SafeSnapshotOptimizer) OptimizedWalkFS(
 	// 4. Safe symlink resolution
 	resolvedFiles, err := sso.symlinkResolver.SafeResolveSymlinks(changedFiles)
 	if err != nil {
-		logrus.Warnf("⚠️ Symlink resolution failed: %v, continuing with original paths", err)
+		logrus.Warnf("Symlink resolution failed: %v, continuing with original paths", err)
 		resolvedFiles = changedFiles
 	}
 
-	logrus.Debugf("✅ Optimized walk completed: %d files changed", len(resolvedFiles))
+	logrus.Debugf("Optimized walk completed: %d files changed", len(resolvedFiles))
 	return resolvedFiles, scanResults.deletedFiles, nil
 }
 
@@ -363,7 +363,7 @@ func (sso *SafeSnapshotOptimizer) shouldProcessFile(path string, info os.FileInf
 			}
 		}
 		// Allow all other hidden files (including .output, .next, etc.)
-		logrus.Debugf("✅ Processing hidden file: %s", path)
+		logrus.Debugf("Processing hidden file: %s", path)
 	}
 
 	// Skip if in ignore list
@@ -378,7 +378,7 @@ func (sso *SafeSnapshotOptimizer) shouldProcessFile(path string, info os.FileInf
 		return false
 	}
 
-	logrus.Debugf("✅ Processing file: %s", path)
+	logrus.Debugf("Processing file: %s", path)
 	return true
 }
 
@@ -430,7 +430,7 @@ func (sso *SafeSnapshotOptimizer) sequentialFileHashing(files []string) ([]strin
 // fullWalkFS performs a full filesystem walk (fallback)
 func (sso *SafeSnapshotOptimizer) fullWalkFS(
 	dir string, existingPaths map[string]struct{}) (changedFiles []string, deletedFiles map[string]struct{}, err error) {
-	logrus.Info("🔄 Performing full filesystem walk")
+	logrus.Info("Performing full filesystem walk")
 
 	// Use original WalkFS implementation
 	changedPaths, deletedPaths := util.WalkFS(dir, existingPaths, sso.snapshotter.l.CheckFileChange)
@@ -723,7 +723,7 @@ func (sso *SafeSnapshotOptimizer) GetStatistics() *OptimizationStats {
 func (sso *SafeSnapshotOptimizer) LogStatistics() {
 	stats := sso.GetStatistics()
 
-	logrus.Infof("📊 Safe Snapshot Optimization Statistics:")
+	logrus.Infof("Safe Snapshot Optimization Statistics:")
 	logrus.Infof("   Total Snapshots: %d", stats.TotalSnapshots)
 	logrus.Infof("   Incremental: %d, Full: %d", stats.IncrementalSnapshots, stats.FullSnapshots)
 	logrus.Infof("   Integrity Checks: %d, Failures: %d", stats.IntegrityChecks, stats.IntegrityFailures)

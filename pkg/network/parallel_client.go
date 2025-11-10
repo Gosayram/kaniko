@@ -77,17 +77,30 @@ func NewParallelClient(config *ParallelClientConfig, pool *ConnectionPool) *Para
 		config = DefaultParallelClientConfig()
 	}
 
+	if pool == nil {
+		logrus.Warn("Connection pool is nil, creating default pool")
+		pool = NewConnectionPool(nil)
+	}
+
+	httpClient := pool.GetClient()
+	if httpClient == nil {
+		logrus.Error("Failed to get HTTP client from pool, creating default client")
+		httpClient = &http.Client{
+			Timeout: DefaultRequestTimeout,
+		}
+	}
+
 	client := &ParallelClient{
 		config: config,
 		pool:   pool,
-		client: pool.GetClient(),
+		client: httpClient,
 		stats: &ParallelClientStats{
 			LastReset: time.Now(),
 		},
 		workerPool: make(chan struct{}, config.MaxConcurrency),
 	}
 
-	logrus.Info("🚀 Parallel HTTP client initialized")
+	logrus.Info("Parallel HTTP client initialized")
 	return client
 }
 
@@ -115,7 +128,7 @@ func (pc *ParallelClient) ExecuteParallel(ctx context.Context, requests []Parall
 		return nil, fmt.Errorf("no requests provided")
 	}
 
-	logrus.Infof("🚀 Executing %d requests in parallel", len(requests))
+	logrus.Infof("Executing %d requests in parallel", len(requests))
 	start := time.Now()
 
 	// Create response slice
@@ -149,11 +162,11 @@ func (pc *ParallelClient) ExecuteParallel(ctx context.Context, requests []Parall
 
 	// Wait for all requests to complete
 	if err := g.Wait(); err != nil {
-		logrus.Warnf("🚀 Some parallel requests failed: %v", err)
+		logrus.Warnf("Some parallel requests failed: %v", err)
 	}
 
 	totalTime := time.Since(start)
-	logrus.Infof("🚀 Parallel execution completed in %v", totalTime)
+	logrus.Infof("Parallel execution completed in %v", totalTime)
 
 	return responses, nil
 }
@@ -211,12 +224,17 @@ func (pc *ParallelClient) executeRequest(ctx context.Context, req ParallelReques
 			}
 		}
 
+		if pc.client == nil {
+			lastErr = fmt.Errorf("HTTP client is nil")
+			break
+		}
+
 		resp, lastErr = pc.client.Do(httpReq)
 		if lastErr == nil {
 			break
 		}
 
-		logrus.Debugf("🚀 Request attempt %d failed: %v", attempt+1, lastErr)
+		logrus.Debugf("Request attempt %d failed: %v", attempt+1, lastErr)
 	}
 
 	if lastErr != nil {
@@ -239,7 +257,7 @@ func (pc *ParallelClient) executeRequest(ctx context.Context, req ParallelReques
 	}
 
 	latency := time.Since(start)
-	logrus.Debugf("🚀 Request completed: %s %s -> %d (%v)", req.Method, req.URL, resp.StatusCode, latency)
+	logrus.Debugf("Request completed: %s %s -> %d (%v)", req.Method, req.URL, resp.StatusCode, latency)
 
 	return ParallelResponse{
 		StatusCode: resp.StatusCode,
@@ -292,7 +310,7 @@ func (pc *ParallelClient) GetStats() *ParallelClientStats {
 func (pc *ParallelClient) LogStats() {
 	stats := pc.GetStats()
 
-	logrus.Infof("🚀 Parallel Client Statistics:")
+	logrus.Infof("Parallel Client Statistics:")
 	logrus.Infof("   Total Requests: %d", stats.TotalRequests)
 	logrus.Infof("   Successful: %d, Failed: %d", stats.SuccessfulRequests, stats.FailedRequests)
 	logrus.Infof("   Retry Attempts: %d", stats.RetryAttempts)

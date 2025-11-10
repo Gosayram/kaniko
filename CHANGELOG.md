@@ -1,3 +1,28 @@
+# v1.25.5 Release 2025-11-10
+The executor images in this release are:
+```
+ghcr.io/Gosayram/kaniko/executor:v1.25.5
+ghcr.io/Gosayram/kaniko/executor:latest
+```
+
+The debug images are available at:
+```
+ghcr.io/Gosayram/kaniko/executor:debug
+ghcr.io/Gosayram/kaniko/executor:v1.25.5-debug
+```
+
+The slim executor images which don't contain any authentication binaries are available at:
+```
+ghcr.io/Gosayram/kaniko/executor:slim
+ghcr.io/Gosayram/kaniko/executor:v1.25.5-slim
+```
+
+
+
+Huge thank you for this release towards our contributors: 
+- Abdurakhman Rakhmankulov
+
+
 # v1.25.4 Release 2025-11-10
 The executor images in this release are:
 ```

@@ -41,11 +41,10 @@ func (f *KanikoFormatter) Format(entry *logrus.Entry) ([]byte, error) {
 		output.WriteString(" ")
 	}
 
-	// Add level with emoji if enabled
+	// Add level if enabled
 	if f.ShowLevel {
 		level := strings.ToUpper(entry.Level.String())
-		emoji := f.getLevelEmoji(entry.Level)
-		output.WriteString(fmt.Sprintf("%s %s ", emoji, level))
+		output.WriteString(fmt.Sprintf("%s ", level))
 	}
 
 	// Add message
@@ -68,26 +67,6 @@ func (f *KanikoFormatter) Format(entry *logrus.Entry) ([]byte, error) {
 	return []byte(output.String()), nil
 }
 
-// getLevelEmoji returns appropriate emoji for log level
-func (f *KanikoFormatter) getLevelEmoji(level logrus.Level) string {
-	switch level {
-	case logrus.PanicLevel, logrus.FatalLevel:
-		return "💀"
-	case logrus.ErrorLevel:
-		return "❌"
-	case logrus.WarnLevel:
-		return "⚠️"
-	case logrus.InfoLevel:
-		return "ℹ️"
-	case logrus.DebugLevel:
-		return "🔍"
-	case logrus.TraceLevel:
-		return "🔬"
-	default:
-		return "📝"
-	}
-}
-
 // cleanupMessage cleans up common Kaniko log messages for better readability
 func (f *KanikoFormatter) cleanupMessage(message string) string {
 	// Remove redundant prefixes
@@ -97,25 +76,24 @@ func (f *KanikoFormatter) cleanupMessage(message string) string {
 	message = strings.TrimPrefix(message, "DEBUG[")
 
 	// Clean up common patterns
-	message = strings.ReplaceAll(message, "Creating world-writable", "🔒 World-writable")
-	message = strings.ReplaceAll(message, "Sanitizing world-writable", "🔧 Sanitizing")
-	message = strings.ReplaceAll(message, "Auto-sanitized", "🔧 Auto-fixed")
-	message = strings.ReplaceAll(message, "Taking snapshot", "📸 Snapshot")
-	message = strings.ReplaceAll(message, "Using files from context", "📁 Context files")
-	message = strings.ReplaceAll(message, "No files changed", "✅ No changes")
-	message = strings.ReplaceAll(message, "Skipping snapshotting", "⏭️ Skipping")
-	message = strings.ReplaceAll(message, "Building stage", "🏗️ Building")
-	message = strings.ReplaceAll(message, "Executing", "⚡ Executing")
-	message = strings.ReplaceAll(message, "Retrieving image", "📥 Retrieving")
-	message = strings.ReplaceAll(message, "Returning cached", "💾 Cached")
-	message = strings.ReplaceAll(message, "Checking for cached layer", "🔍 Cache check")
-	message = strings.ReplaceAll(message, "No cached layer found", "🆕 No cache")
-	message = strings.ReplaceAll(message, "Unpacking rootfs", "📦 Unpacking")
-	message = strings.ReplaceAll(message, "Changed working directory", "📂 Working dir")
-	message = strings.ReplaceAll(message, "Creating directory", "📁 Creating dir")
-	message = strings.ReplaceAll(message, "Initializing snapshotter", "📸 Snapshotter")
-	message = strings.ReplaceAll(message, "Taking snapshot of full filesystem", "📸 Full snapshot")
-	message = strings.ReplaceAll(message, "Taking snapshot of files", "📸 File snapshot")
+	message = strings.ReplaceAll(message, "Creating world-writable", "World-writable")
+	message = strings.ReplaceAll(message, "Sanitizing world-writable", "Sanitizing")
+	message = strings.ReplaceAll(message, "Auto-sanitized", "Auto-fixed")
+	message = strings.ReplaceAll(message, "Taking snapshot", "Snapshot")
+	message = strings.ReplaceAll(message, "Using files from context", "Context files")
+	message = strings.ReplaceAll(message, "No files changed", "No changes")
+	message = strings.ReplaceAll(message, "Skipping snapshotting", "Skipping")
+	message = strings.ReplaceAll(message, "Building stage", "Building")
+	message = strings.ReplaceAll(message, "Retrieving image", "Retrieving")
+	message = strings.ReplaceAll(message, "Returning cached", "Cached")
+	message = strings.ReplaceAll(message, "Checking for cached layer", "Cache check")
+	message = strings.ReplaceAll(message, "No cached layer found", "No cache")
+	message = strings.ReplaceAll(message, "Unpacking rootfs", "Unpacking")
+	message = strings.ReplaceAll(message, "Changed working directory", "Working dir")
+	message = strings.ReplaceAll(message, "Creating directory", "Creating dir")
+	message = strings.ReplaceAll(message, "Initializing snapshotter", "Snapshotter")
+	message = strings.ReplaceAll(message, "Taking snapshot of full filesystem", "Full snapshot")
+	message = strings.ReplaceAll(message, "Taking snapshot of files", "File snapshot")
 
 	return message
 }

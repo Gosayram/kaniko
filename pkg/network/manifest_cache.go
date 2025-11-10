@@ -70,7 +70,7 @@ func NewManifestCache(timeout time.Duration) *ManifestCache {
 	// Start cleanup goroutine
 	go cache.cleanup()
 
-	logrus.Info("🏗️ Manifest cache initialized")
+	logrus.Info("Manifest cache initialized")
 	return cache
 }
 
@@ -91,7 +91,7 @@ func (mc *ManifestCache) Get(key string) v1.Image {
 	mc.mutex.Unlock()
 
 	mc.recordHit()
-	logrus.Debugf("🏗️ Manifest cache hit for %s", key)
+	logrus.Debugf("Manifest cache hit for %s", key)
 	return entry.Image
 }
 
@@ -107,7 +107,7 @@ func (mc *ManifestCache) Set(key string, image v1.Image) {
 		AccessCount: 1,
 	}
 
-	logrus.Debugf("🏗️ Manifest cached for %s", key)
+	logrus.Debugf("Manifest cached for %s", key)
 }
 
 // Invalidate removes a manifest from the cache
@@ -116,7 +116,7 @@ func (mc *ManifestCache) Invalidate(key string) {
 	defer mc.mutex.Unlock()
 
 	delete(mc.cache, key)
-	logrus.Debugf("🏗️ Manifest cache invalidated for %s", key)
+	logrus.Debugf("Manifest cache invalidated for %s", key)
 }
 
 // Clear removes all entries from the cache
@@ -125,7 +125,7 @@ func (mc *ManifestCache) Clear() {
 	defer mc.mutex.Unlock()
 
 	mc.cache = make(map[string]*ManifestCacheEntry)
-	logrus.Info("🏗️ Manifest cache cleared")
+	logrus.Info("Manifest cache cleared")
 }
 
 // GetStats returns manifest cache statistics
@@ -191,21 +191,21 @@ func (mc *ManifestCache) cleanupExpired() {
 	}
 
 	if expiredCount > 0 {
-		logrus.Debugf("🏗️ Manifest cache cleanup: removed %d expired entries", expiredCount)
+		logrus.Debugf("Manifest cache cleanup: removed %d expired entries", expiredCount)
 	}
 }
 
 // Close closes the manifest cache and stops cleanup goroutine
 func (mc *ManifestCache) Close() {
 	close(mc.stopChan)
-	logrus.Info("🏗️ Manifest cache closed")
+	logrus.Info("Manifest cache closed")
 }
 
 // LogStats logs manifest cache statistics
 func (mc *ManifestCache) LogStats() {
 	stats := mc.GetStats()
 
-	logrus.Infof("🏗️ Manifest Cache Statistics:")
+	logrus.Infof("Manifest Cache Statistics:")
 	logrus.Infof("   Hits: %d, Misses: %d", stats.Hits, stats.Misses)
 	logrus.Infof("   Evictions: %d", stats.Evictions)
 	logrus.Infof("   Total Size: %d entries", stats.TotalSize)

@@ -171,21 +171,21 @@ func executeAndCleanupCommand(cmd *exec.Cmd) error {
 	stdoutOutput := stdoutBuf.String()
 
 	// Debug: log output lengths and content
-	logrus.Debugf("📝 Captured stderr length: %d bytes, stdout length: %d bytes", len(stderrOutput), len(stdoutOutput))
+	logrus.Debugf("Captured stderr length: %d bytes, stdout length: %d bytes", len(stderrOutput), len(stdoutOutput))
 	if stderrOutput != "" {
 		const stderrPreviewLength = 200
-		logrus.Debugf("📝 Stderr preview (first 200 chars): %s", truncateString(stderrOutput, stderrPreviewLength))
+		logrus.Debugf("Stderr preview (first 200 chars): %s", truncateString(stderrOutput, stderrPreviewLength))
 	}
 	if stdoutOutput != "" {
 		const stdoutPreviewLength = 200
-		logrus.Debugf("📝 Stdout preview (first 200 chars): %s", truncateString(stdoutOutput, stdoutPreviewLength))
+		logrus.Debugf("Stdout preview (first 200 chars): %s", truncateString(stdoutOutput, stdoutPreviewLength))
 	}
 
 	// Log full output for debugging if it contains error patterns
 	if strings.Contains(strings.ToLower(stderrOutput+stdoutOutput), "not found") ||
 		strings.Contains(strings.ToLower(stderrOutput+stdoutOutput), "error") {
-		logrus.Debugf("📝 Full stderr output: %s", stderrOutput)
-		logrus.Debugf("📝 Full stdout output: %s", stdoutOutput)
+		logrus.Debugf("Full stderr output: %s", stderrOutput)
+		logrus.Debugf("Full stdout output: %s", stdoutOutput)
 	}
 
 	// Check if there were permission errors in stderr
@@ -195,7 +195,7 @@ func executeAndCleanupCommand(cmd *exec.Cmd) error {
 
 	if hasPermError {
 		commandStr := strings.Join(cmd.Args, " ")
-		logrus.Warnf("⚠️ Permission error detected in command output: %s", commandStr)
+		logrus.Warnf("Permission error detected in command output: %s", commandStr)
 
 		// Parse stderr and fix permission errors
 		fixedDirs := util.ParsePermissionErrorAndFix(stderrOutput)
@@ -226,7 +226,7 @@ func executeAndCleanupCommand(cmd *exec.Cmd) error {
 				logrus.Errorf("Retry command failed: %v", retryErr)
 				return errors.Wrapf(retryErr, "command failed after retry: %s", commandStr)
 			}
-			logrus.Infof("✅ Retry command succeeded after fixing permissions")
+			logrus.Infof("Retry command succeeded after fixing permissions")
 		}
 	}
 
@@ -252,11 +252,11 @@ func checkCommandErrors(cmd *exec.Cmd, waitErr error, combinedOutput string) err
 	if waitErr != nil {
 		// Process exit error - definitely failed
 		if errMsg != "" {
-			logrus.Errorf("❌ Command failed: %s - %s", errMsg, commandStr)
+			logrus.Errorf("Command failed: %s - %s", errMsg, commandStr)
 			return errors.Wrapf(waitErr, "command failed: %s (%s, output: %s)",
 				commandStr, errMsg, combinedOutput)
 		}
-		logrus.Errorf("❌ Command execution failed: %s", commandStr)
+		logrus.Errorf("Command execution failed: %s", commandStr)
 		return errors.Wrapf(waitErr, "command failed: %s (output: %s)", commandStr, combinedOutput)
 	}
 
@@ -265,7 +265,7 @@ func checkCommandErrors(cmd *exec.Cmd, waitErr error, combinedOutput string) err
 		// For piped commands, errors in output indicate failure even if exit code is 0
 		// Example: "curl ... | bash" - bash succeeds (exit 0) but curl fails
 		// The error "curl: not found" appears in stderr/stdout
-		logrus.Errorf("❌ Command failed: %s - %s", errMsg, commandStr)
+		logrus.Errorf("Command failed: %s - %s", errMsg, commandStr)
 		logrus.Errorf("   Command exited with code 0, but output contains errors " +
 			"(likely piped command failure)")
 		logrus.Errorf("   Output: %s", truncateString(combinedOutput, maxOutputPreviewLength))

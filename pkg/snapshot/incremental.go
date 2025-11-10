@@ -168,7 +168,7 @@ func (s *IncrementalSnapshotter) SetFullScanBackup(enabled bool) {
 
 // SafeDetectChanges safely detects file changes with integrity verification
 func (s *IncrementalSnapshotter) SafeDetectChanges() ([]string, error) {
-	logrus.Debugf("🔍 Starting safe incremental change detection")
+	logrus.Debugf("Starting safe incremental change detection")
 
 	// 1. Incremental check (fast path)
 	incrementalChanges := s.detectIncrementalChanges()
@@ -277,7 +277,7 @@ func (s *IncrementalSnapshotter) detectIncrementalChanges() []string {
 				changedFiles = append(changedFiles, path)
 				changedSet[path] = true
 			}
-			logrus.Debugf("📄 File changed: %s", path)
+			logrus.Debugf("File changed: %s", path)
 		}
 	}
 

@@ -150,7 +150,7 @@ func (sc *SmartCache) Get(key string) (v1.Image, bool) {
 	// Try LRU cache first
 	if img, found := sc.lruCache.Get(key); found {
 		sc.recordHit()
-		logrus.Debugf("🎯 Cache hit for key: %s", key)
+		logrus.Debugf("Cache hit for key: %s", key)
 		return img, true
 	}
 
@@ -159,7 +159,7 @@ func (sc *SmartCache) Get(key string) (v1.Image, bool) {
 	if img, found := sc.preloadCache[key]; found {
 		sc.preloadMutex.RUnlock()
 		sc.recordPreloadHit()
-		logrus.Debugf("🚀 Preload cache hit for key: %s", key)
+		logrus.Debugf("Preload cache hit for key: %s", key)
 
 		// Move to LRU cache for future access
 		sc.lruCache.Put(key, img)
@@ -169,23 +169,23 @@ func (sc *SmartCache) Get(key string) (v1.Image, bool) {
 
 	// Cache miss
 	sc.recordMiss()
-	logrus.Debugf("❌ Cache miss for key: %s", key)
+	logrus.Debugf("Cache miss for key: %s", key)
 	return nil, false
 }
 
 // Put stores an image in the cache
 func (sc *SmartCache) Put(key string, img v1.Image) {
 	sc.lruCache.Put(key, img)
-	logrus.Debugf("💾 Cached image for key: %s", key)
+	logrus.Debugf("Cached image for key: %s", key)
 }
 
 // PreloadRequest requests preloading of an image
 func (sc *SmartCache) PreloadRequest(key string) {
 	select {
 	case sc.preloadWorker <- key:
-		logrus.Debugf("📥 Preload requested for key: %s", key)
+		logrus.Debugf("Preload requested for key: %s", key)
 	default:
-		logrus.Warnf("⚠️ Preload queue full, dropping request for key: %s", key)
+		logrus.Warnf("Preload queue full, dropping request for key: %s", key)
 	}
 }
 
@@ -305,13 +305,13 @@ func (sc *SmartCache) handlePreloadRequest(key string) {
 	sc.preloadMutex.RLock()
 	if len(sc.preloadCache) >= sc.maxPreloadSize {
 		sc.preloadMutex.RUnlock()
-		logrus.Debugf("⚠️ Preload cache full, skipping key: %s", key)
+		logrus.Debugf("Preload cache full, skipping key: %s", key)
 		return
 	}
 	sc.preloadMutex.RUnlock()
 
 	// Simulate preloading (in real implementation, this would fetch from registry)
-	logrus.Debugf("🔄 Preloading image for key: %s", key)
+	logrus.Debugf("Preloading image for key: %s", key)
 
 	// For now, we'll just mark it as requested
 	// In a real implementation, you'd fetch the image from the registry
@@ -397,7 +397,7 @@ func (sc *SmartCache) GetStatistics() *Statistics {
 func (sc *SmartCache) LogStatistics() {
 	stats := sc.GetStatistics()
 
-	logrus.Infof("📊 Smart Cache Statistics:")
+	logrus.Infof("Smart Cache Statistics:")
 	logrus.Infof("   Hits: %d, Misses: %d, Hit Rate: %.2f%%",
 		stats.Hits, stats.Misses, stats.HitRate*percentageBase)
 	logrus.Infof("   Preload Hits: %d, Preload Hit Rate: %.2f%%",
@@ -413,5 +413,5 @@ func (sc *SmartCache) Close() {
 	sc.preloadWg.Wait()
 	close(sc.preloadWorker)
 
-	logrus.Info("🔒 Smart cache closed")
+	logrus.Info("Smart cache closed")
 }

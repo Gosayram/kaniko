@@ -106,7 +106,7 @@ func NewAdvancedCopy(maxWorkers, bufferSize int, useSendfile bool) *AdvancedCopy
 
 // CopyFiles copies multiple files in parallel
 func (ac *AdvancedCopy) CopyFiles(tasks []CopyTask) error {
-	logrus.Infof("🚀 Starting parallel copy of %d files", len(tasks))
+	logrus.Infof("Starting parallel copy of %d files", len(tasks))
 
 	ac.stats.TotalFiles = int64(len(tasks))
 
@@ -162,7 +162,7 @@ func (ac *AdvancedCopy) CopyFiles(tasks []CopyTask) error {
 		return fmt.Errorf("copy completed with %d errors: %v", len(errors), errors[0])
 	}
 
-	logrus.Infof("✅ Parallel copy completed successfully")
+	logrus.Infof("Parallel copy completed successfully")
 	return nil
 }
 
@@ -235,7 +235,7 @@ func (ac *AdvancedCopy) copyWithSendfile(task *CopyTask) error {
 		ac.ProgressCallback(task.Src, bytesCopied, task.Size)
 	}
 
-	logrus.Debugf("📁 Copied %s using sendfile() (%d bytes)", task.Src, bytesCopied)
+	logrus.Debugf("Copied %s using sendfile() (%d bytes)", task.Src, bytesCopied)
 	return nil
 }
 
@@ -277,7 +277,7 @@ func (ac *AdvancedCopy) copyWithBuffer(task *CopyTask) error {
 		ac.ProgressCallback(task.Src, bytesCopied, task.Size)
 	}
 
-	logrus.Debugf("📁 Copied %s using buffer (%d bytes)", task.Src, bytesCopied)
+	logrus.Debugf("Copied %s using buffer (%d bytes)", task.Src, bytesCopied)
 	return nil
 }
 
@@ -361,7 +361,7 @@ func (ac *AdvancedCopy) logStatistics() {
 	ac.statsMutex.RLock()
 	defer ac.statsMutex.RUnlock()
 
-	logrus.Infof("📊 Copy Statistics:")
+	logrus.Infof("Copy Statistics:")
 	logrus.Infof("   Files: %d/%d (%.1f%%)",
 		ac.stats.FilesCopied, ac.stats.TotalFiles,
 		float64(ac.stats.FilesCopied)/float64(ac.stats.TotalFiles)*percentageBase)

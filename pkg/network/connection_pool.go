@@ -132,7 +132,7 @@ func NewConnectionPool(config *ConnectionPoolConfig) *ConnectionPool {
 		pool.dnsCache = NewDNSCache(config.DNSCacheTimeout)
 	}
 
-	logrus.Info("🌐 Connection pool initialized with optimizations")
+	logrus.Info("Connection pool initialized with optimizations")
 	return pool
 }
 
@@ -148,7 +148,7 @@ func (cp *ConnectionPool) GetTransport() *http.Transport {
 
 // Close closes the connection pool and cleans up resources
 func (cp *ConnectionPool) Close() error {
-	logrus.Info("🔌 Closing connection pool")
+	logrus.Info("Closing connection pool")
 
 	// Close DNS cache if enabled
 	if cp.dnsCache != nil {
@@ -158,7 +158,7 @@ func (cp *ConnectionPool) Close() error {
 	// Close idle connections
 	cp.transport.CloseIdleConnections()
 
-	logrus.Info("✅ Connection pool closed successfully")
+	logrus.Info("Connection pool closed successfully")
 	return nil
 }
 
@@ -205,7 +205,7 @@ func (cp *ConnectionPool) RecordCacheMiss() {
 func (cp *ConnectionPool) LogStats() {
 	stats := cp.GetStats()
 
-	logrus.Infof("🌐 Connection Pool Statistics:")
+	logrus.Infof("Connection Pool Statistics:")
 	logrus.Infof("   Total Requests: %d", stats.TotalRequests)
 	logrus.Infof("   Average Latency: %v", stats.AverageLatency)
 	logrus.Infof("   DNS Cache Hits: %d", stats.CacheHits)
@@ -241,7 +241,7 @@ func dialWithOptimization(ctx context.Context, network, addr string, config *Con
 
 		// Record latency
 		latency := time.Since(start)
-		logrus.Debugf("🔌 Connection established to %s in %v", addr, latency)
+		logrus.Debugf("Connection established to %s in %v", addr, latency)
 
 		return conn, nil
 	}
