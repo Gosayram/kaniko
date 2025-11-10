@@ -138,81 +138,85 @@ release:
     cosign verify --key cosign.pub ghcr.io/{{ .Env.DOCKER_REPOSITORY }}/executor:{{ .Version }}
     ```
 
-# Docker images configuration (using dockers_v2)
-# dockers_v2 is in alpha and will replace dockers in GoReleaser v3
-dockers_v2:
+# Docker images configuration
+# Using dockers (deprecated but stable) - works with full build context
+dockers:
   - id: executor
-    images:
-      - "ghcr.io/{{ .Env.DOCKER_REPOSITORY }}/executor"
-    tags:
-      - "{{ .Version }}"
-      - "latest"
+    image_templates:
+      - "ghcr.io/{{ .Env.DOCKER_REPOSITORY }}/executor:{{ .Version }}"
+      - "ghcr.io/{{ .Env.DOCKER_REPOSITORY }}/executor:latest"
     dockerfile: deploy/Dockerfile
+    use: buildx
+    build_flag_templates:
+      - "--target=kaniko-executor"
+      - "--build-arg=VERSION={{ .Env.RELEASE_VERSION }}"
+      - "--build-arg=COMMIT={{ .Commit }}"
+      - "--build-arg=DATE={{ .Date }}"
+      - "--build-arg=TARGETARCH=amd64"
+      - "--build-arg=TARGETOS=linux"
+    goos: linux
+    goarch: amd64
     ids:
       - executor
-    flags:
-      - "--target=kaniko-executor"
-    build_args:
-      VERSION: "{{ .Env.RELEASE_VERSION }}"
-      COMMIT: "{{ .Commit }}"
-      DATE: "{{ .Date }}"
-    platforms:
-      - linux/amd64
+    skip_push: false
 
   - id: executor-debug
-    images:
-      - "ghcr.io/{{ .Env.DOCKER_REPOSITORY }}/executor"
-    tags:
-      - "{{ .Version }}-debug"
-      - "debug"
+    image_templates:
+      - "ghcr.io/{{ .Env.DOCKER_REPOSITORY }}/executor:{{ .Version }}-debug"
+      - "ghcr.io/{{ .Env.DOCKER_REPOSITORY }}/executor:debug"
     dockerfile: deploy/Dockerfile
+    use: buildx
+    build_flag_templates:
+      - "--target=kaniko-debug"
+      - "--build-arg=VERSION={{ .Env.RELEASE_VERSION }}"
+      - "--build-arg=COMMIT={{ .Commit }}"
+      - "--build-arg=DATE={{ .Date }}"
+      - "--build-arg=TARGETARCH=amd64"
+      - "--build-arg=TARGETOS=linux"
+    goos: linux
+    goarch: amd64
     ids:
       - executor
       - warmer
-    flags:
-      - "--target=kaniko-debug"
-    build_args:
-      VERSION: "{{ .Env.RELEASE_VERSION }}"
-      COMMIT: "{{ .Commit }}"
-      DATE: "{{ .Date }}"
-    platforms:
-      - linux/amd64
+    skip_push: false
 
   - id: executor-slim
-    images:
-      - "ghcr.io/{{ .Env.DOCKER_REPOSITORY }}/executor"
-    tags:
-      - "{{ .Version }}-slim"
-      - "slim"
+    image_templates:
+      - "ghcr.io/{{ .Env.DOCKER_REPOSITORY }}/executor:{{ .Version }}-slim"
+      - "ghcr.io/{{ .Env.DOCKER_REPOSITORY }}/executor:slim"
     dockerfile: deploy/Dockerfile
+    use: buildx
+    build_flag_templates:
+      - "--target=kaniko-slim"
+      - "--build-arg=VERSION={{ .Env.RELEASE_VERSION }}"
+      - "--build-arg=COMMIT={{ .Commit }}"
+      - "--build-arg=DATE={{ .Date }}"
+      - "--build-arg=TARGETARCH=amd64"
+      - "--build-arg=TARGETOS=linux"
+    goos: linux
+    goarch: amd64
     ids:
       - executor
-    flags:
-      - "--target=kaniko-slim"
-    build_args:
-      VERSION: "{{ .Env.RELEASE_VERSION }}"
-      COMMIT: "{{ .Commit }}"
-      DATE: "{{ .Date }}"
-    platforms:
-      - linux/amd64
+    skip_push: false
 
   - id: warmer
-    images:
-      - "ghcr.io/{{ .Env.DOCKER_REPOSITORY }}/warmer"
-    tags:
-      - "{{ .Version }}"
-      - "latest"
+    image_templates:
+      - "ghcr.io/{{ .Env.DOCKER_REPOSITORY }}/warmer:{{ .Version }}"
+      - "ghcr.io/{{ .Env.DOCKER_REPOSITORY }}/warmer:latest"
     dockerfile: deploy/Dockerfile
+    use: buildx
+    build_flag_templates:
+      - "--target=kaniko-warmer"
+      - "--build-arg=VERSION={{ .Env.RELEASE_VERSION }}"
+      - "--build-arg=COMMIT={{ .Commit }}"
+      - "--build-arg=DATE={{ .Date }}"
+      - "--build-arg=TARGETARCH=amd64"
+      - "--build-arg=TARGETOS=linux"
+    goos: linux
+    goarch: amd64
     ids:
       - warmer
-    flags:
-      - "--target=kaniko-warmer"
-    build_args:
-      VERSION: "{{ .Env.RELEASE_VERSION }}"
-      COMMIT: "{{ .Commit }}"
-      DATE: "{{ .Date }}"
-    platforms:
-      - linux/amd64
+    skip_push: false
 
 # Docker image signing with Cosign
 docker_signs:
