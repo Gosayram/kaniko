@@ -62,7 +62,7 @@ type KanikoOptions struct {
 	IgnorePaths              multiArg
 	DockerfilePath           string
 	SrcContext               string
-	SnapshotMode             string
+	SnapshotMode             string // --snapshot-mode=time (default: time for better performance)
 	SnapshotModeDeprecated   string
 	CustomPlatform           string
 	CustomPlatformDeprecated string
@@ -76,8 +76,8 @@ type KanikoOptions struct {
 	ImageNameDigestFile      string
 	ImageNameTagDigestFile   string
 	OCILayoutPath            string
-	Compression              Compression
-	CompressionLevel         int
+	Compression              Compression // --compression=zstd (default: zstd for better performance)
+	CompressionLevel         int         // --compression-level=3 (default: 3 for optimal balance)
 	ImageFSExtractRetry      int
 	SingleSnapshot           bool
 	Reproducible             bool
@@ -118,10 +118,10 @@ type KanikoOptions struct {
 	MaxTotalArchiveSize string // --max-total-archive-size=10GB
 
 	// Performance optimization options
-	IncrementalSnapshots bool // --incremental-snapshots=true
-	MaxExpectedChanges   int  // --max-expected-changes=1000
-	IntegrityCheck       bool // --integrity-check=true
-	FullScanBackup       bool // --full-scan-backup=true
+	IncrementalSnapshots bool // --incremental-snapshots=true (enabled by default)
+	MaxExpectedChanges   int  // --max-expected-changes=5000 (default: 5000)
+	IntegrityCheck       bool // --integrity-check=true (enabled by default)
+	FullScanBackup       bool // --full-scan-backup=true (enabled by default)
 
 	// Resource control options
 	MaxMemoryUsageBytes   int64 // --max-memory-usage-bytes=2GB
@@ -154,7 +154,7 @@ type KanikoOptions struct {
 	EnableSmartCache bool          // --enable-smart-cache=true (enabled by default)
 
 	// Unified cache options (for combining multiple cache sources)
-	EnableUnifiedCache bool // --enable-unified-cache=false (disabled by default)
+	EnableUnifiedCache bool // --enable-unified-cache=true (enabled by default for better performance)
 
 	// Debug options for enhanced debugging and development
 	DebugOptions

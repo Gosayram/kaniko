@@ -250,15 +250,20 @@ func (s *Snapshotter) takeRegularSnapshot(files []string, shdCheckDelete, forceB
 		return "", resolveErr
 	}
 
-	logrus.Info("Taking snapshot of files...")
-	logrus.Debugf("Files to snapshot: %v (count: %d)", filesToAdd, len(filesToAdd))
+	// Reduced logging - only log if significant number of files
+	const significantFileCount = 100
+	if len(filesToAdd) > significantFileCount {
+		logrus.Infof("Taking snapshot of %d files...", len(filesToAdd))
+	} else {
+		logrus.Debugf("Taking snapshot of %d files...", len(filesToAdd))
+	}
 
 	sort.Strings(filesToAdd)
 
 	// Verify files exist before adding to layered map
 	verifyFilesExist(filesToAdd)
 
-	logrus.Debugf("Adding to layer: %v", filesToAdd)
+	// Removed verbose debug logging for files list - too verbose for thousands of files
 
 	// Add files to current layer.
 	if err := s.addFilesToLayeredMap(filesToAdd); err != nil {
@@ -274,10 +279,7 @@ func (s *Snapshotter) takeRegularSnapshot(files []string, shdCheckDelete, forceB
 	t := util.NewTar(f)
 	defer t.Close()
 
-	logrus.Debugf("About to write %d files to tar snapshot", len(filesToAdd))
-	if len(filesToAdd) > 0 {
-		logrus.Debugf("Files to write to tar: %v", filesToAdd)
-	}
+	// Removed verbose debug logging - too verbose for thousands of files
 
 	// Removed filesystem sync - simplified approach per plan
 	// Files are written directly, no need for explicit sync
@@ -407,9 +409,25 @@ func writeToTar(t util.Tar, files, whiteouts []string) error {
 	timer := timing.Start("Writing tar file")
 	defer timing.DefaultRun.Stop(timer)
 
-	// Now create the tar.
 	addedPaths := make(map[string]bool)
+	fileStatsCache := make(map[string]os.FileInfo)
 
+	if err := writeWhiteoutsToTar(t, whiteouts, addedPaths); err != nil {
+		return err
+	}
+
+	missingFiles, err := writeFilesToTar(t, files, addedPaths, fileStatsCache)
+	if err != nil {
+		return err
+	}
+
+	logMissingFiles(missingFiles)
+	logTotalFiles(len(addedPaths))
+	return nil
+}
+
+// writeWhiteoutsToTar writes whiteout files to tar
+func writeWhiteoutsToTar(t util.Tar, whiteouts []string, addedPaths map[string]bool) error {
 	for _, path := range whiteouts {
 		skipWhiteout, err := parentPathIncludesNonDirectory(path)
 		if err != nil {
@@ -426,38 +444,70 @@ func writeToTar(t util.Tar, files, whiteouts []string) error {
 			return err
 		}
 	}
+	return nil
+}
+
+// writeFilesToTar writes files to tar with caching
+func writeFilesToTar(
+	t util.Tar,
+	files []string,
+	addedPaths map[string]bool,
+	fileStatsCache map[string]os.FileInfo,
+) ([]string, error) {
+	var missingFiles []string
 
 	for _, path := range files {
-		// Verify file exists before adding to tar
-		if _, statErr := os.Lstat(path); statErr != nil {
+		fi, statErr := getFileInfoWithCache(path, fileStatsCache)
+		if statErr != nil {
 			if os.IsNotExist(statErr) {
-				logrus.Warnf("CRITICAL: File %s does not exist when trying to write to tar! "+
-					"This file will NOT be in the layer!", path)
-				logrus.Warnf("This may cause files to be missing in subsequent stages or final image!")
+				missingFiles = append(missingFiles, path)
 				continue
 			}
-			logrus.Warnf("Failed to stat file %s: %v, skipping", path, statErr)
+			logrus.Debugf("Failed to stat file %s: %v, skipping", path, statErr)
 			continue
 		}
+		_ = fi // File info is used implicitly by AddFileToTar
 
 		if err := addParentDirectories(t, addedPaths, path); err != nil {
 			logrus.Warnf("Failed to add parent directories for %s: %v", path, err)
-			return err
+			return missingFiles, err
 		}
 		if _, pathAdded := addedPaths[path]; pathAdded {
-			logrus.Debugf("Path %s already added to tar, skipping", path)
 			continue
 		}
-		logrus.Debugf("Adding file to tar: %s", path)
 		if err := t.AddFileToTar(path); err != nil {
 			logrus.Errorf("CRITICAL: Failed to add file %s to tar: %v - this file will NOT be in the layer!", path, err)
-			return fmt.Errorf("failed to add file %s to tar: %w", path, err)
+			return missingFiles, fmt.Errorf("failed to add file %s to tar: %w", path, err)
 		}
 		addedPaths[path] = true
-		logrus.Debugf("Successfully added file to tar: %s", path)
 	}
-	logrus.Debugf("Total files written to tar: %d", len(addedPaths))
-	return nil
+
+	return missingFiles, nil
+}
+
+// logMissingFiles logs missing files summary
+func logMissingFiles(missingFiles []string) {
+	const maxMissingFilesToLog = 10
+	if len(missingFiles) == 0 {
+		return
+	}
+	logrus.Warnf("WARNING: %d files do not exist when trying to write to tar! "+
+		"These files will NOT be in the layer! This may cause files to be missing in subsequent stages or final image!",
+		len(missingFiles))
+	if len(missingFiles) <= maxMissingFilesToLog {
+		logrus.Warnf("Missing files: %v", missingFiles)
+	} else {
+		logrus.Warnf("Missing files (first %d): %v ... and %d more",
+			maxMissingFilesToLog, missingFiles[:maxMissingFilesToLog], len(missingFiles)-maxMissingFilesToLog)
+	}
+}
+
+// logTotalFiles logs total files written if significant
+func logTotalFiles(count int) {
+	const significantFileCount = 100
+	if count > significantFileCount {
+		logrus.Debugf("Total files written to tar: %d", count)
+	}
 }
 
 // Returns true if a parent of the given path has been replaced with anything other than a directory
@@ -473,6 +523,20 @@ func parentPathIncludesNonDirectory(path string) (bool, error) {
 		}
 	}
 	return false, nil
+}
+
+// getFileInfoWithCache retrieves file info with caching to avoid repeated os.Lstat calls
+func getFileInfoWithCache(path string, cache map[string]os.FileInfo) (os.FileInfo, error) {
+	if cachedFi, exists := cache[path]; exists {
+		return cachedFi, nil
+	}
+	// Verify file exists before adding to tar
+	fi, statErr := os.Lstat(path)
+	if statErr == nil {
+		// Cache successful stat result
+		cache[path] = fi
+	}
+	return fi, statErr
 }
 
 func addParentDirectories(t util.Tar, addedPaths map[string]bool, path string) error {

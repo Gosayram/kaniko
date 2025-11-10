@@ -22,11 +22,19 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 
 	"github.com/Gosayram/kaniko/pkg/util"
+)
+
+// Global file hash cache to avoid recomputing hashes for the same files
+// (per performance plan: cache file hashes to avoid repeated calculations)
+var (
+	fileHashCache   = make(map[string]string)
+	fileHashCacheMu sync.RWMutex
 )
 
 // NewCompositeCache returns an initialized composite cache object.
@@ -112,10 +120,28 @@ func (s *CompositeCache) AddPath(p string, context util.FileContext) error {
 	if context.ExcludesFile(p) {
 		return nil
 	}
-	fh, err := util.CacheHasher()(p)
-	if err != nil {
-		return err
+
+	// Check cache first (per performance plan: cache file hashes)
+	fileHashCacheMu.RLock()
+	cachedHash, exists := fileHashCache[p]
+	fileHashCacheMu.RUnlock()
+
+	var fh string
+	if exists {
+		fh = cachedHash
+	} else {
+		// Compute hash if not cached
+		var hashErr error
+		fh, hashErr = util.CacheHasher()(p)
+		if hashErr != nil {
+			return hashErr
+		}
+		// Cache the result (per performance plan: cache file hashes)
+		fileHashCacheMu.Lock()
+		fileHashCache[p] = fh
+		fileHashCacheMu.Unlock()
 	}
+
 	if _, err := sha.Write([]byte(fh)); err != nil {
 		return err
 	}
@@ -146,13 +172,30 @@ func hashDir(p string, context util.FileContext) (isEmpty bool, hash string, err
 			return nil
 		}
 
-		fileHash, err := util.CacheHasher()(path)
-		if err != nil {
-			// If file hashing fails, log warning and continue
-			// This prevents build failures when some files can't be hashed
-			logrus.Debugf("Failed to hash file %s: %v, skipping", path, err)
-			return nil
+		// Check cache first (per performance plan: cache file hashes)
+		fileHashCacheMu.RLock()
+		cachedHash, exists := fileHashCache[path]
+		fileHashCacheMu.RUnlock()
+
+		var fileHash string
+		if exists {
+			fileHash = cachedHash
+		} else {
+			// Compute hash if not cached
+			var hashErr error
+			fileHash, hashErr = util.CacheHasher()(path)
+			if hashErr != nil {
+				// If file hashing fails, log warning and continue
+				// This prevents build failures when some files can't be hashed
+				logrus.Debugf("Failed to hash file %s: %v, skipping", path, hashErr)
+				return nil
+			}
+			// Cache the result (per performance plan: cache file hashes)
+			fileHashCacheMu.Lock()
+			fileHashCache[path] = fileHash
+			fileHashCacheMu.Unlock()
 		}
+
 		if _, err := sha.Write([]byte(fileHash)); err != nil {
 			return err
 		}

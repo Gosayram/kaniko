@@ -51,10 +51,7 @@ type CopyCommand struct {
 
 // ExecuteCommand executes the COPY command by copying files from source to destination.
 func (c *CopyCommand) ExecuteCommand(config *v1.Config, buildArgs *dockerfile.BuildArgs) error {
-	logrus.Debugf("COPY: Starting execution of command: %s", c.cmd.String())
-	logrus.Debugf("COPY: File context root: %s", c.fileContext.Root)
-	logrus.Debugf("COPY: Source paths: %v", c.cmd.SourcePaths)
-	logrus.Debugf("COPY: Destination: %s", c.cmd.DestPath)
+	// Reduced verbose logging for performance - removed debug logs that create noise in pipelines
 
 	// Rootless: automatic permission validation before execution
 	rootlessManager := rootless.GetManager()
@@ -69,7 +66,6 @@ func (c *CopyCommand) ExecuteCommand(config *v1.Config, buildArgs *dockerfile.Bu
 
 	// Setup file context
 	c.fileContext = helper.SetupFileContext(c.cmd, c.fileContext)
-	logrus.Debugf("COPY: File context root after setup: %s", c.fileContext.Root)
 
 	// Reset snapshotFiles at start of execution
 	c.mu.Lock()
@@ -95,7 +91,7 @@ func (c *CopyCommand) ExecuteCommand(config *v1.Config, buildArgs *dockerfile.Bu
 		return err
 	}
 
-	logrus.Debugf("COPY: Resolved sources: %v, destination: %s", srcs, dest)
+	// Removed verbose debug logging for performance
 
 	// Copy each source
 	err = c.copySources(srcs, dest, config, uid, gid, chmod, useDefaultChmod)
@@ -106,7 +102,10 @@ func (c *CopyCommand) ExecuteCommand(config *v1.Config, buildArgs *dockerfile.Bu
 	c.mu.Lock()
 	finalFiles := len(c.snapshotFiles)
 	c.mu.Unlock()
-	logrus.Infof("COPY: Command completed. Total files added to snapshot: %d", finalFiles)
+	// Reduced logging - only log if significant number of files or in debug mode
+	if finalFiles > 0 {
+		logrus.Debugf("COPY: Command completed. Total files added to snapshot: %d", finalFiles)
+	}
 
 	// If no files were copied, log warning (like original kaniko does)
 	// Original kaniko behavior: empty tarPath results in no layer, but build continues
@@ -304,14 +303,13 @@ func (c *CopyCommand) copyRegularFile(fullPath, destPath string, uid, gid int64,
 		return errors.Wrap(err, "copying file")
 	}
 	if exclude {
-		logrus.Debugf("COPY: File %s excluded from snapshot (likely in .dockerignore)", destPath)
+		// Removed verbose debug logging for excluded files
 		return nil
 	}
 	c.mu.Lock()
 	c.snapshotFiles = append(c.snapshotFiles, destPath)
-	totalFiles := len(c.snapshotFiles)
 	c.mu.Unlock()
-	logrus.Debugf("COPY: Added file %s to snapshot files list (total: %d)", destPath, totalFiles)
+	// Removed verbose per-file debug logging for performance
 	return nil
 }
 

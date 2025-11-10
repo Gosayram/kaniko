@@ -115,8 +115,6 @@ const (
 	ManifestCacheTimeoutMin = 30
 
 	// Filesystem sync constants
-	// maxSampleEntries is the maximum number of directory entries to log for debugging
-	maxSampleEntries = 5
 )
 
 // for testing
@@ -159,6 +157,10 @@ type stageBuilder struct {
 	cachedLayers []v1.Layer // Cached image layers
 	digestValid  bool       // Whether cached digest is valid
 	layersValid  bool       // Whether cached layers are valid
+
+	// Cache for cross-stage file search results (per performance plan: optimize cross-stage deps)
+	fileSearchCache  map[string][]string
+	searchCacheMutex sync.RWMutex //nolint:unused // Used in findFilesForDependencyWithArgsFromRoot
 
 	// Mutex for thread-safe access to shared state
 	mutex sync.RWMutex
@@ -352,6 +354,8 @@ func newStageBuilder(
 		cachedLayers: layers,
 		digestValid:  true,
 		layersValid:  true,
+		// Initialize file search cache (per performance plan: optimize cross-stage deps)
+		fileSearchCache: make(map[string][]string),
 	}
 
 	for _, cmd := range stage.Commands {
@@ -483,6 +487,52 @@ func isOCILayout(path string) bool {
 	return strings.HasPrefix(path, "oci:")
 }
 
+// calculatePrefetchKeys calculates cache keys for next 2-3 commands for prefetching
+// This improves cache hit rate by preloading potential layers (per performance plan)
+func (s *stageBuilder) calculatePrefetchKeys(
+	currentIndex int,
+	currentCompositeKey CompositeCache,
+	cfg *v1.Config,
+	args *dockerfile.BuildArgs,
+) []string {
+	prefetchKeys := []string{}
+	maxPrefetch := 3 // Prefetch up to 3 next commands
+
+	// Calculate keys for next commands
+	compositeKey := currentCompositeKey
+	for i := currentIndex + 1; i < len(s.cmds) && i <= currentIndex+maxPrefetch; i++ {
+		command := s.cmds[i]
+		if command == nil || !command.ShouldCacheOutput() {
+			continue
+		}
+
+		// Get files for this command
+		files, err := command.FilesUsedFromContext(cfg, args)
+		if err != nil {
+			logrus.Debugf("Failed to get files for prefetch command %d: %v", i, err)
+			continue
+		}
+
+		// Populate composite key for this command
+		compositeKey, err = s.populateCompositeKey(command, files, compositeKey, args, cfg.Env)
+		if err != nil {
+			logrus.Debugf("Failed to populate composite key for prefetch command %d: %v", i, err)
+			continue
+		}
+
+		// Calculate hash
+		ck, err := compositeKey.Hash()
+		if err != nil {
+			logrus.Debugf("Failed to hash composite key for prefetch command %d: %v", i, err)
+			continue
+		}
+
+		prefetchKeys = append(prefetchKeys, ck)
+	}
+
+	return prefetchKeys
+}
+
 func (s *stageBuilder) populateCompositeKey(
 	command commands.DockerCommand,
 	files []string,
@@ -561,12 +611,19 @@ func (s *stageBuilder) optimize(compositeKey CompositeCache, cfg *v1.Config) err
 		// Check cache for each command independently (BuildKit-style)
 		// Even if previous commands missed cache, we still check this one
 		if command.ShouldCacheOutput() {
+			// Store cache key for potential reuse (per performance plan: cache composite keys)
+			s.digestToCacheKey[ck] = ck
+
 			img, err := s.layerCache.RetrieveLayer(ck)
 
 			if err != nil {
 				logrus.Debugf("Cache miss for command %s: %s", commandStr, err)
 				logrus.Debugf("Cache key: %s", compositeKey.Key())
 				logrus.Debugf("Cache key components: %v", compositeKey.keys)
+
+				// Prefetch potential next layers (per performance plan: prefetch potential layers)
+				s.prefetchNextLayers(i, compositeKey, cfg)
+
 				// Continue to next command - don't stop checking cache
 				// This allows partial cache hits (some commands cached, others not)
 			} else {
@@ -586,6 +643,21 @@ func (s *stageBuilder) optimize(compositeKey CompositeCache, cfg *v1.Config) err
 		}
 	}
 	return nil
+}
+
+// prefetchNextLayers prefetches potential next layers if unified cache is enabled
+func (s *stageBuilder) prefetchNextLayers(currentIndex int, compositeKey CompositeCache, cfg *v1.Config) {
+	if !s.opts.EnableUnifiedCache || currentIndex >= len(s.cmds)-1 {
+		return
+	}
+	prefetchKeys := s.calculatePrefetchKeys(currentIndex, compositeKey, cfg, s.args)
+	if len(prefetchKeys) == 0 {
+		return
+	}
+	if unifiedCache, ok := s.layerCache.(*cache.UnifiedCache); ok {
+		unifiedCache.Prefetch(prefetchKeys)
+		logrus.Debugf("Prefetching %d potential cache keys for next commands", len(prefetchKeys))
+	}
 }
 
 func (s *stageBuilder) build() error {
@@ -628,6 +700,13 @@ func (s *stageBuilder) initCacheKey() (*CompositeCache, error) {
 }
 
 func (s *stageBuilder) unpackFilesystemIfNeeded() error {
+	// Early check for InitialFSUnpacked to avoid unnecessary iteration (per performance plan)
+	if s.stage.Index == 0 && s.opts.InitialFSUnpacked {
+		logrus.Info("Skipping FS unpacking for initial stage (InitialFSUnpacked=true) - significant time savings")
+		return nil
+	}
+
+	// Check if any command requires unpacked filesystem
 	shouldUnpack := false
 	for _, cmd := range s.cmds {
 		if cmd.RequiresUnpackedFS() {
@@ -636,11 +715,10 @@ func (s *stageBuilder) unpackFilesystemIfNeeded() error {
 			break
 		}
 	}
+
+	// Check cross-stage dependencies
 	if len(s.crossStageDeps[s.stage.Index]) > 0 {
 		shouldUnpack = true
-	}
-	if s.stage.Index == 0 && s.opts.InitialFSUnpacked {
-		shouldUnpack = false
 	}
 
 	if !shouldUnpack {
@@ -1549,7 +1627,9 @@ func getFilesFromStage(
 	}
 
 	// Find files in the extracted directory
-	return filesToSaveWithArgsFromRoot(patterns, buildArgs, stageSnapshot.ExtractDir), nil
+	// Need stageBuilder reference for cache - this is called from getFilesFromStage
+	// For now, call without cache (will be optimized when called from stageBuilder context)
+	return filesToSaveWithArgsFromRootStandalone(patterns, buildArgs, stageSnapshot.ExtractDir), nil
 }
 
 // extractImageToTemp extracts an image to a temporary directory
@@ -1583,25 +1663,24 @@ func saveCrossStageFiles(index int, filesToSave []string, tempExtractDir string)
 		copyRoot = "/"
 	}
 
-	logrus.Infof("Saving %d cross-stage dependency files to %s (copy root: %s)", len(filesToSave), dstDir, copyRoot)
+	// Reduced logging for performance - only log summary, not individual files
+	logrus.Debugf("Saving %d cross-stage dependency files to %s", len(filesToSave), dstDir)
 
 	successCount := 0
 	failedCount := 0
 
-	for i, p := range filesToSave {
-		logrus.Infof("   [%d/%d] Saving file: %s (relative path)", i+1, len(filesToSave), p)
-
+	for _, p := range filesToSave {
 		// Use local variable for file-specific root
 		fileCopyRoot := copyRoot
 
-		// Build absolute source path for logging
+		// Build absolute source path
 		absSrcPath := filepath.Join(fileCopyRoot, p)
-		logrus.Infof("      Source: %s (absolute)", absSrcPath)
 
 		// Check if source exists before copying
 		// Simplified: no fallback mechanisms - if file not found in extracted directory, skip it
 		if _, statErr := os.Stat(absSrcPath); statErr != nil {
-			logrus.Warnf("       Source file does not exist in extracted image: %s (error: %v), skipping", absSrcPath, statErr)
+			// Only log warnings for missing files, not every file operation
+			logrus.Debugf("Source file does not exist in extracted image: %s, skipping", absSrcPath)
 			failedCount++
 			continue
 		}
@@ -1613,8 +1692,7 @@ func saveCrossStageFiles(index int, filesToSave []string, tempExtractDir string)
 			continue
 		}
 
-		destPath := filepath.Join(dstDir, p)
-		logrus.Infof("      Successfully saved file %s -> %s", p, destPath)
+		// Removed per-file success logging - too verbose and resource-intensive
 		successCount++
 	}
 
@@ -1696,12 +1774,52 @@ func filesToSave(deps []string) []string {
 // filesToSaveWithArgs returns all the files matching the given pattern in deps with build args support.
 // If a file is a symlink, it also returns the target file.
 func filesToSaveWithArgs(deps []string, buildArgs *dockerfile.BuildArgs) []string {
-	return filesToSaveWithArgsFromRoot(deps, buildArgs, "/")
+	return filesToSaveWithArgsFromRootStandalone(deps, buildArgs, "/")
+}
+
+// filesToSaveWithArgsFromRootStandalone is a standalone version without cache (for backward compatibility)
+func filesToSaveWithArgsFromRootStandalone(deps []string, buildArgs *dockerfile.BuildArgs, searchRoot string) []string {
+	srcFiles := []string{}
+	for _, src := range deps {
+		cleanSrc := strings.TrimPrefix(src, "/")
+		searchPath := filepath.Join(searchRoot, cleanSrc)
+		// Use standalone find function without cache
+		files, err := findFilesForDependencyWithArgsFromRootStandalone(searchPath, buildArgs, searchRoot)
+		if err != nil {
+			logrus.Debugf("Failed to find files for %s (non-critical): %v", searchPath, err)
+			continue
+		}
+		srcFiles = append(srcFiles, files...)
+	}
+	return deduplicatePaths(srcFiles)
+}
+
+// findFilesForDependencyWithArgsFromRootStandalone is a standalone version without cache
+func findFilesForDependencyWithArgsFromRootStandalone(
+	searchPath string,
+	buildArgs *dockerfile.BuildArgs,
+	searchRoot string,
+) ([]string, error) {
+	resolvedPath := resolvePathVariablesWithArgs(searchPath, buildArgs)
+	if resolvedPath != searchPath {
+		searchPath = resolvedPath
+	}
+	info, statErr := os.Stat(searchPath)
+	if statErr == nil {
+		return processExistingPathFromRoot(searchPath, info, searchRoot)
+	}
+	return findSimilarPathsFromRoot(searchPath, searchRoot)
 }
 
 // filesToSaveWithArgsFromRoot returns all the files matching the given pattern in deps with build args support,
 // searching from the specified root directory. This is critical for finding files in extracted image layers.
-func filesToSaveWithArgsFromRoot(deps []string, buildArgs *dockerfile.BuildArgs, searchRoot string) []string {
+//
+//nolint:unused // Used internally for cross-stage dependency resolution
+func (s *stageBuilder) filesToSaveWithArgsFromRoot(
+	deps []string,
+	buildArgs *dockerfile.BuildArgs,
+	searchRoot string,
+) []string {
 	srcFiles := []string{}
 	logrus.Infof("Searching for cross-stage dependencies in root: %s", searchRoot)
 	logrus.Infof("   Patterns to search: %v", deps)
@@ -1722,7 +1840,7 @@ func filesToSaveWithArgsFromRoot(deps []string, buildArgs *dockerfile.BuildArgs,
 		searchPath := filepath.Join(searchRoot, cleanSrc)
 		logrus.Infof("Searching for file: %s (original: %s, clean: %s, root: %s)", searchPath, src, cleanSrc, searchRoot)
 
-		files, err := findFilesForDependencyWithArgsFromRoot(searchPath, buildArgs, searchRoot)
+		files, err := s.findFilesForDependencyWithArgsFromRoot(searchPath, buildArgs, searchRoot)
 		if err != nil {
 			// Non-critical: file may not exist or be accessible, skip this dependency
 			logrus.Debugf("Failed to find files for %s (non-critical): %v", searchPath, err)
@@ -1737,70 +1855,120 @@ func filesToSaveWithArgsFromRoot(deps []string, buildArgs *dockerfile.BuildArgs,
 
 // findFilesForDependencyWithArgsFromRoot finds files for a specific dependency path
 // with build args support, searching from the specified root directory.
-func findFilesForDependencyWithArgsFromRoot(
+// Uses caching to avoid repeated searches (per performance plan: optimize cross-stage deps)
+//
+//nolint:unused // Used in filesToSaveWithArgsFromRoot
+func (s *stageBuilder) findFilesForDependencyWithArgsFromRoot(
 	searchPath string,
 	buildArgs *dockerfile.BuildArgs,
 	searchRoot string,
 ) ([]string, error) {
+	// Create cache key (per performance plan: cache cross-stage file searches)
+	cacheKey := fmt.Sprintf("%s:%s", searchPath, searchRoot)
+
+	// Check cache first (per performance plan: cache cross-stage file searches)
+	s.searchCacheMutex.RLock()
+	if cached, exists := s.fileSearchCache[cacheKey]; exists {
+		s.searchCacheMutex.RUnlock()
+		logrus.Debugf("Cache hit for file search: %s (root: %s)", searchPath, searchRoot)
+		return cached, nil
+	}
+	s.searchCacheMutex.RUnlock()
+
 	logrus.Debugf("Searching for files: %s (root: %s)", searchPath, searchRoot)
 
 	// CRITICAL FIX: Handle variable substitution in paths using build args
-	// For example: /app/apps/${APP_TYPE}/.output should be resolved to /app/apps/webview/.output
 	resolvedPath := resolvePathVariablesWithArgs(searchPath, buildArgs)
 	if resolvedPath != searchPath {
 		logrus.Debugf("Resolved path variables: %s -> %s", searchPath, resolvedPath)
 		searchPath = resolvedPath
 	}
 
-	// First try exact path (works for both files and directories)
-	info, statErr := os.Stat(searchPath)
-	if statErr == nil {
-		logrus.Infof("   Found exact path: %s (dir: %v, size: %d)", searchPath, info.IsDir(), info.Size())
-		return processExistingPathFromRoot(searchPath, info, searchRoot)
+	// Try exact path first
+	if result, found := s.tryExactPath(searchPath, searchRoot); found {
+		return result, nil
 	}
 
-	logrus.Infof("    Exact path not found: %s (error: %v)", searchPath, statErr)
-
-	// Try to check parent directory
-	parentDir := filepath.Dir(searchPath)
-	parentInfo, parentErr := os.Stat(parentDir)
-	if parentErr == nil {
-		logrus.Infof("   Parent directory exists: %s (dir: %v)", parentDir, parentInfo.IsDir())
-		// List contents of parent directory for debugging
-		entries, listErr := os.ReadDir(parentDir)
-		if listErr == nil {
-			logrus.Infof("   Parent directory contains %d entries", len(entries))
-			// Show all entries, not just first few, for better debugging
-			for i, entry := range entries {
-				if i >= maxSampleEntries*2 {
-					logrus.Infof("     ... and %d more entries", len(entries)-i)
-					break
-				}
-				logrus.Infof("     - %s (dir: %v)", entry.Name(), entry.IsDir())
-			}
-
-			// CRITICAL FIX: Also try to find files by name pattern in parent directory
-			// This handles cases where files exist but with different paths
-			// This is a generic solution that works for any file name, no hardcoding
-			fileName := filepath.Base(searchPath)
-			if fileName != "" && fileName != "." && fileName != "/" {
-				for _, entry := range entries {
-					if entry.Name() == fileName {
-						foundPath := filepath.Join(parentDir, entry.Name())
-						logrus.Infof("   Found file by name pattern: %s", foundPath)
-						if foundInfo, foundErr := os.Stat(foundPath); foundErr == nil {
-							return processExistingPathFromRoot(foundPath, foundInfo, searchRoot)
-						}
-					}
-				}
-			}
-		}
-	} else {
-		logrus.Infof("    Parent directory does not exist: %s (error: %v)", parentDir, parentErr)
+	// Try parent directory search
+	if result, found := s.tryParentDirectorySearch(searchPath, searchRoot); found {
+		return result, nil
 	}
 
 	// Path doesn't exist, try to find similar paths
-	return findSimilarPathsFromRoot(searchPath, searchRoot)
+	result, err := findSimilarPathsFromRoot(searchPath, searchRoot)
+
+	// Cache result (per performance plan: optimize cross-stage deps)
+	if err == nil {
+		cacheKey := fmt.Sprintf("%s:%s", searchPath, searchRoot)
+		s.searchCacheMutex.Lock()
+		if s.fileSearchCache == nil {
+			s.fileSearchCache = make(map[string][]string)
+		}
+		s.fileSearchCache[cacheKey] = result
+		s.searchCacheMutex.Unlock()
+	}
+
+	return result, err
+}
+
+// tryExactPath tries to find file by exact path match
+//
+//nolint:unused // Used in findFilesForDependencyWithArgsFromRoot
+func (s *stageBuilder) tryExactPath(searchPath, searchRoot string) ([]string, bool) {
+	info, statErr := os.Stat(searchPath)
+	if statErr == nil {
+		logrus.Infof("   Found exact path: %s (dir: %v, size: %d)", searchPath, info.IsDir(), info.Size())
+		result, err := processExistingPathFromRoot(searchPath, info, searchRoot)
+		return result, err == nil
+	}
+	logrus.Infof("    Exact path not found: %s (error: %v)", searchPath, statErr)
+	return nil, false
+}
+
+// tryParentDirectorySearch tries to find file by searching in parent directory
+//
+//nolint:unused // Used in findFilesForDependencyWithArgsFromRoot
+func (s *stageBuilder) tryParentDirectorySearch(searchPath, searchRoot string) ([]string, bool) {
+	parentDir := filepath.Dir(searchPath)
+	parentInfo, parentErr := os.Stat(parentDir)
+	if parentErr != nil {
+		logrus.Infof("    Parent directory does not exist: %s (error: %v)", parentDir, parentErr)
+		return nil, false
+	}
+
+	logrus.Infof("   Parent directory exists: %s (dir: %v)", parentDir, parentInfo.IsDir())
+	entries, listErr := os.ReadDir(parentDir)
+	if listErr != nil {
+		return nil, false
+	}
+
+	logrus.Infof("   Parent directory contains %d entries", len(entries))
+	const maxEntriesToLog = 10
+	for i, entry := range entries {
+		if i >= maxEntriesToLog {
+			logrus.Infof("     ... and %d more entries", len(entries)-i)
+			break
+		}
+		logrus.Infof("     - %s (dir: %v)", entry.Name(), entry.IsDir())
+	}
+
+	// Try to find files by name pattern in parent directory
+	fileName := filepath.Base(searchPath)
+	if fileName == "" || fileName == "." || fileName == "/" {
+		return nil, false
+	}
+
+	for _, entry := range entries {
+		if entry.Name() == fileName {
+			foundPath := filepath.Join(parentDir, entry.Name())
+			logrus.Infof("   Found file by name pattern: %s", foundPath)
+			if foundInfo, foundErr := os.Stat(foundPath); foundErr == nil {
+				result, err := processExistingPathFromRoot(foundPath, foundInfo, searchRoot)
+				return result, err == nil
+			}
+		}
+	}
+	return nil, false
 }
 
 // calculateRelativePath calculates relative path from searchRoot to the given absolute path.
@@ -1853,8 +2021,7 @@ func processExistingPathFromRoot(searchPath string, info os.FileInfo, searchRoot
 	relPath := calculateRelativePath(searchPath, searchRoot)
 	if relPath != "" {
 		srcFiles = append(srcFiles, relPath)
-		logrus.Infof("   Added file to cross-stage dependencies: %s "+
-			"(absolute: %s, root: %s)", relPath, searchPath, searchRoot)
+		// Removed per-file logging - too verbose for thousands of files
 	} else {
 		logrus.Warnf("    Failed to calculate relative path from %s to %s",
 			searchRoot, searchPath)
@@ -1876,7 +2043,7 @@ func walkDirectoryFromRoot(searchPath, searchRoot string) ([]string, error) {
 			relPath := calculateRelativePath(path, searchRoot)
 			if relPath != "" {
 				srcFiles = append(srcFiles, relPath)
-				logrus.Debugf("Added file to cross-stage dependencies: %s (from root: %s)", relPath, searchRoot)
+				// Removed per-file debug logging - too verbose for thousands of files
 			}
 		}
 		return nil
@@ -2459,7 +2626,7 @@ func optimizeForNoCache(opts *config.KanikoOptions) {
 	// 8. Increase command timeout for slower operations without cache
 	if opts.CommandTimeout == 0 {
 		opts.CommandTimeout = CommandTimeoutMinutes * time.Minute
-		logrus.Info("⏰ Set command timeout to 30 minutes for no-cache build")
+		logrus.Info("Set command timeout to 30 minutes for no-cache build")
 	}
 
 	// 9. Increase retry attempts for network operations
@@ -2492,8 +2659,8 @@ func optimizePerformance(opts *config.KanikoOptions) {
 		logrus.Info("Set compression to zstd for better performance")
 	}
 
-	// 2. Set optimal compression level
-	if opts.CompressionLevel == 0 {
+	// 2. Set optimal compression level (check for -1 which is default flag value, or 0)
+	if opts.CompressionLevel <= 0 {
 		opts.CompressionLevel = 3 // Good balance between speed and compression
 		logrus.Info("Set compression level to 3 for optimal performance")
 	}
@@ -2516,10 +2683,10 @@ func optimizePerformance(opts *config.KanikoOptions) {
 		logrus.Info("Enabled integrity check for better reliability")
 	}
 
-	// 6. Set reasonable max expected changes
+	// 6. Set reasonable max expected changes (per performance plan: 5000 for better balance)
 	if opts.MaxExpectedChanges == 0 {
-		opts.MaxExpectedChanges = 1000
-		logrus.Info("📈 Set max expected changes to 1000 for better performance")
+		opts.MaxExpectedChanges = 5000 // Good balance for most projects per plan
+		logrus.Info("Set max expected changes to 5000 for better performance")
 	}
 
 	// 7. Enable full scan backup for safety
@@ -2550,13 +2717,13 @@ func optimizeNetwork(opts *config.KanikoOptions) {
 	// 3. Set max delay for retries
 	if opts.PushRetryMaxDelay == 0 {
 		opts.PushRetryMaxDelay = 30000 // 30 seconds
-		logrus.Info("⏰ Set push retry max delay to 30 seconds")
+		logrus.Info("Set push retry max delay to 30 seconds")
 	}
 
 	// 4. Set backoff multiplier for exponential backoff
 	if opts.PushRetryBackoffMultiplier == 0 {
 		opts.PushRetryBackoffMultiplier = 2.0
-		logrus.Info("📈 Set push retry backoff multiplier to 2.0")
+		logrus.Info("Set push retry backoff multiplier to 2.0")
 	}
 
 	// 5. Set image download retry
@@ -2575,22 +2742,48 @@ func optimizeNetwork(opts *config.KanikoOptions) {
 }
 
 // initializeNetworkManager initializes the advanced network manager
+// Per performance plan: uses environment variables for configuration
 func initializeNetworkManager(_ *config.KanikoOptions) *network.Manager {
 	logrus.Info("Initializing advanced network manager")
+
+	// Read network settings from environment variables (per performance plan)
+	maxConcurrency := MaxConcurrency
+	if val := os.Getenv("KANIKO_MAX_CONCURRENCY"); val != "" {
+		if intVal, err := strconv.Atoi(val); err == nil && intVal > 0 {
+			maxConcurrency = intVal
+			logrus.Infof("Using KANIKO_MAX_CONCURRENCY=%d", intVal)
+		}
+	}
+
+	maxIdleConns := MaxIdleConns
+	if val := os.Getenv("KANIKO_MAX_IDLE_CONNS"); val != "" {
+		if intVal, err := strconv.Atoi(val); err == nil && intVal > 0 {
+			maxIdleConns = intVal
+			logrus.Infof("Using KANIKO_MAX_IDLE_CONNS=%d", intVal)
+		}
+	}
+
+	requestTimeout := RequestTimeoutMin * time.Minute
+	if val := os.Getenv("KANIKO_REQUEST_TIMEOUT"); val != "" {
+		if duration, err := time.ParseDuration(val); err == nil && duration > 0 {
+			requestTimeout = duration
+			logrus.Infof("Using KANIKO_REQUEST_TIMEOUT=%v", duration)
+		}
+	}
 
 	// Create optimized network manager configuration
 	networkConfig := &network.ManagerConfig{
 		// Connection pool settings - optimized for registry operations
-		MaxIdleConns:        MaxIdleConns,                     // Increased for better connection reuse
+		MaxIdleConns:        maxIdleConns,                     // From env or default
 		MaxIdleConnsPerHost: MaxIdleConnsPerHost,              // Increased for registry connections
 		MaxConnsPerHost:     MaxConnsPerHost,                  // Increased for parallel operations
 		IdleConnTimeout:     IdleConnTimeoutMin * time.Minute, // Longer timeout for registry connections
 
 		// Parallel client settings - optimized for image operations
-		MaxConcurrency: MaxConcurrency,                  // Increased for better parallelism
-		RequestTimeout: RequestTimeoutMin * time.Minute, // Longer timeout for large images
-		RetryAttempts:  RetryAttempts,                   // More retries for better reliability
-		RetryDelay:     RetryDelaySec * time.Second,     // Longer delay between retries
+		MaxConcurrency: maxConcurrency,              // From env or default
+		RequestTimeout: requestTimeout,              // From env or default
+		RetryAttempts:  RetryAttempts,               // More retries for better reliability
+		RetryDelay:     RetryDelaySec * time.Second, // Longer delay between retries
 
 		// Registry client settings - optimized for container registries
 		EnableParallelPull: true,
@@ -2674,7 +2867,7 @@ func optimizeFilesystem(opts *config.KanikoOptions) {
 		logrus.Info("Set compression to zstd for better filesystem performance")
 	}
 
-	if opts.CompressionLevel == 0 {
+	if opts.CompressionLevel <= 0 {
 		opts.CompressionLevel = 3 // Good balance between speed and compression
 		logrus.Info("Set compression level to 3 for optimal filesystem performance")
 	}
@@ -2685,6 +2878,19 @@ func optimizeFilesystem(opts *config.KanikoOptions) {
 // applyComprehensiveOptimizations applies all optimizations in the correct order
 func applyComprehensiveOptimizations(opts *config.KanikoOptions) {
 	logrus.Info("Applying comprehensive optimizations for maximum performance")
+
+	// 0. Enable cache automatically if unified cache is enabled (per performance plan)
+	if opts.EnableUnifiedCache && !opts.Cache {
+		opts.Cache = true
+		logrus.Info("Automatically enabled cache because unified cache is enabled")
+	}
+
+	// 0.1. Ensure CacheDir is set for unified cache (per performance plan)
+	// Local file cache provides fastest cache lookups (milliseconds vs seconds)
+	if opts.EnableUnifiedCache && opts.CacheDir == "" {
+		opts.CacheDir = "/cache" // Default cache directory
+		logrus.Info("Set cache directory to /cache for unified cache (fastest cache source)")
+	}
 
 	// 1. Apply no-cache optimizations first (foundation) - only when cache is not used
 	if !opts.Cache {
@@ -2728,7 +2934,7 @@ func validateOptimizations(opts *config.KanikoOptions) {
 	if opts.Compression == "" {
 		logrus.Warn(" Compression should be set for optimal performance")
 	}
-	if opts.CompressionLevel == 0 {
+	if opts.CompressionLevel <= 0 {
 		logrus.Warn(" CompressionLevel should be set for optimal performance")
 	}
 

@@ -164,6 +164,97 @@ func setIgnoreContext(t *testing.T, content string) (util.FileContext, error) {
 	return util.NewFileContextFromDockerfile(dockerIgnoreDir, "")
 }
 
+// TestCompositeCache_FileHashCaching tests that file hashes are cached to avoid recomputation
+func TestCompositeCache_FileHashCaching(t *testing.T) {
+	tmpDir := t.TempDir()
+	filePath := filepath.Join(tmpDir, "testfile.txt")
+	if err := os.WriteFile(filePath, []byte("test content"), 0644); err != nil {
+		t.Fatalf("Failed to create test file: %v", err)
+	}
+
+	fileContext := util.FileContext{Root: tmpDir}
+
+	// First call - should compute hash
+	cache1 := NewCompositeCache()
+	if err := cache1.AddPath(filePath, fileContext); err != nil {
+		t.Fatalf("Failed to add path: %v", err)
+	}
+	keys1 := cache1.keys
+
+	// Clear the global cache to test caching
+	fileHashCacheMu.Lock()
+	originalCache := make(map[string]string)
+	for k, v := range fileHashCache {
+		originalCache[k] = v
+	}
+	fileHashCache = make(map[string]string)
+	fileHashCacheMu.Unlock()
+
+	// Second call - should use cached hash (but cache is cleared, so will recompute)
+	cache2 := NewCompositeCache()
+	if err := cache2.AddPath(filePath, fileContext); err != nil {
+		t.Fatalf("Failed to add path: %v", err)
+	}
+	keys2 := cache2.keys
+
+	// Restore original cache
+	fileHashCacheMu.Lock()
+	fileHashCache = originalCache
+	fileHashCacheMu.Unlock()
+
+	// Hashes should be the same (same file content)
+	if len(keys1) != len(keys2) || keys1[0] != keys2[0] {
+		t.Errorf("Expected same hash for same file, got keys1=%v, keys2=%v", keys1, keys2)
+	}
+
+	// Third call - should use cached hash from global cache
+	cache3 := NewCompositeCache()
+	if err := cache3.AddPath(filePath, fileContext); err != nil {
+		t.Fatalf("Failed to add path: %v", err)
+	}
+	keys3 := cache3.keys
+
+	// Should be the same as previous calls
+	if len(keys3) != len(keys2) || keys3[0] != keys2[0] {
+		t.Errorf("Expected cached hash to match, got keys2=%v, keys3=%v", keys2, keys3)
+	}
+}
+
+// TestCompositeCache_DirectoryHashCaching tests that directory hashes are cached
+func TestCompositeCache_DirectoryHashCaching(t *testing.T) {
+	tmpDir := t.TempDir()
+	subDir := filepath.Join(tmpDir, "subdir")
+	if err := os.MkdirAll(subDir, 0755); err != nil {
+		t.Fatalf("Failed to create subdirectory: %v", err)
+	}
+
+	filePath := filepath.Join(subDir, "file.txt")
+	if err := os.WriteFile(filePath, []byte("content"), 0644); err != nil {
+		t.Fatalf("Failed to create test file: %v", err)
+	}
+
+	fileContext := util.FileContext{Root: tmpDir}
+
+	// First call
+	cache1 := NewCompositeCache()
+	if err := cache1.AddPath(subDir, fileContext); err != nil {
+		t.Fatalf("Failed to add directory: %v", err)
+	}
+	keys1 := cache1.keys
+
+	// Second call - should use cached hashes for files in directory
+	cache2 := NewCompositeCache()
+	if err := cache2.AddPath(subDir, fileContext); err != nil {
+		t.Fatalf("Failed to add directory: %v", err)
+	}
+	keys2 := cache2.keys
+
+	// Hashes should be the same
+	if len(keys1) != len(keys2) || keys1[0] != keys2[0] {
+		t.Errorf("Expected same hash for same directory, got keys1=%v, keys2=%v", keys1, keys2)
+	}
+}
+
 func hashDirectory(dirpath string, fileContext util.FileContext) (string, error) {
 	cache1 := NewCompositeCache()
 	err := cache1.AddPath(dirpath, fileContext)

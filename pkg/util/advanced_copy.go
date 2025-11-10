@@ -106,7 +106,7 @@ func NewAdvancedCopy(maxWorkers, bufferSize int, useSendfile bool) *AdvancedCopy
 
 // CopyFiles copies multiple files in parallel
 func (ac *AdvancedCopy) CopyFiles(tasks []CopyTask) error {
-	logrus.Infof("Starting parallel copy of %d files", len(tasks))
+	// Reduced logging - only log summary statistics, not start/completion for each operation
 
 	ac.stats.TotalFiles = int64(len(tasks))
 
@@ -162,7 +162,7 @@ func (ac *AdvancedCopy) CopyFiles(tasks []CopyTask) error {
 		return fmt.Errorf("copy completed with %d errors: %v", len(errors), errors[0])
 	}
 
-	logrus.Infof("Parallel copy completed successfully")
+	// Removed completion log - statistics are logged in logStatistics()
 	return nil
 }
 
@@ -235,7 +235,7 @@ func (ac *AdvancedCopy) copyWithSendfile(task *CopyTask) error {
 		ac.ProgressCallback(task.Src, bytesCopied, task.Size)
 	}
 
-	logrus.Debugf("Copied %s using sendfile() (%d bytes)", task.Src, bytesCopied)
+	// Removed per-file logging - too verbose for thousands of files
 	return nil
 }
 
@@ -277,7 +277,7 @@ func (ac *AdvancedCopy) copyWithBuffer(task *CopyTask) error {
 		ac.ProgressCallback(task.Src, bytesCopied, task.Size)
 	}
 
-	logrus.Debugf("Copied %s using buffer (%d bytes)", task.Src, bytesCopied)
+	// Removed per-file logging - too verbose for thousands of files
 	return nil
 }
 

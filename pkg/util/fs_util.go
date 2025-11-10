@@ -1657,7 +1657,7 @@ func CopyFile(src, dest string, context FileContext, uid, gid int64,
 	if err != nil {
 		return false, err
 	}
-	logrus.Debugf("Copying file %s to %s", src, dest)
+	// Removed per-file logging - too verbose for thousands of files
 
 	// Validate the source file path to prevent directory traversal
 	if err := ValidateFilePath(src); err != nil {

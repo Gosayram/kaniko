@@ -673,6 +673,50 @@ func setUpTest(t *testing.T) (string, *Snapshotter, func(), error) {
 	return testDir, snapshotter, cleanup, nil
 }
 
+// TestGetFileInfoWithCache tests that file info caching works correctly
+func TestGetFileInfoWithCache(t *testing.T) {
+	tmpDir := t.TempDir()
+	filePath := filepath.Join(tmpDir, "testfile.txt")
+	if err := os.WriteFile(filePath, []byte("test content"), 0644); err != nil {
+		t.Fatalf("Failed to create test file: %v", err)
+	}
+
+	cache := make(map[string]os.FileInfo)
+
+	// First call - should compute and cache
+	fi1, err1 := getFileInfoWithCache(filePath, cache)
+	if err1 != nil {
+		t.Fatalf("Failed to get file info: %v", err1)
+	}
+	if len(cache) != 1 {
+		t.Errorf("Expected cache to have 1 entry, got %d", len(cache))
+	}
+
+	// Second call - should use cached value
+	fi2, err2 := getFileInfoWithCache(filePath, cache)
+	if err2 != nil {
+		t.Fatalf("Failed to get file info: %v", err2)
+	}
+	if len(cache) != 1 {
+		t.Errorf("Expected cache to still have 1 entry, got %d", len(cache))
+	}
+
+	// File info should be the same
+	if fi1.Size() != fi2.Size() || fi1.ModTime() != fi2.ModTime() {
+		t.Errorf("Expected same file info, got fi1=%+v, fi2=%+v", fi1, fi2)
+	}
+
+	// Test with non-existent file
+	nonExistentPath := filepath.Join(tmpDir, "nonexistent.txt")
+	_, err3 := getFileInfoWithCache(nonExistentPath, cache)
+	if err3 == nil || !os.IsNotExist(err3) {
+		t.Errorf("Expected IsNotExist error, got %v", err3)
+	}
+	if len(cache) != 1 {
+		t.Errorf("Expected cache to still have 1 entry (non-existent files not cached), got %d", len(cache))
+	}
+}
+
 func listFilesInTar(path string) ([]string, error) {
 	f, err := os.Open(path)
 	if err != nil {

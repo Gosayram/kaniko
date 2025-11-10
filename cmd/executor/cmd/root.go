@@ -138,6 +138,9 @@ func validateFlags() {
 		}
 	}
 
+	// Allow setting network optimization parameters via environment variables (per performance plan)
+	configureNetworkFromEnvironment()
+
 	for _, target := range opts.RegistryMirrors {
 		if err := opts.RegistryMaps.Set(fmt.Sprintf("%s=%s", name.DefaultRegistry, target)); err != nil {
 			logrus.Warnf("Failed to set registry map for mirror: %v", err)
@@ -177,6 +180,67 @@ func configureDebugFromEnvironment() {
 	// Set debug components from environment
 	if components := os.Getenv("KANIKO_DEBUG_COMPONENTS"); components != "" {
 		opts.DebugComponents = strings.Split(components, ",")
+	}
+}
+
+// configureNetworkFromEnvironment sets network optimization parameters from environment variables
+// Per performance plan: allows configuration via KANIKO_MAX_CONCURRENCY, KANIKO_MAX_IDLE_CONNS, etc.
+func configureNetworkFromEnvironment() {
+	configureNetworkConcurrency()
+	configureNetworkIdleConns()
+	configureNetworkTimeout()
+	configurePushRetry()
+	configureImageDownloadRetry()
+}
+
+// configureNetworkConcurrency configures max concurrency from environment
+func configureNetworkConcurrency() {
+	if val := os.Getenv("KANIKO_MAX_CONCURRENCY"); val != "" {
+		if intVal, err := strconv.Atoi(val); err == nil && intVal > 0 {
+			logrus.Debugf("KANIKO_MAX_CONCURRENCY set to %d (used by network manager)", intVal)
+		}
+	}
+}
+
+// configureNetworkIdleConns configures max idle connections from environment
+func configureNetworkIdleConns() {
+	if val := os.Getenv("KANIKO_MAX_IDLE_CONNS"); val != "" {
+		if intVal, err := strconv.Atoi(val); err == nil && intVal > 0 {
+			logrus.Debugf("KANIKO_MAX_IDLE_CONNS set to %d (used by network manager)", intVal)
+		}
+	}
+}
+
+// configureNetworkTimeout configures request timeout from environment
+func configureNetworkTimeout() {
+	if val := os.Getenv("KANIKO_REQUEST_TIMEOUT"); val != "" {
+		if duration, err := time.ParseDuration(val); err == nil && duration > 0 {
+			logrus.Debugf("KANIKO_REQUEST_TIMEOUT set to %v (used by network manager)", duration)
+		}
+	}
+}
+
+// configurePushRetry configures push retry from environment
+func configurePushRetry() {
+	if val := os.Getenv("KANIKO_PUSH_RETRY"); val != "" {
+		if intVal, err := strconv.Atoi(val); err == nil && intVal >= 0 {
+			if opts.PushRetry == 0 {
+				opts.PushRetry = intVal
+				logrus.Infof("Set push retry to %d from KANIKO_PUSH_RETRY", intVal)
+			}
+		}
+	}
+}
+
+// configureImageDownloadRetry configures image download retry from environment
+func configureImageDownloadRetry() {
+	if val := os.Getenv("KANIKO_IMAGE_DOWNLOAD_RETRY"); val != "" {
+		if intVal, err := strconv.Atoi(val); err == nil && intVal >= 0 {
+			if opts.ImageDownloadRetry == 0 {
+				opts.ImageDownloadRetry = intVal
+				logrus.Infof("Set image download retry to %d from KANIKO_IMAGE_DOWNLOAD_RETRY", intVal)
+			}
+		}
 	}
 }
 
@@ -423,8 +487,8 @@ func addBasicFlags() {
 		"Name of the GCS bucket from which to access build context as tarball.")
 	RootCmd.PersistentFlags().VarP(&opts.Destinations, "destination", "d",
 		"Registry the final image should be pushed to. Set it repeatedly for multiple destinations.")
-	RootCmd.PersistentFlags().StringVarP(&opts.SnapshotMode, "snapshot-mode", "", "full",
-		"Change the file attributes inspected during snapshotting")
+	RootCmd.PersistentFlags().StringVarP(&opts.SnapshotMode, "snapshot-mode", "", "time",
+		"Change the file attributes inspected during snapshotting (default: time for better performance)")
 	RootCmd.PersistentFlags().StringVarP(&opts.CustomPlatform, "custom-platform", "", "",
 		"Specify the build platform if different from the current host")
 	RootCmd.PersistentFlags().VarP(&opts.BuildArgs, "build-arg", "",
@@ -563,9 +627,10 @@ func addBasicBuildFlags() {
 	RootCmd.PersistentFlags().BoolVarP(&opts.NoPush, "no-push", "", false,
 		"Do not push the image to the registry")
 	RootCmd.PersistentFlags().VarP(&opts.Compression, "compression", "",
-		"Compression algorithm (gzip, zstd)")
-	RootCmd.PersistentFlags().IntVarP(&opts.CompressionLevel, "compression-level", "", -1,
-		"Compression level")
+		"Compression algorithm (gzip, zstd). Default: zstd for better performance")
+	const defaultCompressionLevel = 3 // Optimal balance between speed and size for zstd
+	RootCmd.PersistentFlags().IntVarP(&opts.CompressionLevel, "compression-level", "", defaultCompressionLevel,
+		"Compression level (default: 3 for zstd, balance between speed and size)")
 	RootCmd.PersistentFlags().BoolVarP(&opts.Cleanup, "cleanup", "", false,
 		"Clean the filesystem at the end")
 	RootCmd.PersistentFlags().VarP(&opts.Labels, "label", "",
@@ -673,8 +738,9 @@ func addSecurityFlags() {
 }
 
 func addUnifiedCacheFlags() {
-	RootCmd.PersistentFlags().BoolVarP(&opts.EnableUnifiedCache, "enable-unified-cache", "", false,
-		"Enable unified cache for combining multiple cache sources (local, registry, S3, etc.). Default: false")
+	RootCmd.PersistentFlags().BoolVarP(&opts.EnableUnifiedCache, "enable-unified-cache", "", true,
+		"Enable unified cache for combining multiple cache sources (local, registry, S3, etc.). "+
+			"Default: true for better performance")
 	RootCmd.PersistentFlags().IntVarP(&opts.MaxCacheEntries, "max-cache-entries", "", defaultMaxCacheEntries,
 		"Maximum number of entries in the LRU cache. Default: 2000 (optimized for 1GB cache)")
 	RootCmd.PersistentFlags().IntVarP(&opts.MaxPreloadSize, "max-preload-size", "", defaultMaxPreloadSize,
