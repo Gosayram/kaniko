@@ -103,15 +103,15 @@ release:
     
     ### Docker Images (signed with Cosign)
     
-    Docker images are available at GitHub Container Registry. All images are signed with Cosign:
-    - `ghcr.io/{{ .Env.DOCKER_REPOSITORY }}/executor:{{ .Version }}` and `ghcr.io/{{ .Env.DOCKER_REPOSITORY }}/executor:latest`
-    - `ghcr.io/{{ .Env.DOCKER_REPOSITORY }}/executor:{{ .Version }}-debug` and `ghcr.io/{{ .Env.DOCKER_REPOSITORY }}/executor:debug`
-    - `ghcr.io/{{ .Env.DOCKER_REPOSITORY }}/executor:{{ .Version }}-slim` and `ghcr.io/{{ .Env.DOCKER_REPOSITORY }}/executor:slim`
-    - `ghcr.io/{{ .Env.DOCKER_REPOSITORY }}/warmer:{{ .Version }}` and `ghcr.io/{{ .Env.DOCKER_REPOSITORY }}/warmer:latest`
+    Docker images are available at GitHub Container Registry (ghcr.io). All images are signed with Cosign:
+    - `executor:{{ .Version }}` and `executor:latest`
+    - `executor:{{ .Version }}-debug` and `executor:debug`
+    - `executor:{{ .Version }}-slim` and `executor:slim`
+    - `warmer:{{ .Version }}` and `warmer:latest`
     
     Verify image signatures using the public key from the repository:
     ```bash
-    cosign verify --key cosign.pub ghcr.io/{{ .Env.DOCKER_REPOSITORY }}/executor:{{ .Version }}
+    cosign verify --key cosign.pub ghcr.io/<repository>/executor:{{ .Version }}
     ```
     
     The `cosign.pub` file is available in the repository root.
@@ -135,99 +135,11 @@ release:
     
     **Docker images are signed with Cosign.** Verify signatures using:
     ```bash
-    cosign verify --key cosign.pub ghcr.io/{{ .Env.DOCKER_REPOSITORY }}/executor:{{ .Version }}
+    cosign verify --key cosign.pub ghcr.io/<repository>/executor:{{ .Version }}
     ```
 
-# Docker images configuration
-# Using dockers (deprecated but stable) - works with full build context
-dockers:
-  - id: executor
-    image_templates:
-      - "ghcr.io/{{ .Env.DOCKER_REPOSITORY }}/executor:{{ .Version }}"
-      - "ghcr.io/{{ .Env.DOCKER_REPOSITORY }}/executor:latest"
-    dockerfile: deploy/Dockerfile
-    use: buildx
-    build_flag_templates:
-      - "--target=kaniko-executor"
-      - "--build-arg=VERSION={{ .Env.RELEASE_VERSION }}"
-      - "--build-arg=COMMIT={{ .Commit }}"
-      - "--build-arg=DATE={{ .Date }}"
-      - "--build-arg=TARGETARCH=amd64"
-      - "--build-arg=TARGETOS=linux"
-    goos: linux
-    goarch: amd64
-    ids:
-      - executor
-    skip_push: false
-
-  - id: executor-debug
-    image_templates:
-      - "ghcr.io/{{ .Env.DOCKER_REPOSITORY }}/executor:{{ .Version }}-debug"
-      - "ghcr.io/{{ .Env.DOCKER_REPOSITORY }}/executor:debug"
-    dockerfile: deploy/Dockerfile
-    use: buildx
-    build_flag_templates:
-      - "--target=kaniko-debug"
-      - "--build-arg=VERSION={{ .Env.RELEASE_VERSION }}"
-      - "--build-arg=COMMIT={{ .Commit }}"
-      - "--build-arg=DATE={{ .Date }}"
-      - "--build-arg=TARGETARCH=amd64"
-      - "--build-arg=TARGETOS=linux"
-    goos: linux
-    goarch: amd64
-    ids:
-      - executor
-      - warmer
-    skip_push: false
-
-  - id: executor-slim
-    image_templates:
-      - "ghcr.io/{{ .Env.DOCKER_REPOSITORY }}/executor:{{ .Version }}-slim"
-      - "ghcr.io/{{ .Env.DOCKER_REPOSITORY }}/executor:slim"
-    dockerfile: deploy/Dockerfile
-    use: buildx
-    build_flag_templates:
-      - "--target=kaniko-slim"
-      - "--build-arg=VERSION={{ .Env.RELEASE_VERSION }}"
-      - "--build-arg=COMMIT={{ .Commit }}"
-      - "--build-arg=DATE={{ .Date }}"
-      - "--build-arg=TARGETARCH=amd64"
-      - "--build-arg=TARGETOS=linux"
-    goos: linux
-    goarch: amd64
-    ids:
-      - executor
-    skip_push: false
-
-  - id: warmer
-    image_templates:
-      - "ghcr.io/{{ .Env.DOCKER_REPOSITORY }}/warmer:{{ .Version }}"
-      - "ghcr.io/{{ .Env.DOCKER_REPOSITORY }}/warmer:latest"
-    dockerfile: deploy/Dockerfile
-    use: buildx
-    build_flag_templates:
-      - "--target=kaniko-warmer"
-      - "--build-arg=VERSION={{ .Env.RELEASE_VERSION }}"
-      - "--build-arg=COMMIT={{ .Commit }}"
-      - "--build-arg=DATE={{ .Date }}"
-      - "--build-arg=TARGETARCH=amd64"
-      - "--build-arg=TARGETOS=linux"
-    goos: linux
-    goarch: amd64
-    ids:
-      - warmer
-    skip_push: false
-
-# Docker image signing with Cosign
-docker_signs:
-  - artifacts: all
-    cmd: cosign
-    args:
-      - "sign"
-      - "--key=env://COSIGN_PRIVATE_KEY"
-      - "${artifact}@${digest}"
-      - "--yes"
-    stdin: "{{ .Env.COSIGN_PASSWORD }}"
+# Docker images are built separately in GitHub Actions workflow
+# See .github/workflows/release.yml for Docker build and push configuration
 
 # Changelog
 changelog:
