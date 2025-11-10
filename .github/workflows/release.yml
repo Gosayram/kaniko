@@ -60,8 +60,8 @@ jobs:
           fi
           # Convert repository name to lowercase for Docker registry
           REPO_LOWER=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
-          echo "repository=$REPO_LOWER" >> $GITHUB_OUTPUT
-          echo "GITHUB_REPOSITORY=$REPO_LOWER" >> $GITHUB_ENV
+          echo "docker_repository=$REPO_LOWER" >> $GITHUB_OUTPUT
+          echo "DOCKER_REPOSITORY=$REPO_LOWER" >> $GITHUB_ENV
           echo "Repository name (lowercase): $REPO_LOWER"
 
       # Import GPG key for signing binaries and checksums
@@ -71,6 +71,13 @@ jobs:
         with:
           gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
           passphrase: ${{ secrets.GPG_PASSPHRASE }}
+
+      # Debug: Print environment variables
+      - name: Debug environment variables
+        run: |
+          echo "DOCKER_REPOSITORY from output: ${{ steps.version.outputs.docker_repository }}"
+          echo "DOCKER_REPOSITORY from env: ${{ env.DOCKER_REPOSITORY }}"
+          echo "GITHUB_REPOSITORY: ${{ github.repository }}"
 
       # Run GoReleaser:
       # - Builds binaries (signed with GPG)
@@ -87,8 +94,8 @@ jobs:
           GPG_FINGERPRINT: ${{ steps.import_gpg.outputs.fingerprint }}
           GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
           RELEASE_VERSION: ${{ steps.version.outputs.version }}
-          # GITHUB_REPOSITORY is set in lowercase in the version step above
-          GITHUB_REPOSITORY: ${{ steps.version.outputs.repository }}
+          # DOCKER_REPOSITORY is set in lowercase in the version step above
+          DOCKER_REPOSITORY: ${{ steps.version.outputs.docker_repository }}
           # Cosign signing for Docker images
           COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
           COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
