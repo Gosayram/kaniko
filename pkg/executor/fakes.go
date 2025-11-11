@@ -22,10 +22,12 @@ import (
 	"bytes"
 	"errors"
 	"io"
+	"sync"
 
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/types"
 
+	"github.com/Gosayram/kaniko/pkg/cache"
 	"github.com/Gosayram/kaniko/pkg/commands"
 	"github.com/Gosayram/kaniko/pkg/dockerfile"
 )
@@ -176,22 +178,41 @@ type fakeLayerCache struct {
 	receivedKeys []string
 	img          v1.Image
 	keySequence  []string
+	mu           sync.Mutex // Protects receivedKeys and keySequence from race conditions
 }
 
 func (f *fakeLayerCache) RetrieveLayer(key string) (v1.Image, error) {
+	f.mu.Lock()
 	f.receivedKeys = append(f.receivedKeys, key)
-	if len(f.keySequence) > 0 {
-		if f.keySequence[0] == key {
+	keySequenceLen := len(f.keySequence)
+	if keySequenceLen > 0 {
+		firstKey := f.keySequence[0]
+		if firstKey == key {
 			f.keySequence = f.keySequence[1:]
+			f.mu.Unlock()
 			return f.img, nil
 		}
+		f.mu.Unlock()
 		return f.img, errors.New("could not find layer")
 	}
+	f.mu.Unlock()
 
 	if !f.retrieve {
 		return nil, errors.New("could not find layer")
 	}
 	return f.img, nil
+}
+
+func (f *fakeLayerCache) RetrieveLayersBatch(keys []string) map[string]cache.LayerResult {
+	results := make(map[string]cache.LayerResult)
+	for _, key := range keys {
+		img, err := f.RetrieveLayer(key)
+		results[key] = cache.LayerResult{
+			Image: img,
+			Error: err,
+		}
+	}
+	return results
 }
 
 type fakeLayer struct {

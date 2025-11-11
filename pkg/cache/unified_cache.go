@@ -124,6 +124,56 @@ func (uc *UnifiedCache) RetrieveLayer(cacheKey string) (v1.Image, error) {
 	return uc.Get(cacheKey)
 }
 
+// RetrieveLayersBatch retrieves multiple layers in parallel
+func (uc *UnifiedCache) RetrieveLayersBatch(keys []string) map[string]LayerResult {
+	results := make(map[string]LayerResult)
+	if len(keys) == 0 {
+		return results
+	}
+
+	uc.mu.RLock()
+	caches := uc.caches
+	uc.mu.RUnlock()
+
+	// Try to use batch method from first cache if available
+	if len(caches) > 0 {
+		if batchCache, ok := caches[0].(interface {
+			RetrieveLayersBatch([]string) map[string]LayerResult
+		}); ok {
+			// Use first cache's batch method
+			return batchCache.RetrieveLayersBatch(keys)
+		}
+	}
+
+	// Fallback: parallel retrieval using Get method
+	maxConcurrent := 3
+	sem := make(chan struct{}, maxConcurrent)
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+
+	for _, key := range keys {
+		wg.Add(1)
+		go func(ck string) {
+			defer wg.Done()
+
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			img, err := uc.Get(ck)
+
+			mu.Lock()
+			results[ck] = LayerResult{
+				Image: img,
+				Error: err,
+			}
+			mu.Unlock()
+		}(key)
+	}
+
+	wg.Wait()
+	return results
+}
+
 // Prefetch prefetches keys for predictive caching
 func (uc *UnifiedCache) Prefetch(keys []string) {
 	uc.prefetchMutex.Lock()

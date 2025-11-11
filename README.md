@@ -404,6 +404,26 @@ docker run -v $(pwd):/workspace \
       - [Flag `--max-preload-size`](#flag---max-preload-size)
       - [Flag `--preload-timeout`](#flag---preload-timeout)
       - [Flag `--enable-smart-cache`](#flag---enable-smart-cache)
+      - [Flag `--max-concurrent-cache-checks`](#flag---max-concurrent-cache-checks)
+      - [Flag `--cache-max-conns`](#flag---cache-max-conns)
+      - [Flag `--cache-max-conns-per-host`](#flag---cache-max-conns-per-host)
+      - [Flag `--cache-max-concurrent-requests`](#flag---cache-max-concurrent-requests)
+      - [Flag `--cache-disable-http2`](#flag---cache-disable-http2)
+      - [Flag `--cache-request-timeout`](#flag---cache-request-timeout)
+      - [Flag `--prefetch-window`](#flag---prefetch-window)
+      - [Flag `--cache-result-ttl`](#flag---cache-result-ttl)
+      - [Flag `--cache-result-max-entries`](#flag---cache-result-max-entries)
+      - [Flag `--cache-result-max-memory-mb`](#flag---cache-result-max-memory-mb)
+      - [Flag `--file-hash-cache-max-entries`](#flag---file-hash-cache-max-entries)
+      - [Flag `--file-hash-cache-max-memory-mb`](#flag---file-hash-cache-max-memory-mb)
+      - [Flag `--layer-load-max-concurrent`](#flag---layer-load-max-concurrent)
+      - [Flag `--enable-predictive-cache`](#flag---enable-predictive-cache)
+      - [Flag `--predictive-cache-max-layers`](#flag---predictive-cache-max-layers)
+      - [Flag `--predictive-cache-max-memory-mb`](#flag---predictive-cache-max-memory-mb)
+      - [Flag `--local-cache-use-mmap`](#flag---local-cache-use-mmap)
+      - [Flag `--local-cache-compress`](#flag---local-cache-compress)
+      - [Flag `--local-cache-compression`](#flag---local-cache-compression)
+      - [Flag `--compression-level`](#flag---compression-level-1)
       - [Flag `--generate-provenance`](#flag---generate-provenance)
       - [Flag `--allowed-registries`](#flag---allowed-registries)
       - [Flag `--denied-registries`](#flag---denied-registries)
@@ -872,16 +892,58 @@ Kaniko includes advanced caching capabilities for enterprise-scale builds:
 ##### **Advanced Cache Configuration**
 ```bash
 # Enable smart cache with enhanced features
---enable-smart-cache=true
---max-cache-entries=3000          # Maximum cache entries
---max-preload-size=150           # Images to preload
---preload-timeout=15m            # Preload operation timeout
---cache-ttl=72h                  # Cache time-to-live
---compressed-caching=true        # Enable compression for cached layers
+--enable-smart-cache=true                    # Default: true
+--max-cache-entries=3000                      # Maximum cache entries (default: 2000)
+--max-preload-size=150                       # Images to preload (default: 100)
+--preload-timeout=15m                        # Preload operation timeout (default: 10m)
+--cache-ttl=72h                              # Cache time-to-live (default: 2 weeks)
+
+# Connection pooling for registry cache (defaults optimized for performance)
+--cache-max-conns=10                         # Max idle connections in pool (default: 10)
+--cache-max-conns-per-host=5                 # Max idle connections per host (default: 5)
+--cache-max-concurrent-requests=5            # Max concurrent requests (default: 5)
+--cache-request-timeout=30s                 # Request timeout (default: 30s)
+--cache-disable-http2=false                  # Disable HTTP/2 (default: false, HTTP/2 enabled)
+
+# Aggressive prefetching (improved cache hit rate)
+--prefetch-window=10                         # Commands to prefetch (default: 10, increased from 3)
+
+# Result cache (avoids redundant cache lookups)
+--cache-result-ttl=5m                        # TTL for cached results (default: 5m)
+--cache-result-max-entries=1000              # Max cached results (default: 1000)
+--cache-result-max-memory-mb=100             # Max memory for results (default: 100 MB)
+
+# File hash cache (avoids recomputing file hashes)
+--file-hash-cache-max-entries=10000          # Max cached file hashes (default: 10000)
+--file-hash-cache-max-memory-mb=200          # Max memory for file hashes (default: 200 MB)
+
+# Parallel layer loading
+--max-concurrent-cache-checks=5              # Concurrent cache checks (default: 5)
+--layer-load-max-concurrent=3                # Concurrent layer loads (default: 3)
+
+# Predictive caching (experimental)
+--enable-predictive-cache=false              # Enable predictive caching (default: false)
+--predictive-cache-max-layers=20             # Max layers to prefetch (default: 20)
+--predictive-cache-max-memory-mb=50          # Max memory for prefetching (default: 50 MB)
+
+# Local cache optimizations (experimental)
+--local-cache-use-mmap=false                 # Use memory-mapped files (default: false)
+--local-cache-compress=false                 # Compress local cache files (default: false)
+--local-cache-compression=zstd               # Compression algorithm (default: zstd)
+
+# Compression
+--compressed-caching=true                    # Enable compression (default: true)
+--compression=zstd                           # Compression algorithm (default: zstd)
+--compression-level=3                        # Compression level (default: 3)
 ```
 
 ##### **Cache Performance Optimization**
 - **40-60% Better Cache Utilization** compared to basic cache
+- **HTTP Connection Pooling** - Reuses connections to registry for faster cache operations (default: 10 max connections, 5 per host)
+- **Result Caching** - Caches cache check results to avoid redundant lookups (default: 1000 entries, 100 MB, 5m TTL)
+- **File Hash Caching** - Avoids recomputing file hashes (default: 10000 entries, 200 MB)
+- **Batch Layer Retrieval** - Parallel layer loading for improved throughput (default: 3 concurrent loads)
+- **Aggressive Prefetching** - Prefetches next 10 commands (increased from 3) for better cache hit rate
 - **Automatic Cache Warming** for frequently used images
 - **Intelligent Cache Policies** based on build patterns
 - **Memory-Efficient Caching** with configurable limits
@@ -889,6 +951,7 @@ Kaniko includes advanced caching capabilities for enterprise-scale builds:
 - **Parallel Cache Operations** for improved throughput
 - **Cache Compression** with multiple algorithms (gzip, zstd)
 - **Cache Validation** with checksums and integrity verification
+- **Predictive Caching** (experimental) - Prefetches layers based on build history patterns
 
 ##### **Multi-Platform Cache Support**
 ```bash
@@ -1645,6 +1708,126 @@ Set this flag to specify the timeout for preload operations. Supports formats li
 #### Flag `--enable-smart-cache`
 
 Set this flag to `true` to enable smart cache with LRU eviction and automatic preloading capabilities. The smart cache provides 40-60% better cache utilization compared to the basic cache. Defaults to `true`.
+
+#### Flag `--max-concurrent-cache-checks`
+
+Set this flag to specify the maximum number of concurrent cache checks. This controls parallel cache lookups for better performance. Defaults to `5` for optimal balance between speed and resource usage.
+
+**Example**: `--max-concurrent-cache-checks=10`
+
+#### Flag `--cache-max-conns`
+
+Set this flag to specify the maximum number of idle connections in the HTTP connection pool for registry cache operations. Reusing connections significantly improves cache performance. Defaults to `10`.
+
+**Example**: `--cache-max-conns=20`
+
+#### Flag `--cache-max-conns-per-host`
+
+Set this flag to specify the maximum number of idle connections per host in the connection pool. Defaults to `5`.
+
+**Example**: `--cache-max-conns-per-host=10`
+
+#### Flag `--cache-max-concurrent-requests`
+
+Set this flag to specify the maximum number of concurrent requests to the registry for cache operations. Defaults to `5`.
+
+**Example**: `--cache-max-concurrent-requests=10`
+
+#### Flag `--cache-disable-http2`
+
+Set this flag to `true` to disable HTTP/2 for cache requests and use HTTP/1.1 instead. HTTP/2 is enabled by default for better performance. Defaults to `false`.
+
+**Example**: `--cache-disable-http2=true`
+
+#### Flag `--cache-request-timeout`
+
+Set this flag to specify the timeout for cache requests to the registry. Supports formats like `30s`, `1m`. Defaults to `30s`.
+
+**Example**: `--cache-request-timeout=1m`
+
+#### Flag `--prefetch-window`
+
+Set this flag to specify the number of next commands to prefetch cache keys for. Increasing this value improves cache hit rate but uses more resources. Defaults to `10` (increased from 3 for better performance).
+
+**Example**: `--prefetch-window=15`
+
+#### Flag `--cache-result-ttl`
+
+Set this flag to specify the time-to-live for cached cache check results. This avoids redundant cache lookups. Supports formats like `5m`, `10m`. Defaults to `5m`.
+
+**Example**: `--cache-result-ttl=10m`
+
+#### Flag `--cache-result-max-entries`
+
+Set this flag to specify the maximum number of cached cache check results. Higher values reduce redundant lookups but use more memory. Defaults to `1000`.
+
+**Example**: `--cache-result-max-entries=2000`
+
+#### Flag `--cache-result-max-memory-mb`
+
+Set this flag to specify the maximum memory usage in MB for cached cache check results. Defaults to `100 MB`.
+
+**Example**: `--cache-result-max-memory-mb=200`
+
+#### Flag `--file-hash-cache-max-entries`
+
+Set this flag to specify the maximum number of cached file hashes. This avoids recomputing hashes for the same files. Defaults to `10000`.
+
+**Example**: `--file-hash-cache-max-entries=20000`
+
+#### Flag `--file-hash-cache-max-memory-mb`
+
+Set this flag to specify the maximum memory usage in MB for cached file hashes. Defaults to `200 MB`.
+
+**Example**: `--file-hash-cache-max-memory-mb=400`
+
+#### Flag `--layer-load-max-concurrent`
+
+Set this flag to specify the maximum number of concurrent layer loads from cache. Parallel loading improves throughput. Defaults to `3`.
+
+**Example**: `--layer-load-max-concurrent=5`
+
+#### Flag `--enable-predictive-cache`
+
+Set this flag to `true` to enable predictive caching, which prefetches layers based on build history patterns. This is an experimental feature. Defaults to `false`.
+
+**Example**: `--enable-predictive-cache=true`
+
+#### Flag `--predictive-cache-max-layers`
+
+Set this flag to specify the maximum number of layers to prefetch with predictive caching. Defaults to `20`.
+
+**Example**: `--predictive-cache-max-layers=30`
+
+#### Flag `--predictive-cache-max-memory-mb`
+
+Set this flag to specify the maximum memory in MB to use for predictive cache prefetching. Defaults to `50 MB`.
+
+**Example**: `--predictive-cache-max-memory-mb=100`
+
+#### Flag `--local-cache-use-mmap`
+
+Set this flag to `true` to use memory-mapped files for faster local cache access. This is an experimental feature. Defaults to `false`.
+
+**Example**: `--local-cache-use-mmap=true`
+
+#### Flag `--local-cache-compress`
+
+Set this flag to `true` to compress local cache files to save disk space. This is an experimental feature. Defaults to `false`.
+
+**Example**: `--local-cache-compress=true`
+
+#### Flag `--local-cache-compression`
+
+Set this flag to specify the compression algorithm for local cache files. Options: `gzip`, `zstd`. Defaults to `zstd`. This is an experimental feature.
+
+**Example**: `--local-cache-compression=gzip`
+
+#### Flag `--compression-level`
+
+Set this flag to specify the compression level. For zstd, the default is `3` which provides optimal balance between speed and size. Higher values provide better compression but are slower.
+
+**Example**: `--compression-level=6`
 
 #### Flag `--generate-provenance`
 

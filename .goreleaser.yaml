@@ -1,11 +1,10 @@
-# GoReleaser configuration for Kaniko
-# Version is read from .release-version file and passed via RELEASE_VERSION env var
+# GoReleaser config for Kaniko
+# Version is read from .release-version into RELEASE_VERSION
 
 version: 2
 
 project_name: kaniko
 
-# Build configuration
 builds:
   - id: executor
     binary: executor
@@ -63,22 +62,21 @@ builds:
         goarch: arm64
         goarm: "7"
 
-# Archive configuration
 archives:
   - id: default
+    # Includes built binaries + files below
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}{{ if .Arm }}v{{ .Arm }}{{ end }}"
     files:
       - README.md
       - LICENSE
 
-# Checksums
 checksum:
   name_template: "{{ .ProjectName }}_{{ .Version }}_checksums.txt"
   algorithm: sha256
 
-# GPG signing
 signs:
-  - artifacts: checksum
+  - id: checksum
+    artifacts: checksum
     signature: "${artifact}.sig"
     cmd: gpg
     args:
@@ -90,58 +88,74 @@ signs:
       - "${signature}"
       - "--detach-sign"
       - "${artifact}"
-    ids:
-      - checksum
 
-# Release configuration
+binary_signs:
+  - id: binaries
+    artifacts: binary
+    signature: "${artifact}.sig"
+    cmd: gpg
+    args:
+      - "--batch"
+      - "--pinentry-mode=loopback"
+      - "--passphrase={{ .Env.GPG_PASSPHRASE }}"
+      - "--default-key={{ .Env.GPG_FINGERPRINT }}"
+      - "--output"
+      - "${signature}"
+      - "--detach-sign"
+      - "${artifact}"
+
 release:
   mode: replace
   header: |
     ## Kaniko {{ .Tag }}
-    
+
     Release {{ .Tag }} of Kaniko container image builder.
-    
+
     ### Docker Images (signed with Cosign)
-    
+
     Docker images are available at GitHub Container Registry (ghcr.io). All images are signed with Cosign:
     - `executor:{{ .Version }}` and `executor:latest`
     - `executor:{{ .Version }}-debug` and `executor:debug`
     - `executor:{{ .Version }}-slim` and `executor:slim`
     - `warmer:{{ .Version }}` and `warmer:latest`
-    
+
     Verify image signatures using the public key from the repository:
     ```bash
-    cosign verify --key cosign.pub ghcr.io/<repository>/executor:{{ .Version }}
+    export USERNAME=<your-github-username>
+    cosign login ghcr.io -u "$USERNAME"
+    cosign verify --key cosign.pub ghcr.io/gosayram/kaniko/executor:{{ .Version }}
     ```
-    
+
     The `cosign.pub` file is available in the repository root.
-    
+
     ### Binaries (signed with GPG)
-    
-    This release includes the following binaries, all signed with GPG:
+
+    This release includes the following binaries, signed with GPG:
     - `executor` - Main Kaniko executor
-    - `warmer` - Kaniko warmer for cache warming
-    
+    - `warmer` - Kaniko cache warmer
+
     ### Installation
-    
-    Download the appropriate binary for your platform from the assets below.
-    
+
+    Download the appropriate binary or archive for your platform from the assets below.
+
     ### Verification
-    
-    **Binaries and checksums are GPG signed.** Verify signatures using:
+
+    Verify checksums:
+    ```bash
+    sha256sum --check {{ .ProjectName }}_{{ .Version }}_checksums.txt
+    ```
+
+    Verify checksum signature:
     ```bash
     gpg --verify {{ .ProjectName }}_{{ .Version }}_checksums.txt.sig {{ .ProjectName }}_{{ .Version }}_checksums.txt
     ```
-    
-    **Docker images are signed with Cosign.** Verify signatures using:
+
+    Verify binary signatures:
     ```bash
-    cosign verify --key cosign.pub ghcr.io/<repository>/executor:{{ .Version }}
+    gpg --verify executor{{ .Version }}*.sig executor
+    gpg --verify warmer{{ .Version }}*.sig warmer
     ```
 
-# Docker images are built separately in GitHub Actions workflow
-# See .github/workflows/release.yml for Docker build and push configuration
-
-# Changelog
 changelog:
   sort: asc
   filters:

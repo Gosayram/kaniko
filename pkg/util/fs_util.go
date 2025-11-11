@@ -20,6 +20,7 @@ import (
 	"archive/tar"
 	"bufio"
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"io/fs"
@@ -81,6 +82,15 @@ const (
 	AutoSanitizePermissions = false
 	// StrictSecurityMode enables strict security checks that may fail builds with unsafe permissions
 	StrictSecurityMode = false
+
+	// LayerExtractionMaxRetries is the maximum number of retries for layer extraction
+	LayerExtractionMaxRetries = 3
+	// LayerExtractionRetryDelay is the initial delay between retries
+	LayerExtractionRetryDelay = 2 * time.Second
+	// LayerExtractionMaxRetryDelay is the maximum delay between retries
+	LayerExtractionMaxRetryDelay = 30 * time.Second
+	// LayerExtractionBackoffMultiplier is the multiplier for exponential backoff
+	LayerExtractionBackoffMultiplier = 1.5
 
 	// WorldWritableBit represents the world-writable permission bit (002)
 	WorldWritableBit = 0o002
@@ -579,15 +589,26 @@ func GetFSFromLayers(root string, layers []v1.Layer, opts ...FSOpt) ([]string, e
 }
 
 func extractLayers(root string, layers []v1.Layer, cfg *FSConfig) ([]string, error) {
+	return extractLayersWithContext(context.Background(), root, layers, cfg)
+}
+
+func extractLayersWithContext(ctx context.Context, root string, layers []v1.Layer, cfg *FSConfig) ([]string, error) {
 	var extractedFiles []string
 	logrus.Infof("Starting extraction of %d layers to %s", len(layers), root)
 
 	for i, l := range layers {
+		// Check context cancellation
+		select {
+		case <-ctx.Done():
+			return nil, errors.Wrap(ctx.Err(), "layer extraction canceled")
+		default:
+		}
+
 		logrus.Debugf("Extracting layer %d/%d", i+1, len(layers))
-		layerFiles, err := extractSingleLayer(root, l, i, cfg)
+		layerFiles, err := extractSingleLayerWithRetry(ctx, root, l, i, cfg)
 		if err != nil {
-			logrus.Warnf("Failed to extract layer %d/%d: %v", i+1, len(layers), err)
-			return nil, err
+			logrus.Errorf("Failed to extract layer %d/%d after retries: %v", i+1, len(layers), err)
+			return nil, errors.Wrapf(err, "failed to extract layer %d/%d", i+1, len(layers))
 		}
 		logrus.Debugf("Layer %d extracted %d files", i+1, len(layerFiles))
 		extractedFiles = append(extractedFiles, layerFiles...)
@@ -604,26 +625,213 @@ func extractLayers(root string, layers []v1.Layer, cfg *FSConfig) ([]string, err
 	return extractedFiles, nil
 }
 
-func extractSingleLayer(root string, layer v1.Layer, index int, cfg *FSConfig) ([]string, error) {
+// extractSingleLayerWithRetry extracts a single layer with retry logic for network errors.
+// It handles network errors and unexpected EOF by retrying the extraction.
+func extractSingleLayerWithRetry(
+	ctx context.Context,
+	root string,
+	layer v1.Layer,
+	index int,
+	cfg *FSConfig,
+) ([]string, error) {
 	var mediaType string
 	if mt, err := layer.MediaType(); err == nil {
 		mediaType = string(mt)
 	}
 	logrus.Debugf("Extracting layer %d of media type %s to %s", index, mediaType, root)
 
-	r, err := layer.Uncompressed()
-	if err != nil {
-		return nil, err
-	}
-	defer r.Close()
+	var lastErr error
+	retryDelay := LayerExtractionRetryDelay
 
-	return extractTarEntries(root, r, cfg)
+	for attempt := 0; attempt < LayerExtractionMaxRetries; attempt++ {
+		// Check context cancellation
+		select {
+		case <-ctx.Done():
+			return nil, errors.Wrap(ctx.Err(), "layer extraction canceled")
+		default:
+		}
+
+		if attempt > 0 {
+			logrus.Warnf("Retrying layer %d extraction (attempt %d/%d) after %v due to: %v",
+				index+1, attempt+1, LayerExtractionMaxRetries, retryDelay, lastErr)
+			select {
+			case <-ctx.Done():
+				return nil, errors.Wrap(ctx.Err(), "layer extraction canceled during retry")
+			case <-time.After(retryDelay):
+			}
+			// Exponential backoff
+			retryDelay = time.Duration(float64(retryDelay) * LayerExtractionBackoffMultiplier)
+			if retryDelay > LayerExtractionMaxRetryDelay {
+				retryDelay = LayerExtractionMaxRetryDelay
+			}
+		}
+
+		r, err := layer.Uncompressed()
+		if err != nil {
+			lastErr = errors.Wrap(err, "failed to get uncompressed layer")
+			if isRetryableError(err) {
+				continue
+			}
+			return nil, lastErr
+		}
+
+		// Extract with improved error handling
+		files, err := extractTarEntriesWithRecovery(root, r, cfg)
+		if closeErr := r.Close(); closeErr != nil {
+			logrus.Debugf("Error closing layer reader: %v", closeErr)
+		}
+
+		if err == nil {
+			if attempt > 0 {
+				logrus.Infof("Successfully extracted layer %d after %d retries", index+1, attempt)
+			}
+			return files, nil
+		}
+
+		lastErr = err
+		if !isRetryableError(err) {
+			return nil, errors.Wrap(err, "non-retryable error during layer extraction")
+		}
+	}
+
+	return nil, errors.Wrapf(lastErr, "failed to extract layer %d after %d attempts", index+1, LayerExtractionMaxRetries)
 }
 
-func extractTarEntries(root string, r io.ReadCloser, cfg *FSConfig) ([]string, error) {
+// isRetryableError checks if an error is retryable (network errors, EOF, etc.)
+func isRetryableError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	errStr := err.Error()
+	retryablePatterns := []string{
+		"unexpected EOF",
+		"EOF",
+		"timeout",
+		"connection",
+		"network",
+		"temporary",
+		"unavailable",
+		"broken pipe",
+		"connection reset",
+		"read: connection",
+	}
+
+	errLower := strings.ToLower(errStr)
+	for _, pattern := range retryablePatterns {
+		if strings.Contains(errLower, pattern) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// handleTarReadError handles errors during tar reading with recovery logic
+func handleTarReadError(err error, entryCount int, extractedFiles []string) (bool, error) {
+	if errors.Is(err, io.EOF) {
+		return false, nil // Normal EOF, not an error
+	}
+	if isRetryableError(err) {
+		logrus.Warnf("Recoverable error during tar extraction at entry %d: %v. "+
+			"Some files may have been extracted successfully. Entry count: %d, Files extracted: %d",
+			entryCount+1, err, entryCount, len(extractedFiles))
+		// For unexpected EOF, we might have partially extracted the layer
+		if strings.Contains(strings.ToLower(err.Error()), "unexpected eof") {
+			if len(extractedFiles) > 0 {
+				logrus.Warnf("Partial extraction completed: %d files extracted before unexpected EOF. "+
+					"This may indicate a network issue or incomplete layer. Continuing with extracted files.",
+					len(extractedFiles))
+				return true, nil // Signal partial extraction, but continue
+			}
+		}
+		return false, errors.Wrapf(err, "failed to read tar entry %d", entryCount+1)
+	}
+	return false, errors.Wrapf(err, "failed to read tar entry %d", entryCount+1)
+}
+
+// logExtractionProgress logs progress for large layer extractions
+func logExtractionProgress(entryCount, extractedCount int, startTime, lastProgressLog time.Time) time.Time {
+	const progressLogInterval = 10 * time.Second
+	const progressLogEntryInterval = 1000
+
+	now := time.Now()
+	if entryCount%progressLogEntryInterval == 0 || now.Sub(lastProgressLog) >= progressLogInterval {
+		elapsed := now.Sub(startTime)
+		rate := float64(entryCount) / elapsed.Seconds()
+		logrus.Infof("Extraction progress: %d entries processed, %d files extracted (%.1f entries/sec, elapsed: %v)",
+			entryCount, extractedCount, rate, elapsed.Round(time.Second))
+		return now
+	}
+	return lastProgressLog
+}
+
+// processTarEntryAndCollect processes a tar entry and collects it into extractedFiles
+func processTarEntryAndCollect(
+	root string,
+	hdr *tar.Header,
+	cleanedName string,
+	tr io.Reader,
+	cfg *FSConfig,
+	extractedFiles *[]string,
+) error {
+	path := filepath.Join(root, cleanedName)
+	base := filepath.Base(path)
+
+	// Process entry with error recovery
+	if err := processTarEntryWithRecovery(root, hdr, cleanedName, tr, cfg); err != nil {
+		// For recoverable errors during file extraction, log and continue
+		if isRetryableError(err) {
+			logrus.Warnf("Recoverable error extracting file %s: %v. Continuing with next entry.", path, err)
+			return nil
+		}
+		// For non-recoverable errors, fail immediately
+		return errors.Wrapf(err, "failed to extract file %s", path)
+	}
+
+	// For whiteout entries, process them and only include in results when includeWhiteout is enabled
+	isWhiteout := strings.HasPrefix(base, archive.WhiteoutPrefix)
+	if isWhiteout {
+		name := strings.TrimPrefix(base, archive.WhiteoutPrefix)
+		target := filepath.Join(filepath.Dir(path), name)
+		if cfg.includeWhiteout && !CheckCleanedPathAgainstIgnoreList(target) && !childDirInIgnoreList(target) {
+			*extractedFiles = append(*extractedFiles, path)
+		}
+		return nil
+	}
+
+	*extractedFiles = append(*extractedFiles, path)
+	return nil
+}
+
+// logExtractionCompletion logs the final extraction statistics
+func logExtractionCompletion(entryCount, extractedCount int, partialExtraction bool, startTime time.Time) {
+	const progressLogEntryInterval = 1000
+
+	elapsed := time.Since(startTime)
+	if partialExtraction {
+		logrus.Warnf("Layer extraction completed with partial data. Extracted %d files from %d entries (elapsed: %v)",
+			extractedCount, entryCount, elapsed.Round(time.Second))
+		return
+	}
+
+	if entryCount > progressLogEntryInterval {
+		rate := float64(entryCount) / elapsed.Seconds()
+		logrus.Infof("Processed %d tar entries, extracted %d files (%.1f entries/sec, elapsed: %v)",
+			entryCount, extractedCount, rate, elapsed.Round(time.Second))
+	} else {
+		logrus.Debugf("Processed %d tar entries, extracted %d files", entryCount, extractedCount)
+	}
+}
+
+// extractTarEntriesWithRecovery extracts tar entries with improved error recovery
+func extractTarEntriesWithRecovery(root string, r io.ReadCloser, cfg *FSConfig) ([]string, error) {
 	var extractedFiles []string
 	tr := tar.NewReader(r)
 	entryCount := 0
+	partialExtraction := false
+	startTime := time.Now()
+	lastProgressLog := startTime
 
 	for {
 		hdr, err := tr.Next()
@@ -631,37 +839,34 @@ func extractTarEntries(root string, r io.ReadCloser, cfg *FSConfig) ([]string, e
 			break
 		}
 		if err != nil {
-			return nil, err
+			partial, handleErr := handleTarReadError(err, entryCount, extractedFiles)
+			if handleErr != nil {
+				return nil, handleErr
+			}
+			if partial {
+				partialExtraction = true
+				break
+			}
 		}
 
 		entryCount++
 		cleanedName := filepath.Clean(hdr.Name)
-		path := filepath.Join(root, cleanedName)
 
-		// For whiteout entries, process them and only include in results when includeWhiteout is enabled
-		base := filepath.Base(path)
-		isWhiteout := strings.HasPrefix(base, archive.WhiteoutPrefix)
-		if err := processTarEntry(root, hdr, cleanedName, tr, cfg); err != nil {
+		// Log progress for large layers
+		lastProgressLog = logExtractionProgress(entryCount, len(extractedFiles), startTime, lastProgressLog)
+
+		// Process entry and collect
+		if err := processTarEntryAndCollect(root, hdr, cleanedName, tr, cfg, &extractedFiles); err != nil {
 			return nil, err
 		}
-		if isWhiteout {
-			// Do not include whiteout entries in results if the target is ignored
-			name := strings.TrimPrefix(base, archive.WhiteoutPrefix)
-			target := filepath.Join(filepath.Dir(path), name)
-			if cfg.includeWhiteout && !CheckCleanedPathAgainstIgnoreList(target) && !childDirInIgnoreList(target) {
-				extractedFiles = append(extractedFiles, path)
-			}
-			continue
-		}
-
-		extractedFiles = append(extractedFiles, path)
 	}
 
-	logrus.Debugf("Processed %d tar entries, extracted %d files", entryCount, len(extractedFiles))
+	logExtractionCompletion(entryCount, len(extractedFiles), partialExtraction, startTime)
 	return extractedFiles, nil
 }
 
-func processTarEntry(root string, hdr *tar.Header, cleanedName string, tr io.Reader, cfg *FSConfig) error {
+// processTarEntryWithRecovery processes a tar entry with error recovery
+func processTarEntryWithRecovery(root string, hdr *tar.Header, cleanedName string, tr io.Reader, cfg *FSConfig) error {
 	path := filepath.Join(root, cleanedName)
 	base := filepath.Base(path)
 	dir := filepath.Dir(path)
@@ -923,6 +1128,19 @@ func extractRegularFile(path string, mode os.FileMode, uid, gid int, tr io.Reade
 	defer bufferPool.PutLargeBuffer(buffer)
 
 	if _, err = io.CopyBuffer(currFile, tr, buffer); err != nil {
+		// Check if this is a recoverable error
+		if isRetryableError(err) {
+			logrus.Warnf("Recoverable error writing to file %s: %v. File may be incomplete.", cleanPath, err)
+			// Try to close the file even if write failed
+			if closeErr := currFile.Close(); closeErr != nil {
+				logrus.Debugf("Error closing file after write failure: %v", closeErr)
+			}
+			// Remove incomplete file to avoid corruption
+			if removeErr := os.Remove(cleanPath); removeErr != nil {
+				logrus.Debugf("Error removing incomplete file: %v", removeErr)
+			}
+			return errors.Wrapf(err, "failed to write file %s", cleanPath)
+		}
 		logrus.Warnf("Could not write to file %s: %v, continuing anyway", cleanPath, err)
 		return nil
 	}
@@ -1434,7 +1652,7 @@ func DetermineTargetFileOwnership(fi os.FileInfo, uid, gid int64) (targetUID, ta
 
 // CopyDir copies the file or directory at src to dest
 // It returns a list of files it copied over
-func CopyDir(src, dest string, context FileContext, uid, gid int64,
+func CopyDir(src, dest string, fileCtx FileContext, uid, gid int64,
 	chmod fs.FileMode, useDefaultChmod bool) ([]string, error) {
 	files, err := RelativeFiles("", src)
 	if err != nil {
@@ -1443,7 +1661,7 @@ func CopyDir(src, dest string, context FileContext, uid, gid int64,
 	var copiedFiles []string
 	for _, file := range files {
 		fullPath := filepath.Join(src, file)
-		if context.ExcludesFile(fullPath) {
+		if fileCtx.ExcludesFile(fullPath) {
 			logrus.Debugf("%s found in .dockerignore, ignoring", src)
 			continue
 		}
@@ -1466,7 +1684,7 @@ func CopyDir(src, dest string, context FileContext, uid, gid int64,
 			}
 		case IsSymlink(fi):
 			// If file is a symlink, we want to create the same relative symlink
-			if _, err := CopySymlink(fullPath, destPath, context); err != nil {
+			if _, err := CopySymlink(fullPath, destPath, fileCtx); err != nil {
 				return nil, err
 			}
 		default:
@@ -1476,7 +1694,7 @@ func CopyDir(src, dest string, context FileContext, uid, gid int64,
 				mode = fs.FileMode(DefaultFilePerm)
 			}
 
-			if _, err := CopyFile(fullPath, destPath, context, uid, gid, mode, useDefaultChmod); err != nil {
+			if _, err := CopyFile(fullPath, destPath, fileCtx, uid, gid, mode, useDefaultChmod); err != nil {
 				return nil, err
 			}
 		}
@@ -1486,8 +1704,8 @@ func CopyDir(src, dest string, context FileContext, uid, gid int64,
 }
 
 // CopySymlink copies the symlink at src to dest with security validations.
-func CopySymlink(src, dest string, context FileContext) (bool, error) {
-	if context.ExcludesFile(src) {
+func CopySymlink(src, dest string, fileCtx FileContext) (bool, error) {
+	if fileCtx.ExcludesFile(src) {
 		logrus.Debugf("%s found in .dockerignore, ignoring", src)
 		return true, nil
 	}
@@ -1641,9 +1859,9 @@ func isPermissionError(err error) bool {
 }
 
 // CopyFile copies the file at src to dest with specified ownership and permissions
-func CopyFile(src, dest string, context FileContext, uid, gid int64,
+func CopyFile(src, dest string, fileCtx FileContext, uid, gid int64,
 	chmod fs.FileMode, useDefaultChmod bool) (bool, error) {
-	if context.ExcludesFile(src) {
+	if fileCtx.ExcludesFile(src) {
 		logrus.Debugf("%s found in .dockerignore, ignoring", src)
 		return true, nil
 	}

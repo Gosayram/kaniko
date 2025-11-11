@@ -162,6 +162,9 @@ type stageBuilder struct {
 	fileSearchCache  map[string][]string
 	searchCacheMutex sync.RWMutex //nolint:unused // Used in findFilesForDependencyWithArgsFromRoot
 
+	// Predictive cache (experimental, for performance optimization)
+	predictiveCache *cache.PredictiveCache
+
 	// Mutex for thread-safe access to shared state
 	mutex sync.RWMutex
 }
@@ -269,6 +272,80 @@ func configureIncrementalSnapshots(snapshotter *snapshot.Snapshotter, opts *conf
 	logrus.Info("Incremental snapshots enabled and configured for this build")
 }
 
+// initializeSnapshotter creates and configures a snapshotter for the stage builder
+func initializeSnapshotter(opts *config.KanikoOptions) (*snapshot.Snapshotter, error) {
+	hasher, err := getHasher(opts.SnapshotMode)
+	if err != nil {
+		return nil, err
+	}
+	l := snapshot.NewLayeredMap(hasher)
+	snapshotter := snapshot.NewSnapshotter(l, config.RootDir)
+
+	// Enable and configure incremental snapshots by default (per plan)
+	// This provides fast incremental snapshots with periodic integrity checks
+	if opts.IncrementalSnapshots {
+		configureIncrementalSnapshots(snapshotter, opts)
+	}
+	return snapshotter, nil
+}
+
+// createBaseImmutableRef creates an immutable reference from the base image
+func createBaseImmutableRef(sourceImage v1.Image) (*ImmutableRef, string, []v1.Layer, error) {
+	digest, err := sourceImage.Digest()
+	if err != nil {
+		return nil, "", nil, err
+	}
+
+	layers, err := sourceImage.Layers()
+	if err != nil {
+		return nil, "", nil, errors.Wrap(err, "failed to get base image layers")
+	}
+
+	digestStr := digest.String()
+	baseImmutable := &ImmutableRef{
+		Image:  sourceImage,
+		Digest: digestStr,
+		Layers: layers,
+	}
+	return baseImmutable, digestStr, layers, nil
+}
+
+// initializeStageCommands initializes commands from the stage
+func initializeStageCommands(
+	stage *config.KanikoStage,
+	fileContext util.FileContext,
+	opts *config.KanikoOptions,
+) ([]commands.DockerCommand, error) {
+	var cmds []commands.DockerCommand
+	for _, cmd := range stage.Commands {
+		command, err := commands.GetCommand(cmd, fileContext, opts.RunV2, opts.CacheCopyLayers, opts.CacheRunLayers)
+		if err != nil {
+			return nil, err
+		}
+		if command == nil {
+			continue
+		}
+		cmds = append(cmds, command)
+	}
+	return cmds, nil
+}
+
+// initializeBuildArgs initializes build arguments for the stage
+func initializeBuildArgs(
+	args *dockerfile.BuildArgs,
+	stage *config.KanikoStage,
+	opts *config.KanikoOptions,
+) *dockerfile.BuildArgs {
+	var buildArgs *dockerfile.BuildArgs
+	if args != nil {
+		buildArgs = args.Clone()
+	} else {
+		buildArgs = dockerfile.NewBuildArgs(opts.BuildArgs)
+	}
+	buildArgs.AddMetaArgs(stage.MetaArgs)
+	return buildArgs
+}
+
 // newStageBuilder returns a new type stageBuilder which contains all the information required to build the stage
 func newStageBuilder(
 	args *dockerfile.BuildArgs,
@@ -297,17 +374,9 @@ func newStageBuilder(
 		return nil, errors.Wrap(err, "failed to initialize ignore list")
 	}
 
-	hasher, err := getHasher(opts.SnapshotMode)
+	snapshotter, err := initializeSnapshotter(opts)
 	if err != nil {
 		return nil, err
-	}
-	l := snapshot.NewLayeredMap(hasher)
-	snapshotter := snapshot.NewSnapshotter(l, config.RootDir)
-
-	// Enable and configure incremental snapshots by default (per plan)
-	// This provides fast incremental snapshots with periodic integrity checks
-	if opts.IncrementalSnapshots {
-		configureIncrementalSnapshots(snapshotter, opts)
 	}
 
 	// Initialize resource limits if configured
@@ -316,23 +385,17 @@ func newStageBuilder(
 	// Apply comprehensive optimizations
 	applyComprehensiveOptimizations(opts)
 
-	digest, err := sourceImage.Digest()
+	baseImmutable, digestStr, layers, err := createBaseImmutableRef(sourceImage)
 	if err != nil {
 		return nil, err
 	}
 
-	// Create initial immutable reference from base image
-	layers, err := sourceImage.Layers()
+	cmds, err := initializeStageCommands(stage, fileContext, opts)
 	if err != nil {
-		return nil, errors.Wrap(err, "failed to get base image layers")
+		return nil, err
 	}
 
-	digestStr := digest.String()
-	baseImmutable := &ImmutableRef{
-		Image:  sourceImage,
-		Digest: digestStr,
-		Layers: layers,
-	}
+	buildArgs := initializeBuildArgs(args, stage, opts)
 
 	s := &stageBuilder{
 		stage:            *stage,
@@ -356,25 +419,15 @@ func newStageBuilder(
 		layersValid:  true,
 		// Initialize file search cache (per performance plan: optimize cross-stage deps)
 		fileSearchCache: make(map[string][]string),
+		// Initialize predictive cache if enabled (experimental)
+		predictiveCache: cache.NewPredictiveCache(opts),
+		cmds:            cmds,
+		args:            buildArgs,
 	}
 
-	for _, cmd := range stage.Commands {
-		command, err := commands.GetCommand(cmd, fileContext, opts.RunV2, opts.CacheCopyLayers, opts.CacheRunLayers)
-		if err != nil {
-			return nil, err
-		}
-		if command == nil {
-			continue
-		}
-		s.cmds = append(s.cmds, command)
-	}
+	// Set global opts for file hash cache (per performance plan: optimize cache key computation)
+	SetGlobalFileHashCacheOpts(opts)
 
-	if args != nil {
-		s.args = args.Clone()
-	} else {
-		s.args = dockerfile.NewBuildArgs(s.opts.BuildArgs)
-	}
-	s.args.AddMetaArgs(stage.MetaArgs)
 	return s, nil
 }
 
@@ -487,8 +540,9 @@ func isOCILayout(path string) bool {
 	return strings.HasPrefix(path, "oci:")
 }
 
-// calculatePrefetchKeys calculates cache keys for next 2-3 commands for prefetching
+// calculatePrefetchKeys calculates cache keys for next N commands for prefetching
 // This improves cache hit rate by preloading potential layers (per performance plan)
+// N is configurable via PrefetchWindow option (default: 10, increased from 3)
 func (s *stageBuilder) calculatePrefetchKeys(
 	currentIndex int,
 	currentCompositeKey CompositeCache,
@@ -496,7 +550,12 @@ func (s *stageBuilder) calculatePrefetchKeys(
 	args *dockerfile.BuildArgs,
 ) []string {
 	prefetchKeys := []string{}
-	maxPrefetch := 3 // Prefetch up to 3 next commands
+
+	// Get prefetch window from options (default: 10)
+	maxPrefetch := s.opts.PrefetchWindow
+	if maxPrefetch <= 0 {
+		maxPrefetch = 10 // Default value
+	}
 
 	// Calculate keys for next commands
 	compositeKey := currentCompositeKey
@@ -568,95 +627,236 @@ func (s *stageBuilder) populateCompositeKey(
 	return compositeKey, nil
 }
 
+type cacheCheckResult struct {
+	index        int
+	command      commands.DockerCommand
+	commandStr   string
+	cacheKey     string
+	compositeKey CompositeCache
+	shouldCheck  bool
+	img          v1.Image
+	err          error
+}
+
+// computeCacheKeys computes cache keys for all commands sequentially
+func (s *stageBuilder) computeCacheKeys(
+	compositeKey CompositeCache,
+	cfg *v1.Config,
+) ([]*cacheCheckResult, error) {
+	keyComputationTimer := timing.Start("Cache Key Computation")
+	defer timing.DefaultRun.Stop(keyComputationTimer)
+
+	results := make([]*cacheCheckResult, 0, len(s.cmds))
+	currentCompositeKey := compositeKey
+
+	for i, command := range s.cmds {
+		if command == nil {
+			continue
+		}
+
+		commandStr := command.String()
+
+		files, err := command.FilesUsedFromContext(cfg, s.args)
+		if err != nil {
+			return nil, errors.Wrapf(err, "failed to get files used from context for command %s", commandStr)
+		}
+
+		currentCompositeKey, err = s.populateCompositeKey(command, files, currentCompositeKey, s.args, cfg.Env)
+		if err != nil {
+			return nil, errors.Wrapf(err, "failed to populate composite cache key for command %s", commandStr)
+		}
+
+		logrus.Debugf("Optimize: composite key for command %v %v", commandStr, currentCompositeKey)
+		ck, err := currentCompositeKey.Hash()
+		if err != nil {
+			return nil, errors.Wrapf(err, "failed to hash composite key for command %s", commandStr)
+		}
+
+		logrus.Debugf("Optimize: cache key for command %v %v", commandStr, ck)
+		if i == len(s.cmds)-1 {
+			s.finalCacheKey = ck
+		}
+
+		shouldCheck := command.ShouldCacheOutput()
+		result := &cacheCheckResult{
+			index:        i,
+			command:      command,
+			commandStr:   commandStr,
+			cacheKey:     ck,
+			compositeKey: currentCompositeKey,
+			shouldCheck:  shouldCheck,
+		}
+		results = append(results, result)
+
+		// Store cache key for potential reuse
+		if shouldCheck {
+			s.digestToCacheKey[ck] = ck
+		}
+	}
+
+	return results, nil
+}
+
+// checkCacheBatch checks cache for all keys in parallel using batch retrieval
+func (s *stageBuilder) checkCacheBatch(results []*cacheCheckResult) {
+	cacheCheckTimer := timing.Start("Cache Check")
+	defer timing.DefaultRun.Stop(cacheCheckTimer)
+
+	// Collect all cache keys that need to be checked
+	cacheKeys := make([]string, 0, len(results))
+	keyToResult := make(map[string]*cacheCheckResult)
+	for _, result := range results {
+		if result.shouldCheck {
+			cacheKeys = append(cacheKeys, result.cacheKey)
+			keyToResult[result.cacheKey] = result
+		}
+	}
+
+	// Use batch retrieval for parallel loading (download/verify can be parallel)
+	if len(cacheKeys) > 0 {
+		layerLoadTimer := timing.Start("Layer Load")
+		batchResults := s.layerCache.RetrieveLayersBatch(cacheKeys)
+		timing.DefaultRun.Stop(layerLoadTimer)
+
+		// Map batch results back to individual results
+		for key, layerResult := range batchResults {
+			if result, exists := keyToResult[key]; exists {
+				result.img = layerResult.Image
+				result.err = layerResult.Error
+			}
+		}
+	}
+}
+
+// applyCacheResults applies cache results sequentially and logs statistics
+func (s *stageBuilder) applyCacheResults(results []*cacheCheckResult, cfg *v1.Config) error {
+	cacheHits := 0
+	cacheMisses := 0
+
+	for _, result := range results {
+		// Mutate the config for any commands that require it (must be done sequentially)
+		if result.command.MetadataOnly() {
+			if err := result.command.ExecuteCommand(cfg, s.args); err != nil {
+				return err
+			}
+		}
+
+		if !result.shouldCheck {
+			continue
+		}
+
+		if result.err != nil {
+			cacheMisses++
+			logrus.Debugf("Cache miss for command %s: %s", result.commandStr, result.err)
+			logrus.Debugf("Cache key: %s", result.compositeKey.Key())
+			logrus.Debugf("Cache key components: %v", result.compositeKey.keys)
+
+			// Prefetch potential next layers (per performance plan: prefetch potential layers)
+			s.prefetchNextLayers(result.index, result.compositeKey, cfg)
+
+			// Continue to next command - don't stop checking cache
+			// This allows partial cache hits (some commands cached, others not)
+		} else {
+			cacheHits++
+			// Cache hit - replace command with cached version
+			if cacheCmd := result.command.CacheCommand(result.img); cacheCmd != nil {
+				logrus.Infof("Cache hit for command: %s", result.commandStr)
+				s.cmds[result.index] = cacheCmd
+			}
+		}
+	}
+
+	// Log cache statistics (per performance plan: log cache statistics)
+	if cacheHits+cacheMisses > 0 {
+		const percentMultiplier = 100
+		totalCommands := cacheHits + cacheMisses
+		hitRate := float64(cacheHits) / float64(totalCommands) * percentMultiplier
+		logrus.Infof("Cache Statistics: Total commands: %d, Cache hits: %d (%.1f%%), Cache misses: %d (%.1f%%)",
+			totalCommands, cacheHits, hitRate, cacheMisses, percentMultiplier-hitRate)
+	}
+
+	return nil
+}
+
 func (s *stageBuilder) optimize(compositeKey CompositeCache, cfg *v1.Config) error {
 	if !s.opts.Cache {
 		return nil
 	}
+
+	// Track timing for cache optimization (per performance plan: add timing metrics)
+	t := timing.Start("Cache Optimization")
+	defer timing.DefaultRun.Stop(t)
+
 	var buildArgs = s.args.Clone()
 	// Restore build args back to their original values
 	defer func() {
 		s.args = buildArgs
 	}()
 
-	// Check cache for each command independently (like BuildKit does)
-	// Each command is checked separately - a cache miss for one command doesn't stop checking others
-	// This allows partial cache hits and better cache utilization
-	for i, command := range s.cmds {
-		if command == nil {
-			continue
-		}
-
-		// Cache command string representation to avoid multiple calls
-		commandStr := command.String()
-
-		files, err := command.FilesUsedFromContext(cfg, s.args)
-		if err != nil {
-			return errors.Wrapf(err, "failed to get files used from context for command %s", commandStr)
-		}
-
-		compositeKey, err = s.populateCompositeKey(command, files, compositeKey, s.args, cfg.Env)
-		if err != nil {
-			return errors.Wrapf(err, "failed to populate composite cache key for command %s", commandStr)
-		}
-
-		logrus.Debugf("Optimize: composite key for command %v %v", commandStr, compositeKey)
-		ck, err := compositeKey.Hash()
-		if err != nil {
-			return errors.Wrapf(err, "failed to hash composite key for command %s", commandStr)
-		}
-
-		logrus.Debugf("Optimize: cache key for command %v %v", commandStr, ck)
-		s.finalCacheKey = ck
-
-		// Check cache for each command independently (BuildKit-style)
-		// Even if previous commands missed cache, we still check this one
-		if command.ShouldCacheOutput() {
-			// Store cache key for potential reuse (per performance plan: cache composite keys)
-			s.digestToCacheKey[ck] = ck
-
-			img, err := s.layerCache.RetrieveLayer(ck)
-
-			if err != nil {
-				logrus.Debugf("Cache miss for command %s: %s", commandStr, err)
-				logrus.Debugf("Cache key: %s", compositeKey.Key())
-				logrus.Debugf("Cache key components: %v", compositeKey.keys)
-
-				// Prefetch potential next layers (per performance plan: prefetch potential layers)
-				s.prefetchNextLayers(i, compositeKey, cfg)
-
-				// Continue to next command - don't stop checking cache
-				// This allows partial cache hits (some commands cached, others not)
-			} else {
-				// Cache hit - replace command with cached version
-				if cacheCmd := command.CacheCommand(img); cacheCmd != nil {
-					logrus.Infof("Cache hit for command: %s", commandStr)
-					s.cmds[i] = cacheCmd
-				}
-			}
-		}
-
-		// Mutate the config for any commands that require it.
-		if command.MetadataOnly() {
-			if err := command.ExecuteCommand(cfg, s.args); err != nil {
-				return err
-			}
-		}
+	// Step 1: Compute all cache keys sequentially (they depend on each other via compositeKey)
+	results, err := s.computeCacheKeys(compositeKey, cfg)
+	if err != nil {
+		return err
 	}
-	return nil
+
+	// Step 2: Check cache in parallel using batch retrieval
+	s.checkCacheBatch(results)
+
+	// Step 3: Apply results sequentially (preserve order of layer application)
+	return s.applyCacheResults(results, cfg)
 }
 
 // prefetchNextLayers prefetches potential next layers if unified cache is enabled
+// Prefetching runs in background to avoid blocking the main build process
 func (s *stageBuilder) prefetchNextLayers(currentIndex int, compositeKey CompositeCache, cfg *v1.Config) {
 	if !s.opts.EnableUnifiedCache || currentIndex >= len(s.cmds)-1 {
 		return
 	}
+
+	// Calculate prefetch keys synchronously (needs current state)
 	prefetchKeys := s.calculatePrefetchKeys(currentIndex, compositeKey, cfg, s.args)
 	if len(prefetchKeys) == 0 {
 		return
 	}
-	if unifiedCache, ok := s.layerCache.(*cache.UnifiedCache); ok {
+
+	// Check if unified cache supports prefetching
+	unifiedCache, ok := s.layerCache.(*cache.UnifiedCache)
+	if !ok {
+		return
+	}
+
+	// Run prefetch in background goroutine to avoid blocking main build
+	// This allows prefetching to happen concurrently with command execution
+	// Track timing for prefetch operations (per performance plan: add timing metrics)
+	go func() {
+		prefetchTimer := timing.Start("Prefetch")
 		unifiedCache.Prefetch(prefetchKeys)
-		logrus.Debugf("Prefetching %d potential cache keys for next commands", len(prefetchKeys))
+		timing.DefaultRun.Stop(prefetchTimer)
+		logrus.Debugf("Prefetched %d potential cache keys for next commands (background)", len(prefetchKeys))
+	}()
+
+	// Use predictive cache if enabled (experimental)
+	if s.opts.EnablePredictiveCache && s.predictiveCache != nil && currentIndex < len(s.cmds) {
+		currentCommand := s.cmds[currentIndex].String()
+		allCommandStrings := make([]string, len(s.cmds))
+		for i, cmd := range s.cmds {
+			if cmd != nil {
+				allCommandStrings[i] = cmd.String()
+			}
+		}
+
+		// Predict next keys using predictive cache
+		predictedKeys := s.predictiveCache.PredictNextKeys(currentCommand, allCommandStrings, currentIndex)
+		if len(predictedKeys) > 0 {
+			// Prefetch predicted keys with strict limits
+			ctx := context.Background()
+			s.predictiveCache.PrefetchKeys(ctx, predictedKeys, func(key string) error {
+				// Use unified cache to prefetch
+				unifiedCache.Prefetch([]string{key})
+				return nil
+			})
+			logrus.Debugf("Predictive cache: prefetched %d predicted cache keys (experimental)", len(predictedKeys))
+		}
 	}
 }
 

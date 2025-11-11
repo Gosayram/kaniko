@@ -90,6 +90,25 @@ const (
 	defaultMaxCacheEntries = 2000 // Default cache entries (optimized for 1GB)
 	defaultMaxPreloadSize  = 100  // Default preload size
 	defaultPreloadTimeout  = 10   // Default preload timeout in minutes
+
+	// Compression constants
+	defaultCompressionLevel = 3 // Optimal balance between speed and size for zstd
+
+	// Cache optimization constants
+	defaultMaxConcurrentCacheChecks   = 5
+	defaultCacheMaxConns              = 10
+	defaultCacheMaxConnsPerHost       = 5
+	defaultCacheMaxConcurrentRequests = 5
+	defaultCacheRequestTimeout        = 30 * time.Second
+	defaultPrefetchWindow             = 10
+	defaultCacheResultMaxEntries      = 1000
+	defaultCacheResultMaxMemoryMB     = 100
+	defaultCacheResultTTL             = 5 * time.Minute
+	defaultFileHashCacheMaxEntries    = 10000
+	defaultFileHashCacheMaxMemoryMB   = 200
+	defaultLayerLoadMaxConcurrent     = 3
+	defaultPredictiveCacheMaxLayers   = 20
+	defaultPredictiveCacheMaxMemoryMB = 50
 )
 
 func init() {
@@ -601,6 +620,16 @@ func addCacheFlags() {
 		"Caches copy layers")
 	RootCmd.PersistentFlags().BoolVarP(&opts.CacheRunLayers, "cache-run-layers", "", true,
 		"Caches run layers")
+
+	// Local cache optimization flags (experimental)
+	RootCmd.PersistentFlags().BoolVarP(&opts.LocalCacheUseMMap, "local-cache-use-mmap", "", false,
+		"Use memory-mapped files for faster local cache access (experimental). Default: false")
+	RootCmd.PersistentFlags().BoolVarP(&opts.LocalCacheCompress, "local-cache-compress", "", false,
+		"Compress local cache files to save disk space (experimental). Default: false")
+	// Set default value before registering the flag
+	opts.LocalCacheCompression = config.ZStd
+	RootCmd.PersistentFlags().VarP(&opts.LocalCacheCompression, "local-cache-compression", "",
+		"Compression algorithm for local cache (gzip, zstd). Default: zstd (experimental)")
 }
 
 // addBuildFlags adds build-related flags
@@ -628,7 +657,6 @@ func addBasicBuildFlags() {
 		"Do not push the image to the registry")
 	RootCmd.PersistentFlags().VarP(&opts.Compression, "compression", "",
 		"Compression algorithm (gzip, zstd). Default: zstd for better performance")
-	const defaultCompressionLevel = 3 // Optimal balance between speed and size for zstd
 	RootCmd.PersistentFlags().IntVarP(&opts.CompressionLevel, "compression-level", "", defaultCompressionLevel,
 		"Compression level (default: 3 for zstd, balance between speed and size)")
 	RootCmd.PersistentFlags().BoolVarP(&opts.Cleanup, "cleanup", "", false,
@@ -749,6 +777,61 @@ func addUnifiedCacheFlags() {
 		"Timeout for preload operations (e.g., 5m, 10m). Default: 10m (increased for large cache)")
 	RootCmd.PersistentFlags().BoolVarP(&opts.EnableSmartCache, "enable-smart-cache", "", true,
 		"Enable smart cache with LRU and preloading capabilities. Default: enabled for better performance")
+	RootCmd.PersistentFlags().IntVarP(&opts.MaxConcurrentCacheChecks,
+		"max-concurrent-cache-checks", "", defaultMaxConcurrentCacheChecks,
+		"Maximum number of concurrent cache checks. Default: 5 for optimal balance between speed and resource usage")
+
+	// Connection pooling flags for registry cache
+	RootCmd.PersistentFlags().IntVarP(&opts.CacheMaxConns, "cache-max-conns", "", defaultCacheMaxConns,
+		"Maximum number of idle connections in the connection pool. Default: 10")
+	RootCmd.PersistentFlags().IntVarP(&opts.CacheMaxConnsPerHost,
+		"cache-max-conns-per-host", "", defaultCacheMaxConnsPerHost,
+		"Maximum number of idle connections per host. Default: 5")
+	RootCmd.PersistentFlags().IntVarP(&opts.CacheMaxConcurrentRequests,
+		"cache-max-concurrent-requests", "", defaultCacheMaxConcurrentRequests,
+		"Maximum number of concurrent requests to registry. Default: 5")
+	RootCmd.PersistentFlags().BoolVarP(&opts.CacheDisableHTTP2, "cache-disable-http2", "", false,
+		"Disable HTTP/2 for cache requests (use HTTP/1.1). Default: false (HTTP/2 enabled)")
+	RootCmd.PersistentFlags().DurationVarP(
+		&opts.CacheRequestTimeout, "cache-request-timeout", "", defaultCacheRequestTimeout,
+		"Timeout for cache requests to registry. Default: 30s")
+
+	// Aggressive prefetching flags
+	RootCmd.PersistentFlags().IntVarP(&opts.PrefetchWindow, "prefetch-window", "", defaultPrefetchWindow,
+		"Number of next commands to prefetch cache keys for. Default: 10 (increased from 3 for better cache hit rate)")
+
+	// Cache result caching flags
+	RootCmd.PersistentFlags().DurationVarP(&opts.CacheResultTTL, "cache-result-ttl", "", defaultCacheResultTTL,
+		"TTL for cached cache check results. Default: 5m")
+	RootCmd.PersistentFlags().IntVarP(&opts.CacheResultMaxEntries,
+		"cache-result-max-entries", "", defaultCacheResultMaxEntries,
+		"Maximum number of cached cache check results. Default: 1000")
+	RootCmd.PersistentFlags().IntVarP(&opts.CacheResultMaxMemoryMB,
+		"cache-result-max-memory-mb", "", defaultCacheResultMaxMemoryMB,
+		"Maximum memory usage for cached cache check results in MB. Default: 100 MB")
+
+	// File hash cache flags
+	RootCmd.PersistentFlags().IntVarP(&opts.FileHashCacheMaxEntries,
+		"file-hash-cache-max-entries", "", defaultFileHashCacheMaxEntries,
+		"Maximum number of cached file hashes. Default: 10000")
+	RootCmd.PersistentFlags().IntVarP(&opts.FileHashCacheMaxMemoryMB,
+		"file-hash-cache-max-memory-mb", "", defaultFileHashCacheMaxMemoryMB,
+		"Maximum memory usage for cached file hashes in MB. Default: 200 MB")
+
+	// Parallel layer loading flags
+	RootCmd.PersistentFlags().IntVarP(&opts.LayerLoadMaxConcurrent,
+		"layer-load-max-concurrent", "", defaultLayerLoadMaxConcurrent,
+		"Maximum number of concurrent layer loads from cache. Default: 3")
+
+	// Predictive caching flags (experimental)
+	RootCmd.PersistentFlags().BoolVarP(&opts.EnablePredictiveCache, "enable-predictive-cache", "", false,
+		"Enable predictive caching to prefetch layers based on build history patterns (experimental). Default: false")
+	RootCmd.PersistentFlags().IntVarP(&opts.PredictiveCacheMaxLayers,
+		"predictive-cache-max-layers", "", defaultPredictiveCacheMaxLayers,
+		"Maximum number of layers to prefetch with predictive caching. Default: 20")
+	RootCmd.PersistentFlags().IntVarP(&opts.PredictiveCacheMaxMemoryMB,
+		"predictive-cache-max-memory-mb", "", defaultPredictiveCacheMaxMemoryMB,
+		"Maximum memory (MB) to use for predictive cache prefetching. Default: 50 MB")
 }
 
 // addMultiPlatformFlags adds multi-platform build flags
