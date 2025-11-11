@@ -135,7 +135,7 @@ release:
     
     **Docker images are signed with Cosign.** Verify signatures using:
     ```bash
-    cosign verify --key cosign.pub ghcr.io/<repository>/executor:{{ .Version }}
+    cosign verify --key cosign.pub ghcr.io/gosayram/kaniko/executor:{{ .Version }}
     ```
 
 # Docker images are built separately in GitHub Actions workflow
