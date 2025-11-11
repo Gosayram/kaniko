@@ -29,6 +29,13 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
+const (
+	// WarningThresholdPercent is the percentage of timeout at which to log a warning
+	WarningThresholdPercent = 80
+	// PercentageMultiplier is used to convert ratio to percentage
+	PercentageMultiplier = 100
+)
+
 // RegistryClientConfig holds configuration for the registry client
 type RegistryClientConfig struct {
 	// Connection settings
@@ -122,9 +129,41 @@ func NewRegistryClient(config *RegistryClientConfig, pool *ConnectionPool) *Regi
 }
 
 // PullImage pulls an image from registry with optimizations
-func (rc *RegistryClient) PullImage(_ context.Context, ref name.Reference, options ...remote.Option) (v1.Image, error) {
+func (rc *RegistryClient) PullImage(
+	ctx context.Context, ref name.Reference, options ...remote.Option) (v1.Image, error) {
 	start := time.Now()
 	logrus.Infof("Pulling image: %s", ref.String())
+
+	// Create context with timeout if not provided or if context has no deadline
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	var timeout time.Duration
+	var cancel context.CancelFunc
+	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+		timeout = rc.config.RequestTimeout
+		if timeout == 0 {
+			timeout = DefaultRequestTimeout
+		}
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+
+		// Log timeout warning at 80% of timeout
+		warningThreshold := timeout * WarningThresholdPercent / PercentageMultiplier
+		go func() {
+			time.Sleep(warningThreshold)
+			select {
+			case <-ctx.Done():
+				// Operation completed or canceled
+			default:
+				logrus.Warnf("Image pull operation taking longer than expected: %v elapsed (timeout: %v)",
+					time.Since(start), timeout)
+			}
+		}()
+	} else {
+		deadline, _ := ctx.Deadline()
+		timeout = time.Until(deadline)
+	}
 
 	// Check manifest cache first
 	if rc.manifestCache != nil {
@@ -136,12 +175,16 @@ func (rc *RegistryClient) PullImage(_ context.Context, ref name.Reference, optio
 		rc.recordCacheMiss()
 	}
 
-	// Create optimized remote options
+	// Create optimized remote options with context
 	remoteOptions := rc.createRemoteOptions(options...)
+	remoteOptions = append(remoteOptions, remote.WithContext(ctx))
 
 	// Pull image using optimized transport
 	image, err := remote.Image(ref, remoteOptions...)
 	if err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return nil, fmt.Errorf("timeout pulling image %s: %w", ref.String(), err)
+		}
 		// Record failed request if needed
 		return nil, fmt.Errorf("failed to pull image %s: %w", ref.String(), err)
 	}
@@ -217,16 +260,53 @@ func (rc *RegistryClient) PullImageParallel(ctx context.Context, refs []name.Ref
 }
 
 // PushImage pushes an image to registry with optimizations
-func (rc *RegistryClient) PushImage(_ context.Context, ref name.Reference, image v1.Image,
+func (rc *RegistryClient) PushImage(ctx context.Context, ref name.Reference, image v1.Image,
 	options ...remote.Option) error {
 	start := time.Now()
 	logrus.Infof("Pushing image: %s", ref.String())
 
-	// Create optimized remote options
+	// Create context with timeout if not provided or if context has no deadline
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	var timeout time.Duration
+	var cancel context.CancelFunc
+	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+		timeout = rc.config.RequestTimeout
+		if timeout == 0 {
+			timeout = DefaultRequestTimeout
+		}
+		// Push operations typically take longer, use 2x timeout
+		timeout *= 2
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+
+		// Log timeout warning at 80% of timeout
+		warningThreshold := timeout * WarningThresholdPercent / PercentageMultiplier
+		go func() {
+			time.Sleep(warningThreshold)
+			select {
+			case <-ctx.Done():
+				// Operation completed or canceled
+			default:
+				logrus.Warnf("Image push operation taking longer than expected: %v elapsed (timeout: %v)",
+					time.Since(start), timeout)
+			}
+		}()
+	} else {
+		deadline, _ := ctx.Deadline()
+		timeout = time.Until(deadline)
+	}
+
+	// Create optimized remote options with context
 	remoteOptions := rc.createRemoteOptions(options...)
+	remoteOptions = append(remoteOptions, remote.WithContext(ctx))
 
 	// Push image using optimized transport
 	if err := remote.Write(ref, image, remoteOptions...); err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return fmt.Errorf("timeout pushing image %s: %w", ref.String(), err)
+		}
 		// Record failed request if needed
 		return fmt.Errorf("failed to push image %s: %w", ref.String(), err)
 	}

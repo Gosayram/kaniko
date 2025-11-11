@@ -97,6 +97,13 @@ const (
 	// LayerExtractionBackoffMultiplier is the multiplier for exponential backoff
 	LayerExtractionBackoffMultiplier = 1.5
 
+	// DefaultResolveSourcesTimeout is the default timeout for resolving sources
+	DefaultResolveSourcesTimeout = 5 * time.Minute
+	// WarningThresholdPercent is the percentage of timeout at which to log a warning
+	WarningThresholdPercent = 80
+	// PercentageMultiplier is used to convert ratio to percentage
+	PercentageMultiplier = 100
+
 	// WorldWritableBit represents the world-writable permission bit (002)
 	WorldWritableBit = 0o002
 	// InaccessiblePerm represents completely inaccessible permissions (000)
@@ -1522,13 +1529,52 @@ func DetectFilesystemIgnoreList(path string) error {
 	return nil
 }
 
-// RelativeFiles returns a list of all files at the filepath relative to root
-func RelativeFiles(fp, root string) ([]string, error) {
-	var files []string
-	fullPath := filepath.Join(root, fp)
-	cleanedRoot := filepath.Clean(root)
-	logrus.Debugf("RelativeFiles: fp=%s, root=%s, fullPath=%s", fp, root, fullPath)
-	err := filepath.Walk(fullPath, func(path string, _ os.FileInfo, err error) error {
+// createTimeoutContext creates a context with timeout for file operations
+func createTimeoutContext() (context.Context, context.CancelFunc, time.Duration) {
+	timeoutStr := os.Getenv("RESOLVE_SOURCES_TIMEOUT")
+	if timeoutStr == "" {
+		timeoutStr = "5m"
+	}
+	timeout, err := time.ParseDuration(timeoutStr)
+	if err != nil {
+		logrus.Warnf("Invalid RESOLVE_SOURCES_TIMEOUT value '%s', using default 5m", timeoutStr)
+		timeout = DefaultResolveSourcesTimeout
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	return ctx, cancel, timeout
+}
+
+// startTimeoutWarning starts a goroutine that logs a warning if operation takes too long
+func startTimeoutWarning(ctx context.Context, timeout time.Duration, startTime time.Time) {
+	warningThreshold := timeout * WarningThresholdPercent / PercentageMultiplier
+	warningSent := make(chan struct{}, 1)
+	go func() {
+		time.Sleep(warningThreshold)
+		select {
+		case <-ctx.Done():
+			// Operation completed or canceled
+		default:
+			select {
+			case warningSent <- struct{}{}:
+				logrus.Warnf("File resolution operation taking longer than expected: %v elapsed (timeout: %v)",
+					time.Since(startTime), timeout)
+			default:
+			}
+		}
+	}()
+}
+
+// walkFilesInPath walks the file tree and collects relative file paths
+func walkFilesInPath(ctx context.Context, fullPath, root, cleanedRoot string) ([]string, error) {
+	var walkFiles []string
+	walkErr := filepath.Walk(fullPath, func(path string, _ os.FileInfo, err error) error {
+		// Check context cancellation
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
 		if err != nil {
 			return err
 		}
@@ -1539,10 +1585,62 @@ func RelativeFiles(fp, root string) ([]string, error) {
 		if err != nil {
 			return err
 		}
-		files = append(files, relPath)
+		walkFiles = append(walkFiles, relPath)
 		return nil
 	})
-	return files, err
+	return walkFiles, walkErr
+}
+
+// handleWalkResult processes the result of file walking
+func handleWalkResult(res result, timeout time.Duration, startTime time.Time) ([]string, error) {
+	if res.err != nil && res.err != context.DeadlineExceeded {
+		return nil, res.err
+	}
+	if res.err == context.DeadlineExceeded {
+		logrus.Warnf("RelativeFiles timed out after %v, returning partial results (%d files)", timeout, len(res.files))
+		return res.files, nil
+	}
+	duration := time.Since(startTime)
+	if duration > 10*time.Second {
+		logrus.Infof("RelativeFiles completed: found %d files in %v", len(res.files), duration)
+	} else {
+		logrus.Debugf("RelativeFiles completed: found %d files in %v", len(res.files), duration)
+	}
+	return res.files, nil
+}
+
+// result represents the result of file walking operation
+type result struct {
+	files []string
+	err   error
+}
+
+// RelativeFiles returns a list of all files at the filepath relative to root
+// It includes a timeout to prevent hanging on large directories
+func RelativeFiles(fp, root string) ([]string, error) {
+	fullPath := filepath.Join(root, fp)
+	cleanedRoot := filepath.Clean(root)
+	logrus.Debugf("RelativeFiles: fp=%s, root=%s, fullPath=%s", fp, root, fullPath)
+
+	ctx, cancel, timeout := createTimeoutContext()
+	defer cancel()
+
+	startTime := time.Now()
+	startTimeoutWarning(ctx, timeout, startTime)
+
+	resultCh := make(chan result, 1)
+	go func() {
+		files, walkErr := walkFilesInPath(ctx, fullPath, root, cleanedRoot)
+		resultCh <- result{files: files, err: walkErr}
+	}()
+
+	select {
+	case res := <-resultCh:
+		return handleWalkResult(res, timeout, startTime)
+	case <-ctx.Done():
+		logrus.Warnf("RelativeFiles timed out after %v, returning empty list", timeout)
+		return []string{}, errors.New("file resolution timed out")
+	}
 }
 
 // ParentDirectories returns a list of paths to all parent directories

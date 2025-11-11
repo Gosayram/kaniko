@@ -18,10 +18,21 @@ package logging
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
 	"github.com/sirupsen/logrus"
+)
+
+// ANSI color codes for log levels
+const (
+	colorReset  = "\033[0m"
+	colorRed    = "\033[31m"
+	colorYellow = "\033[33m"
+	colorBlue   = "\033[34m"
+	colorGray   = "\033[37m"
+	colorCyan   = "\033[36m"
 )
 
 // KanikoFormatter provides a clean, readable log format for Kaniko
@@ -29,9 +40,11 @@ type KanikoFormatter struct {
 	ShowTimestamp bool
 	ShowLevel     bool
 	CompactMode   bool
+	ForceColors   bool
+	DisableColors bool
 }
 
-// Format formats a log entry for Kaniko
+// Format formats a log entry for Kaniko with color coding
 func (f *KanikoFormatter) Format(entry *logrus.Entry) ([]byte, error) {
 	var output strings.Builder
 
@@ -41,10 +54,15 @@ func (f *KanikoFormatter) Format(entry *logrus.Entry) ([]byte, error) {
 		output.WriteString(" ")
 	}
 
-	// Add level if enabled
+	// Add level with color if enabled
 	if f.ShowLevel {
 		level := strings.ToUpper(entry.Level.String())
-		output.WriteString(fmt.Sprintf("%s ", level))
+		if f.shouldUseColors() {
+			levelColor := f.getLevelColor(entry.Level)
+			output.WriteString(fmt.Sprintf("%s%s%s ", levelColor, level, colorReset))
+		} else {
+			output.WriteString(fmt.Sprintf("%s ", level))
+		}
 	}
 
 	// Add message
@@ -65,6 +83,44 @@ func (f *KanikoFormatter) Format(entry *logrus.Entry) ([]byte, error) {
 
 	output.WriteString("\n")
 	return []byte(output.String()), nil
+}
+
+// shouldUseColors determines if colors should be used
+func (f *KanikoFormatter) shouldUseColors() bool {
+	if f.DisableColors {
+		return false
+	}
+	if f.ForceColors {
+		return true
+	}
+	// Check NO_COLOR environment variable (standard for disabling colors)
+	if os.Getenv("NO_COLOR") != "" {
+		return false
+	}
+	// Check if output is a terminal (basic check via TERM variable)
+	// In CI/CD environments, TERM is usually not set or set to "dumb"
+	term := os.Getenv("TERM")
+	if term == "" || term == "dumb" {
+		return false
+	}
+	// Default to colors if TERM is set (most terminals support ANSI colors)
+	return true
+}
+
+// getLevelColor returns ANSI color code for log level
+func (f *KanikoFormatter) getLevelColor(level logrus.Level) string {
+	switch level {
+	case logrus.ErrorLevel, logrus.FatalLevel, logrus.PanicLevel:
+		return colorRed
+	case logrus.WarnLevel:
+		return colorYellow
+	case logrus.InfoLevel:
+		return colorBlue
+	case logrus.DebugLevel, logrus.TraceLevel:
+		return colorGray
+	default:
+		return colorCyan
+	}
 }
 
 // cleanupMessage cleans up common Kaniko log messages for better readability

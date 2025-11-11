@@ -17,10 +17,12 @@ limitations under the License.
 package snapshot
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -41,6 +43,20 @@ const (
 	averageDivisor           = 2
 	// Conservative max workers limit for I/O-bound operations
 	maxWorkersLimit = 4
+	// DefaultDirectoryScanTimeout is the default timeout for directory scanning
+	DefaultDirectoryScanTimeout = 10 * time.Minute
+	// DefaultMaxFilesProcessed is the default maximum number of files to process
+	DefaultMaxFilesProcessed = 100000
+	// MemoryCheckInterval is the interval for checking memory usage during directory scan
+	MemoryCheckInterval = 10 * time.Second
+	// MemoryBaselineBytes is the baseline memory for percentage calculation (2GB)
+	MemoryBaselineBytes = 2 * 1024 * 1024 * 1024
+	// MemoryWarningThresholdPercent is the percentage of memory usage to trigger warning
+	MemoryWarningThresholdPercent = 80
+	// BytesPerKB is the number of bytes in a kilobyte
+	BytesPerKB = 1024
+	// BytesPerMB is the number of bytes in a megabyte
+	BytesPerMB = BytesPerKB * BytesPerKB
 )
 
 // SafeSnapshotOptimizer provides safe optimizations for snapshot operations
@@ -322,62 +338,209 @@ func (sso *SafeSnapshotOptimizer) OptimizedWalkFS(
 	return resolvedFiles, scanResults.deletedFiles, nil
 }
 
-// parallelDirectoryScan performs parallel directory scanning
-func (sso *SafeSnapshotOptimizer) parallelDirectoryScan(dir string) (*ScanResults, error) {
-	// Optimized: pre-allocate with reasonable initial capacity
-	// Estimate: typical projects have 100-1000 files, so start with 100
+// createDirectoryScanContext creates a context with timeout for directory scanning
+func createDirectoryScanContext() (context.Context, context.CancelFunc, time.Duration) {
+	timeoutStr := os.Getenv("DIRECTORY_SCAN_TIMEOUT")
+	if timeoutStr == "" {
+		timeoutStr = "10m"
+	}
+	timeout, err := time.ParseDuration(timeoutStr)
+	if err != nil {
+		logrus.Warnf("Invalid DIRECTORY_SCAN_TIMEOUT value '%s', using default 10m", timeoutStr)
+		timeout = DefaultDirectoryScanTimeout
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	return ctx, cancel, timeout
+}
+
+// getMaxFilesLimit gets the maximum number of files to process from environment
+func getMaxFilesLimit() int64 {
+	maxFilesStr := os.Getenv("MAX_FILES_PROCESSED")
+	maxFiles := int64(DefaultMaxFilesProcessed) // Default: 100k files
+	if maxFilesStr != "" {
+		if parsed, err := strconv.ParseInt(maxFilesStr, 10, 64); err == nil && parsed > 0 {
+			maxFiles = parsed
+		}
+	}
+	return maxFiles
+}
+
+// checkFileCountLimit checks if file count exceeds the limit
+func checkFileCountLimit(fileCount, maxFiles int64) error {
+	if fileCount > 0 && fileCount%1000 == 0 {
+		if fileCount > maxFiles {
+			logrus.Warnf("File count %d exceeds limit %d, stopping directory scan", fileCount, maxFiles)
+			return fmt.Errorf("file count limit exceeded: %d > %d", fileCount, maxFiles)
+		}
+	}
+	return nil
+}
+
+// checkMemoryUsage checks memory usage and logs warning if high
+func checkMemoryUsage(lastMemoryCheck time.Time, memoryCheckInterval time.Duration) time.Time {
+	now := time.Now()
+	if now.Sub(lastMemoryCheck) <= memoryCheckInterval {
+		return lastMemoryCheck
+	}
+
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+	memoryPercent := float64(m.Alloc) / float64(MemoryBaselineBytes) * float64(percentageMultiplier)
+	if memoryPercent > MemoryWarningThresholdPercent {
+		logrus.Warnf("High memory usage detected: %.1f%% (%dMB) during directory scan",
+			memoryPercent, m.Alloc/BytesPerMB)
+	}
+	return now
+}
+
+// handleWalkError handles errors during file walking
+func handleWalkError(path string, err error) error {
+	if strings.Contains(path, "/proc/") && strings.Contains(path, "/fd/") {
+		return filepath.SkipDir
+	}
+	if logrus.IsLevelEnabled(logrus.DebugLevel) {
+		logging.AsyncDebugf("Skipping problematic path %s: %v", path, err)
+	}
+	return nil
+}
+
+// processFileInWorker processes a file using a worker from the pool
+func (sso *SafeSnapshotOptimizer) processFileInWorker(
+	ctx context.Context,
+	path string,
+	info os.FileInfo,
+	workers chan struct{},
+	wg *sync.WaitGroup,
+	walkFiles *[]string,
+	mutex *sync.Mutex,
+) {
+	select {
+	case workers <- struct{}{}:
+		wg.Add(1)
+		go func(p string, i os.FileInfo) {
+			defer wg.Done()
+			defer func() { <-workers }()
+
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+
+			if sso.shouldProcessFile(p, i) {
+				mutex.Lock()
+				*walkFiles = append(*walkFiles, p)
+				mutex.Unlock()
+			}
+		}(path, info)
+	case <-ctx.Done():
+	default:
+		// Worker pool is full, process synchronously
+		if sso.shouldProcessFile(path, info) {
+			mutex.Lock()
+			*walkFiles = append(*walkFiles, path)
+			mutex.Unlock()
+		}
+	}
+}
+
+// handleScanResult processes the result of directory scanning
+func handleScanResult(res walkResult, timeout time.Duration, start time.Time) (*ScanResults, error) {
 	const initialCapacity = 100
 	results := &ScanResults{
 		files:        make([]string, 0, initialCapacity),
 		deletedFiles: make(map[string]struct{}),
 	}
 
-	// Use worker pool for parallel scanning
+	if res.err != nil && res.err != context.DeadlineExceeded {
+		return nil, res.err
+	}
+	if res.err == context.DeadlineExceeded {
+		logrus.Warnf("Directory scan timed out after %v, returning partial results (%d files)", timeout, len(res.files))
+		results.files = res.files
+		return results, nil
+	}
+
+	results.files = res.files
+	logrus.Infof("Directory scan completed: found %d files in %v", len(res.files), time.Since(start))
+
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+	logrus.Debugf("Memory usage after scan: %dMB", m.Alloc/BytesPerMB)
+
+	return results, nil
+}
+
+// walkResult represents the result of directory walking
+type walkResult struct {
+	files []string
+	err   error
+}
+
+// parallelDirectoryScan performs parallel directory scanning with timeout and goroutine limits
+func (sso *SafeSnapshotOptimizer) parallelDirectoryScan(dir string) (*ScanResults, error) {
+	start := time.Now()
+
+	const initialCapacity = 100
+	results := &ScanResults{
+		files:        make([]string, 0, initialCapacity),
+		deletedFiles: make(map[string]struct{}),
+	}
+
+	ctx, cancel, timeout := createDirectoryScanContext()
+	defer cancel()
+
 	workers := make(chan struct{}, sso.maxWorkers)
 	var wg sync.WaitGroup
 	var mutex sync.Mutex
+	resultCh := make(chan walkResult, 1)
+	maxFiles := getMaxFilesLimit()
 
-	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			// Skip problematic paths like /proc/*/fd/* that may not be accessible in containers
-			if strings.Contains(path, "/proc/") && strings.Contains(path, "/fd/") {
-				return filepath.SkipDir
+	go func() {
+		var walkFiles []string
+		var fileCount int64
+		var lastMemoryCheck time.Time
+		memoryCheckInterval := MemoryCheckInterval
+
+		walkErr := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			default:
 			}
-			// For other errors, log and continue
-			if logrus.IsLevelEnabled(logrus.DebugLevel) {
-				logging.AsyncDebugf("Skipping problematic path %s: %v", path, err)
+
+			if checkErr := checkFileCountLimit(fileCount, maxFiles); checkErr != nil {
+				return checkErr
 			}
+
+			lastMemoryCheck = checkMemoryUsage(lastMemoryCheck, memoryCheckInterval)
+
+			if err != nil {
+				return handleWalkError(path, err)
+			}
+
+			if !info.Mode().IsRegular() {
+				return nil
+			}
+
+			fileCount++
+			sso.processFileInWorker(ctx, path, info, workers, &wg, &walkFiles, &mutex)
+
 			return nil
-		}
+		})
 
-		// Skip if not a regular file
-		if !info.Mode().IsRegular() {
-			return nil
-		}
+		wg.Wait()
+		close(workers)
+		resultCh <- walkResult{files: walkFiles, err: walkErr}
+	}()
 
-		wg.Add(1)
-		go func(p string, i os.FileInfo) {
-			defer wg.Done()
-
-			// Acquire worker
-			workers <- struct{}{}
-			defer func() { <-workers }()
-
-			// Process file
-			if sso.shouldProcessFile(p, i) {
-				mutex.Lock()
-				results.files = append(results.files, p)
-				mutex.Unlock()
-			}
-		}(path, info)
-
-		return nil
-	})
-
-	wg.Wait()
-	close(workers)
-
-	return results, err
+	select {
+	case res := <-resultCh:
+		return handleScanResult(res, timeout, start)
+	case <-ctx.Done():
+		logrus.Warnf("Directory scan timed out after %v, returning partial results", timeout)
+		return results, nil
+	}
 }
 
 // ScanResults holds the results of a directory scan
