@@ -135,25 +135,30 @@ func ResolveSources(srcs []string, root string) ([]string, error) {
 	if !ContainsWildcards(srcs) {
 		return srcs, nil
 	}
-	logrus.Infof("Resolving srcs %v...", srcs)
+	logrus.Infof("Resolving srcs with wildcards %v (this may take a while for large directories)...", srcs)
 
 	// Log start time for progress tracking
 	startTime := time.Now()
 	files, err := RelativeFiles("", root)
 	if err != nil {
+		logrus.Errorf("Failed to resolve sources after %v: %v", time.Since(startTime), err)
 		return nil, errors.Wrap(err, "resolving sources")
 	}
 	duration := time.Since(startTime)
 
 	if duration > 10*time.Second {
 		logrus.Infof("Resolved %d files in %v", len(files), duration)
+	} else {
+		logrus.Debugf("Resolved %d files in %v", len(files), duration)
 	}
 
+	logrus.Debugf("Matching %d sources against %d files...", len(srcs), len(files))
 	resolved, err := matchSources(srcs, files)
 	if err != nil {
+		logrus.Errorf("Failed to match sources after %v: %v", time.Since(startTime), err)
 		return nil, errors.Wrap(err, "matching sources")
 	}
-	logrus.Debugf("Resolved sources to %v", resolved)
+	logrus.Infof("Resolved sources to %d files: %v", len(resolved), resolved)
 	return resolved, nil
 }
 

@@ -1026,11 +1026,20 @@ func (s *stageBuilder) processCommand(
 
 	if s.opts.Cache {
 		var err error
+		startTime := time.Now()
+		logrus.Debugf("Populating composite cache key for command %d: %s (%d files)", index, command.String(), len(files))
 		s.mutex.RLock()
 		*compositeKey, err = s.populateCompositeKey(command, files, *compositeKey, s.args, s.cf.Config.Env)
 		s.mutex.RUnlock()
+		duration := time.Since(startTime)
 		if err != nil {
+			logrus.Errorf("Failed to populate composite cache key after %v: %v", duration, err)
 			return errors.Wrap(err, "failed to populate composite cache key")
+		}
+		if duration > 5*time.Second {
+			logrus.Infof("Composite cache key populated in %v for command %d: %s", duration, index, command.String())
+		} else {
+			logrus.Debugf("Composite cache key populated in %v for command %d", duration, index)
 		}
 	}
 
@@ -2941,14 +2950,25 @@ func ResolveCrossStageInstructions(stages []config.KanikoStage) map[string]strin
 
 func (s *stageBuilder) initSnapshotWithTimings() error {
 	t := timing.Start("Initial FS snapshot")
+	startTime := time.Now()
+	logrus.Info("Initializing filesystem snapshot (this may take a while for large filesystems)...")
 
 	// Protect snapshotter access with write lock
 	s.mutex.Lock()
 	err := s.snapshotter.Init()
 	s.mutex.Unlock()
 
+	duration := time.Since(startTime)
 	if err != nil {
+		logrus.Errorf("Failed to initialize snapshot after %v: %v", duration, err)
+		timing.DefaultRun.Stop(t)
 		return err
+	}
+
+	if duration > 10*time.Second {
+		logrus.Infof("Filesystem snapshot initialized in %v", duration)
+	} else {
+		logrus.Debugf("Filesystem snapshot initialized in %v", duration)
 	}
 	timing.DefaultRun.Stop(t)
 	return nil

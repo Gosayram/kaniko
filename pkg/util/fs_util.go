@@ -1567,17 +1567,34 @@ func startTimeoutWarning(ctx context.Context, timeout time.Duration, startTime t
 // walkFilesInPath walks the file tree and collects relative file paths
 func walkFilesInPath(ctx context.Context, fullPath, root, cleanedRoot string) ([]string, error) {
 	var walkFiles []string
-	walkErr := filepath.Walk(fullPath, func(path string, _ os.FileInfo, err error) error {
-		// Check context cancellation
+	var fileCount int
+	startTime := time.Now()
+	lastLogTime := startTime
+
+	walkErr := filepath.Walk(fullPath, func(path string, info os.FileInfo, err error) error {
+		// Check context cancellation more frequently
 		select {
 		case <-ctx.Done():
+			logrus.Warnf("File walk cancelled after processing %d files in %v", fileCount, time.Since(startTime))
 			return ctx.Err()
 		default:
 		}
 
 		if err != nil {
-			return err
+			// Log errors but continue walking (original behavior)
+			logrus.Debugf("Error walking path %s: %v", path, err)
+			return nil
 		}
+
+		fileCount++
+
+		// Log progress every 10 seconds for large directories
+		if time.Since(lastLogTime) > 10*time.Second {
+			logrus.Infof("Still walking filesystem: processed %d files in %v (path: %s)",
+				fileCount, time.Since(startTime), path)
+			lastLogTime = time.Now()
+		}
+
 		if CheckCleanedPathAgainstIgnoreList(path) && !hasCleanedFilepathPrefix(filepath.Clean(path), cleanedRoot, false) {
 			return nil
 		}
@@ -1588,6 +1605,14 @@ func walkFilesInPath(ctx context.Context, fullPath, root, cleanedRoot string) ([
 		walkFiles = append(walkFiles, relPath)
 		return nil
 	})
+
+	if walkErr != nil && walkErr != context.Canceled && walkErr != context.DeadlineExceeded {
+		logrus.Warnf("File walk completed with error after processing %d files in %v: %v",
+			fileCount, time.Since(startTime), walkErr)
+	} else if fileCount > 0 {
+		logrus.Debugf("File walk completed: processed %d files in %v", fileCount, time.Since(startTime))
+	}
+
 	return walkFiles, walkErr
 }
 

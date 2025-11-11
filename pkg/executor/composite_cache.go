@@ -17,12 +17,14 @@ limitations under the License.
 package executor
 
 import (
+	ctx "context"
 	"crypto/sha256"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
@@ -91,6 +93,9 @@ func (s *CompositeCache) Hash() (string, error) {
 
 // AddPath adds a file or directory path to the composite cache key
 func (s *CompositeCache) AddPath(p string, context util.FileContext) error {
+	startTime := time.Now()
+	logrus.Debugf("Adding path to cache key: %s", p)
+
 	sha := sha256.New()
 	fi, err := os.Lstat(p)
 	if err != nil {
@@ -104,9 +109,15 @@ func (s *CompositeCache) AddPath(p string, context util.FileContext) error {
 	}
 
 	if fi.Mode().IsDir() {
+		logrus.Debugf("Hashing directory for cache key: %s", p)
 		isEmptyDir, k, hashErr := hashDir(p, context)
 		if hashErr != nil {
+			logrus.Errorf("Failed to hash directory %s after %v: %v", p, time.Since(startTime), hashErr)
 			return hashErr
+		}
+		duration := time.Since(startTime)
+		if duration > 5*time.Second {
+			logrus.Infof("Directory hash for cache key completed in %v: %s", duration, p)
 		}
 
 		// Only add the hash of this directory to the key
@@ -168,14 +179,48 @@ func (s *CompositeCache) AddPath(p string, context util.FileContext) error {
 	// Invalidate hash cache when file hash is added
 	s.hashComputed = false
 	s.cachedHash = ""
+
+	duration := time.Since(startTime)
+	if duration > 1*time.Second {
+		logrus.Debugf("File hash for cache key completed in %v: %s", duration, p)
+	}
 	return nil
 }
 
 // HashDir returns a hash of the directory.
 func hashDir(p string, context util.FileContext) (isEmpty bool, hash string, err error) {
+	// Create timeout context for directory hashing to prevent hangs
+	timeoutStr := os.Getenv("HASH_DIR_TIMEOUT")
+	if timeoutStr == "" {
+		timeoutStr = "10m" // Default 10 minutes for large directories
+	}
+	timeout, parseErr := time.ParseDuration(timeoutStr)
+	if parseErr != nil {
+		logrus.Warnf("Invalid HASH_DIR_TIMEOUT value '%s', using default 10m", timeoutStr)
+		timeout = 10 * time.Minute
+	}
+
+	hashCtx, cancel := ctx.WithTimeout(ctx.Background(), timeout)
+	defer cancel()
+
+	startTime := time.Now()
+	logrus.Debugf("Starting directory hash for %s (timeout: %v)", p, timeout)
+
 	sha := sha256.New()
 	empty := true
+	var fileCount int
+	lastLogTime := startTime
+
 	if err := filepath.Walk(p, func(path string, _ os.FileInfo, err error) error {
+		// Check context cancellation
+		select {
+		case <-hashCtx.Done():
+			logrus.Warnf("Directory hash cancelled after processing %d files in %v (dir: %s)",
+				fileCount, time.Since(startTime), p)
+			return hashCtx.Err()
+		default:
+		}
+
 		if err != nil {
 			// If individual file access fails, log warning and continue
 			// This prevents build failures when some files are inaccessible
@@ -185,6 +230,16 @@ func hashDir(p string, context util.FileContext) (isEmpty bool, hash string, err
 			}
 			return err
 		}
+
+		fileCount++
+
+		// Log progress every 10 seconds for large directories
+		if time.Since(lastLogTime) > 10*time.Second {
+			logrus.Infof("Still hashing directory %s: processed %d files in %v (current: %s)",
+				p, fileCount, time.Since(startTime), path)
+			lastLogTime = time.Now()
+		}
+
 		exclude := context.ExcludesFile(path)
 		if exclude {
 			return nil
@@ -238,7 +293,20 @@ func hashDir(p string, context util.FileContext) (isEmpty bool, hash string, err
 		empty = false
 		return nil
 	}); err != nil {
+		if err == ctx.DeadlineExceeded || err == ctx.Canceled {
+			logrus.Warnf("Directory hash timed out after processing %d files in %v (dir: %s)",
+				fileCount, time.Since(startTime), p)
+			// Return partial hash to allow build to continue
+			return false, fmt.Sprintf("%x", sha.Sum(nil)), nil
+		}
 		return false, "", err
+	}
+
+	duration := time.Since(startTime)
+	if duration > 10*time.Second {
+		logrus.Infof("Directory hash completed: %d files in %v (dir: %s)", fileCount, duration, p)
+	} else {
+		logrus.Debugf("Directory hash completed: %d files in %v (dir: %s)", fileCount, duration, p)
 	}
 
 	return empty, fmt.Sprintf("%x", sha.Sum(nil)), nil

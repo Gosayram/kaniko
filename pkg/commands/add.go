@@ -144,8 +144,10 @@ func (a *AddCommand) String() string {
 func (a *AddCommand) FilesUsedFromContext(config *v1.Config, buildArgs *dockerfile.BuildArgs) ([]string, error) {
 	replacementEnvs := buildArgs.ReplacementEnvs(config.Env)
 
+	logrus.Debugf("Resolving files from context for ADD command: %v", a.cmd.SourcesAndDest.SourcePaths)
 	srcs, _, err := util.ResolveEnvAndWildcards(a.cmd.SourcesAndDest, a.fileContext, replacementEnvs)
 	if err != nil {
+		logrus.Errorf("Failed to resolve files from context: %v", err)
 		return nil, err
 	}
 

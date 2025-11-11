@@ -330,7 +330,8 @@ func (s *Snapshotter) getSnapshotPathPrefix() string {
 }
 
 func (s *Snapshotter) scanFullFilesystem() (filesToAdd, filesToWhiteout []string, err error) {
-	logrus.Info("Taking snapshot of full filesystem...")
+	startTime := time.Now()
+	logrus.Info("Taking snapshot of full filesystem (this may take a while for large filesystems)...")
 
 	// Removed filesystem sync - simplified approach per plan
 	// Files are read directly, no need for explicit sync
@@ -353,10 +354,20 @@ func (s *Snapshotter) scanFullFilesystem() (filesToAdd, filesToWhiteout []string
 		MaxExpectedChanges: defaultMaxExpectedChanges,
 	})
 
+	logrus.Debugf("Starting optimized filesystem walk for directory: %s", s.directory)
 	changedPaths, deletedPaths, err := optimizer.OptimizedWalkFS(s.directory, s.l.GetCurrentPaths())
+	walkDuration := time.Since(startTime)
 	if err != nil {
+		logrus.Errorf("Optimized filesystem walk failed after %v: %v", walkDuration, err)
 		// Simplified: no fallback - if optimizer fails, return error
 		return nil, nil, errors.Wrap(err, "optimized filesystem walk failed")
+	}
+	if walkDuration > 10*time.Second {
+		logrus.Infof("Filesystem walk completed in %v: found %d changed files, %d deleted files",
+			walkDuration, len(changedPaths), len(deletedPaths))
+	} else {
+		logrus.Debugf("Filesystem walk completed in %v: found %d changed files, %d deleted files",
+			walkDuration, len(changedPaths), len(deletedPaths))
 	}
 	timer := timing.Start("Resolving Paths")
 
