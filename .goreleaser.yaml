@@ -155,12 +155,64 @@ release:
     gpg --verify executor{{ .Version }}*.sig executor
     gpg --verify warmer{{ .Version }}*.sig warmer
     ```
+  footer: |
+    **Full Changelog**: https://github.com/Gosayram/kaniko/compare/{{ .PreviousTag }}...{{ .Tag }}{{ end }}
+
 
 changelog:
   sort: asc
+  use: github
+  format: "{{ .SHA }}: {{ .Message }}{{ with .AuthorUsername }} (@{{ . }}){{ end }}"
   filters:
     exclude:
-      - '^docs:'
-      - '^test:'
-      - '^chore:'
-      - '^ci:'
+      - "^test:"
+      - "^test\\("
+      - "^chore: update$"
+      - "^chore: docs$"
+      - "^docs: update$"
+      - "^chore: schema$"
+      - "^chore: typo$"
+      - "^chore: auto-update generated files$"
+      - "^chore: update schema$"
+      - "^chore: schema update$"
+      - "^chore\\(deps\\): "
+      - "^(build|ci): "
+      - "merge conflict"
+      - "merge conflict"
+      - Merge pull request
+      - Merge remote-tracking branch
+      - Merge branch
+      - go mod tidy
+  groups:
+    - title: "New Features"
+      regexp: '^.*?(\[ADD\]|\[ENHANCE\]|\[INIT\]|feat(\(.+\))?!?:|feature(\(.+\))?!?:|add(\(.+\))?!?:|init(\(.+\))?!?:|\[feature\/.+\]).*$'
+      order: 100
+    - title: "Performance improvements"
+      regexp: '^.*?(\[perf\]|perf(\(.+\))?!?:).*$'
+      order: 120
+    - title: "Security updates"
+      regexp: '^.*?sec(\(.+\))?!?:.+$'
+      order: 150
+    - title: "Bug fixes"
+      regexp: '^.*?(\[FIX\]|\[BUGFIX\]|fix(\(.+\))?!?:|bugfix(\(.+\))?!?:).*$'
+      order: 200
+    - title: "Refactoring"
+      regexp: '^.*?(\[REFACTOR\]|refactor(\(.+\))?!?:).*$'
+      order: 250
+    - title: "Updates and Enhancements"
+      regexp: '^.*?\[UPD\].*$'
+      order: 300
+    - title: "Documentation updates"
+      regexp: '^.*?(\[DOCS\]|docs?(\(.+\))?!?:).*$'
+      order: 400
+    - title: "Tests"
+      regexp: '^.*?(\[TEST\]|test(\(.+\))?!?:).*$'
+      order: 450
+    - title: "CI and Build"
+      regexp: '^.*?(\[CI\]|\[CHORE\]|\[LINT\]|ci(\(.+\))?!?:|build(\(.+\))?!?:|chore(\(.+\))?!?:|lint(\(.+\))?!?:).*$'
+      order: 500
+    - title: "Dependencies"
+      regexp: '^.*?Bump .*$'
+      order: 600
+    - title: "Other work"
+      order: 9999
