@@ -25,6 +25,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/moby/buildkit/frontend/dockerfile/instructions"
@@ -135,10 +136,19 @@ func ResolveSources(srcs []string, root string) ([]string, error) {
 		return srcs, nil
 	}
 	logrus.Infof("Resolving srcs %v...", srcs)
+
+	// Log start time for progress tracking
+	startTime := time.Now()
 	files, err := RelativeFiles("", root)
 	if err != nil {
 		return nil, errors.Wrap(err, "resolving sources")
 	}
+	duration := time.Since(startTime)
+
+	if duration > 10*time.Second {
+		logrus.Infof("Resolved %d files in %v", len(files), duration)
+	}
+
 	resolved, err := matchSources(srcs, files)
 	if err != nil {
 		return nil, errors.Wrap(err, "matching sources")

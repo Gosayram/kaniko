@@ -20,6 +20,7 @@ package remote
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -40,12 +41,152 @@ const (
 	DefaultImageRetryMaxDelay = 30 * time.Second
 	// DefaultImageRetryBackoff is the default exponential backoff multiplier for image downloads
 	DefaultImageRetryBackoff = 2.0
+	// DefaultImageRetrieveTimeout is the default timeout for image retrieval operations
+	DefaultImageRetrieveTimeout = 15 * time.Minute
 )
 
 var (
 	manifestCache   = make(map[string]v1.Image)
 	remoteImageFunc = remote.Image
 )
+
+// createImageRetrieveContext creates a context with timeout for image retrieval
+func createImageRetrieveContext() (context.Context, context.CancelFunc, time.Duration) {
+	timeoutStr := os.Getenv("IMAGE_RETRIEVE_TIMEOUT")
+	if timeoutStr == "" {
+		timeoutStr = DefaultImageRetrieveTimeout.String()
+	}
+	timeout, parseErr := time.ParseDuration(timeoutStr)
+	if parseErr != nil {
+		logrus.Warnf("Invalid IMAGE_RETRIEVE_TIMEOUT value '%s', using default %v", timeoutStr, DefaultImageRetrieveTimeout)
+		timeout = DefaultImageRetrieveTimeout
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	return ctx, cancel, timeout
+}
+
+// buildRetryConfig creates a retry configuration for image downloads
+func buildRetryConfig(opts *config.RegistryOptions) retry.RetryConfig {
+	return retry.NewRetryConfigBuilder().
+		WithMaxAttempts(opts.ImageDownloadRetry + 1). // +1 because first attempt is not a retry
+		WithInitialDelay(1 * time.Second).
+		WithMaxDelay(DefaultImageRetryMaxDelay).
+		WithBackoff(DefaultImageRetryBackoff).
+		WithRetryableErrors(retry.IsRetryableError).
+		Build()
+}
+
+// tryRetrieveFromMappedRegistry attempts to retrieve image from a mapped registry
+func tryRetrieveFromMappedRegistry(
+	ctx context.Context,
+	ref name.Reference,
+	registryMapping string,
+	opts *config.RegistryOptions,
+	customPlatform string,
+	timeout time.Duration,
+) (v1.Image, error) {
+	regToMapTo, repositoryPrefix := parseRegistryMapping(registryMapping)
+	insecurePull := opts.InsecurePull || opts.InsecureRegistries.Contains(regToMapTo)
+
+	remappedRepository, remapErr := remapRepository(ref.Context(), regToMapTo, repositoryPrefix, insecurePull)
+	if remapErr != nil {
+		return nil, remapErr
+	}
+
+	remappedRef := setNewRepository(ref, remappedRepository)
+	logrus.Infof("Retrieving image %s from mapped registry %s", remappedRef, regToMapTo)
+
+	retryFunc := func() (v1.Image, error) {
+		return remoteImageFunc(remappedRef, remoteOptions(regToMapTo, opts, customPlatform)...)
+	}
+
+	retryConfig := buildRetryConfig(opts)
+	remoteImage, err := retry.RetryWithResult(ctx, retryConfig, retryFunc)
+
+	if err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			logrus.Warnf("Timeout retrieving image %s from remapped registry %s after %v. "+
+				"Will try with the next registry, or fallback to the original registry.",
+				remappedRef, regToMapTo, timeout)
+		} else {
+			logrus.Warnf("Failed to retrieve image %s from remapped registry %s: %s. "+
+				"Will try with the next registry, or fallback to the original registry.",
+				remappedRef, regToMapTo, err)
+		}
+		return nil, err
+	}
+
+	return remoteImage, nil
+}
+
+// retrieveFromMappedRegistries tries to retrieve image from mapped registries
+func retrieveFromMappedRegistries(
+	ref name.Reference,
+	newRegURLs []string,
+	opts *config.RegistryOptions,
+	customPlatform string,
+	image string,
+) (v1.Image, error) {
+	ctx, cancel, timeout := createImageRetrieveContext()
+	defer cancel()
+
+	for _, registryMapping := range newRegURLs {
+		remoteImage, err := tryRetrieveFromMappedRegistry(ctx, ref, registryMapping, opts, customPlatform, timeout)
+		if err != nil {
+			continue
+		}
+
+		manifestCache[image] = remoteImage
+		return remoteImage, nil
+	}
+
+	return nil, nil
+}
+
+// prepareRegistryReference prepares the reference for registry operations
+func prepareRegistryReference(ref name.Reference, opts *config.RegistryOptions) (name.Reference, error) {
+	registryName := ref.Context().RegistryStr()
+	if !opts.InsecurePull && !opts.InsecureRegistries.Contains(registryName) {
+		return ref, nil
+	}
+
+	newReg, regErr := name.NewRegistry(registryName, name.WeakValidation, name.Insecure)
+	if regErr != nil {
+		return nil, regErr
+	}
+	return setNewRegistry(ref, newReg), nil
+}
+
+// retrieveFromDefaultRegistry retrieves image from the default registry
+func retrieveFromDefaultRegistry(
+	ref name.Reference,
+	opts *config.RegistryOptions,
+	customPlatform string,
+	image string,
+) (v1.Image, error) {
+	registryName := ref.Context().RegistryStr()
+	logrus.Infof("Retrieving image %s from registry %s", ref, registryName)
+
+	retryFunc := func() (v1.Image, error) {
+		return remoteImageFunc(ref, remoteOptions(registryName, opts, customPlatform)...)
+	}
+
+	retryConfig := buildRetryConfig(opts)
+	ctx, cancel, timeout := createImageRetrieveContext()
+	defer cancel()
+
+	remoteImage, err := retry.RetryWithResult(ctx, retryConfig, retryFunc)
+	if remoteImage != nil {
+		manifestCache[image] = remoteImage
+	}
+
+	if err != nil && ctx.Err() == context.DeadlineExceeded {
+		err = fmt.Errorf("timeout retrieving image %s after %v: %w", ref.String(), timeout, err)
+	}
+	handleRegistryError(err, ref, registryName)
+
+	return remoteImage, err
+}
 
 // RetrieveRemoteImage retrieves the manifest for the specified image from the specified registry
 func RetrieveRemoteImage(image string, opts *config.RegistryOptions, customPlatform string) (v1.Image, error) {
@@ -63,42 +204,9 @@ func RetrieveRemoteImage(image string, opts *config.RegistryOptions, customPlatf
 	}
 
 	if newRegURLs, found := opts.RegistryMaps[ref.Context().RegistryStr()]; found {
-		for _, registryMapping := range newRegURLs {
-			regToMapTo, repositoryPrefix := parseRegistryMapping(registryMapping)
-
-			insecurePull := opts.InsecurePull || opts.InsecureRegistries.Contains(regToMapTo)
-
-			remappedRepository, remapErr := remapRepository(ref.Context(), regToMapTo, repositoryPrefix, insecurePull)
-			if err != nil {
-				return nil, remapErr
-			}
-
-			remappedRef := setNewRepository(ref, remappedRepository)
-
-			logrus.Infof("Retrieving image %s from mapped registry %s", remappedRef, regToMapTo)
-			retryFunc := func() (v1.Image, error) {
-				return remoteImageFunc(remappedRef, remoteOptions(regToMapTo, opts, customPlatform)...)
-			}
-
-			// Use new retry mechanism with exponential backoff
-			retryConfig := retry.NewRetryConfigBuilder().
-				WithMaxAttempts(opts.ImageDownloadRetry + 1). // +1 because first attempt is not a retry
-				WithInitialDelay(1 * time.Second).
-				WithMaxDelay(DefaultImageRetryMaxDelay).
-				WithBackoff(DefaultImageRetryBackoff).
-				WithRetryableErrors(retry.IsRetryableError).
-				Build()
-
-			var remoteImage v1.Image
-			if remoteImage, err = retry.RetryWithResult(context.Background(), retryConfig, retryFunc); err != nil {
-				logrus.Warnf("Failed to retrieve image %s from remapped registry %s: %s. "+
-					"Will try with the next registry, or fallback to the original registry.",
-					remappedRef, regToMapTo, err)
-				continue
-			}
-
-			manifestCache[image] = remoteImage
-
+		var remoteImage v1.Image
+		remoteImage, err = retrieveFromMappedRegistries(ref, newRegURLs, opts, customPlatform, image)
+		if err == nil && remoteImage != nil {
 			return remoteImage, nil
 		}
 
@@ -107,39 +215,12 @@ func RetrieveRemoteImage(image string, opts *config.RegistryOptions, customPlatf
 		}
 	}
 
-	registryName := ref.Context().RegistryStr()
-	if opts.InsecurePull || opts.InsecureRegistries.Contains(registryName) {
-		newReg, regErr := name.NewRegistry(registryName, name.WeakValidation, name.Insecure)
-		if err != nil {
-			return nil, regErr
-		}
-		ref = setNewRegistry(ref, newReg)
+	ref, err = prepareRegistryReference(ref, opts)
+	if err != nil {
+		return nil, err
 	}
 
-	logrus.Infof("Retrieving image %s from registry %s", ref, registryName)
-
-	retryFunc := func() (v1.Image, error) {
-		return remoteImageFunc(ref, remoteOptions(registryName, opts, customPlatform)...)
-	}
-
-	// Use new retry mechanism with exponential backoff
-	retryConfig := retry.NewRetryConfigBuilder().
-		WithMaxAttempts(opts.ImageDownloadRetry + 1). // +1 because first attempt is not a retry
-		WithInitialDelay(1 * time.Second).
-		WithMaxDelay(DefaultImageRetryMaxDelay).
-		WithBackoff(DefaultImageRetryBackoff).
-		WithRetryableErrors(retry.IsRetryableError).
-		Build()
-
-	var remoteImage v1.Image
-	if remoteImage, err = retry.RetryWithResult(context.Background(), retryConfig, retryFunc); remoteImage != nil {
-		manifestCache[image] = remoteImage
-	}
-
-	// Handle registry errors gracefully
-	handleRegistryError(err, ref, registryName)
-
-	return remoteImage, err
+	return retrieveFromDefaultRegistry(ref, opts, customPlatform, image)
 }
 
 // remapRepository adds the {repositoryPrefix}/ to the original repo,

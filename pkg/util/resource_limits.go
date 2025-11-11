@@ -18,7 +18,9 @@ package util
 
 import (
 	"fmt"
+	"os"
 	"runtime"
+	"strconv"
 	"sync"
 	"time"
 
@@ -38,14 +40,18 @@ const (
 
 	// File size limits
 	MaxSingleFileSize = 1024 * 1024 * 1024 // 1GB max single file
+
+	// File count limits
+	DefaultMaxFilesProcessed = 100000 // 100k files max per operation
 )
 
 // ResourceLimits provides resource control and monitoring
 type ResourceLimits struct {
 	// Memory limits
-	MaxMemoryUsage   int64
-	MaxFileSize      int64
-	MaxTotalFileSize int64
+	MaxMemoryUsage    int64
+	MaxFileSize       int64
+	MaxTotalFileSize  int64
+	MaxFilesProcessed int64 // Maximum number of files to process
 
 	// Monitoring settings
 	GCThreshold        int
@@ -75,6 +81,19 @@ type ResourceStats struct {
 	LastGC              time.Time
 }
 
+// CheckFileCount checks if the number of files being processed is within limits
+func (rl *ResourceLimits) CheckFileCount(fileCount int64) error {
+	rl.monitoringMutex.Lock()
+	defer rl.monitoringMutex.Unlock()
+
+	if rl.MaxFilesProcessed > 0 && fileCount > rl.MaxFilesProcessed {
+		rl.stats.WarningsIssued++
+		return fmt.Errorf("file count %d exceeds limit %d", fileCount, rl.MaxFilesProcessed)
+	}
+
+	return nil
+}
+
 // NewResourceLimits creates a new resource limits controller
 func NewResourceLimits(maxMemory, maxFileSize, maxTotalFileSize int64) *ResourceLimits {
 	if maxMemory <= 0 {
@@ -87,10 +106,19 @@ func NewResourceLimits(maxMemory, maxFileSize, maxTotalFileSize int64) *Resource
 		maxTotalFileSize = DefaultMaxTotalFileSize
 	}
 
+	// Get max files from environment or use default
+	maxFiles := int64(DefaultMaxFilesProcessed)
+	if maxFilesStr := os.Getenv("MAX_FILES_PROCESSED"); maxFilesStr != "" {
+		if parsed, err := strconv.ParseInt(maxFilesStr, 10, 64); err == nil && parsed > 0 {
+			maxFiles = parsed
+		}
+	}
+
 	rl := &ResourceLimits{
 		MaxMemoryUsage:     maxMemory,
 		MaxFileSize:        maxFileSize,
 		MaxTotalFileSize:   maxTotalFileSize,
+		MaxFilesProcessed:  maxFiles,
 		GCThreshold:        DefaultGCThreshold,
 		MonitoringInterval: DefaultMonitoringInterval,
 		stopMonitoring:     make(chan bool),
@@ -100,8 +128,8 @@ func NewResourceLimits(maxMemory, maxFileSize, maxTotalFileSize int64) *Resource
 	}
 
 	//nolint:mnd // Constants for MB conversion
-	logrus.Infof("Resource limits initialized: Memory=%dMB, File=%dMB, Total=%dMB",
-		maxMemory/(1024*1024), maxFileSize/(1024*1024), maxTotalFileSize/(1024*1024))
+	logrus.Infof("Resource limits initialized: Memory=%dMB, File=%dMB, Total=%dMB, MaxFiles=%d",
+		maxMemory/(1024*1024), maxFileSize/(1024*1024), maxTotalFileSize/(1024*1024), maxFiles)
 
 	return rl
 }

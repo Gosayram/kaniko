@@ -23,6 +23,7 @@ package cache
 import (
 	"context"
 	"fmt"
+	"os"
 	"sync"
 	"time"
 
@@ -34,6 +35,8 @@ import (
 const (
 	// PercentageMultiplier is used to convert ratio to percentage
 	percentageMultiplier = 100.0
+	// DefaultRemoteCacheTimeout is the default timeout for remote cache operations
+	DefaultRemoteCacheTimeout = 5 * time.Minute
 )
 
 // LayerMetadata represents metadata about a cached layer without the full image
@@ -248,9 +251,31 @@ func NewRegistryRemoteCache(layerCache LayerCache) *RegistryRemoteCache {
 }
 
 // Get retrieves a cache record from remote cache (full image with metadata)
-func (r *RegistryRemoteCache) Get(_ context.Context, key string) (*CacheRecord, error) {
+func (r *RegistryRemoteCache) Get(ctx context.Context, key string) (*CacheRecord, error) {
+	// Ensure context has timeout
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+		timeoutStr := os.Getenv("REMOTE_CACHE_TIMEOUT")
+		if timeoutStr == "" {
+			timeoutStr = "5m"
+		}
+		timeout, err := time.ParseDuration(timeoutStr)
+		if err != nil {
+			logrus.Warnf("Invalid REMOTE_CACHE_TIMEOUT value '%s', using default 5m", timeoutStr)
+			timeout = DefaultRemoteCacheTimeout
+		}
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
+
 	img, err := r.layerCache.RetrieveLayer(key)
 	if err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return nil, fmt.Errorf("timeout retrieving cache layer %s: %w", key, err)
+		}
 		return nil, err
 	}
 
@@ -258,9 +283,31 @@ func (r *RegistryRemoteCache) Get(_ context.Context, key string) (*CacheRecord, 
 }
 
 // Probe checks if a key exists in remote cache
-func (r *RegistryRemoteCache) Probe(_ context.Context, key string) (bool, error) {
+func (r *RegistryRemoteCache) Probe(ctx context.Context, key string) (bool, error) {
+	// Ensure context has timeout
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+		timeoutStr := os.Getenv("REMOTE_CACHE_TIMEOUT")
+		if timeoutStr == "" {
+			timeoutStr = "5m"
+		}
+		timeout, err := time.ParseDuration(timeoutStr)
+		if err != nil {
+			logrus.Warnf("Invalid REMOTE_CACHE_TIMEOUT value '%s', using default 5m", timeoutStr)
+			timeout = DefaultRemoteCacheTimeout
+		}
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
+
 	_, err := r.layerCache.RetrieveLayer(key)
 	if err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return false, fmt.Errorf("timeout probing cache layer %s: %w", key, err)
+		}
 		return false, nil
 	}
 	return true, nil
@@ -270,6 +317,7 @@ func (r *RegistryRemoteCache) Probe(_ context.Context, key string) (bool, error)
 // Note: This is typically handled by the push mechanism
 func (r *RegistryRemoteCache) Set(_ context.Context, key string, _ *CacheRecord) error {
 	// Remote cache writes are handled by push operations
+	// Context is accepted for API consistency but not used for writes
 	logrus.Debugf("Remote cache set called for key: %s (handled by push)", key)
 	return nil
 }
@@ -330,8 +378,19 @@ func (c *FastSlowCache) ProbeCache(key string) (*CacheRecord, error) {
 		return record, nil
 	}
 
-	// 3. Check remote cache (use background context)
-	ctx := context.Background()
+	// 3. Check remote cache (use context with timeout)
+	// Set timeout for remote cache operations (default 5 minutes)
+	timeoutStr := os.Getenv("REMOTE_CACHE_TIMEOUT")
+	if timeoutStr == "" {
+		timeoutStr = "5m"
+	}
+	timeout, err := time.ParseDuration(timeoutStr)
+	if err != nil {
+		logrus.Warnf("Invalid REMOTE_CACHE_TIMEOUT value '%s', using default 5m", timeoutStr)
+		timeout = DefaultRemoteCacheTimeout
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
 	record, err = c.remoteCache.Get(ctx, key)
 	if err == nil && record != nil {
 		c.mu.Lock()

@@ -272,6 +272,9 @@ docker run -v $(pwd):/workspace \
       - [**📊 Monitoring \& Profiling**](#-monitoring--profiling)
       - [**🔒 Security \& Compliance**](#-security--compliance)
   - [🚨 Known Issues](#-known-issues)
+  - [🔧 Recent Improvements](#-recent-improvements)
+    - [Timeout and Reliability Enhancements](#timeout-and-reliability-enhancements)
+    - [Enhanced Logging](#enhanced-logging)
   - [🎥 Demo](#-demo)
   - [📚 Tutorial](#-tutorial)
   - [🛠️ Using kaniko](#️-using-kaniko)
@@ -393,6 +396,8 @@ docker run -v $(pwd):/workspace \
     - [Environment Variables](#environment-variables)
       - [Build Configuration](#build-configuration)
       - [Network Configuration](#network-configuration)
+      - [Timeout Configuration](#timeout-configuration)
+      - [Resource Limits Configuration](#resource-limits-configuration)
       - [Registry Configuration](#registry-configuration)
       - [Credential Environment Variables](#credential-environment-variables)
       - [Flag `--image-fs-extract-retry`](#flag---image-fs-extract-retry)
@@ -601,6 +606,25 @@ Kaniko's modern implementation includes several advanced subsystems:
   - This includes copying the kaniko executables from the official image into another image (e.g. a Jenkins CI agent).
   - In particular, it cannot use chroot or bind-mount because its container must not require privilege, so it unpacks directly into its own container root and may overwrite anything already there.
 - kaniko does not support the v1 Registry API ([Registry v1 API Deprecation](https://www.docker.com/blog/registry-v1-api-deprecation/))
+
+## 🔧 Recent Improvements
+
+### Timeout and Reliability Enhancements
+
+Kaniko now includes comprehensive timeout mechanisms to prevent hangs and improve reliability:
+
+- **File System Operations**: Timeouts for file resolution and directory scanning operations to prevent hangs on large projects
+- **Network Operations**: Timeouts for image retrieval, registry pull/push operations, and remote cache operations
+- **Resource Limits**: Configurable limits for file count processing to prevent resource exhaustion
+- **Memory Monitoring**: Automatic memory usage checks during directory scanning with warnings when thresholds are exceeded
+
+These improvements ensure that kaniko builds complete reliably even with very large build contexts or slow network connections. Configure timeouts using environment variables (see [Timeout Configuration](#timeout-configuration)).
+
+### Enhanced Logging
+
+- **Color-coded Log Output**: Visual distinction between log levels (INFO - blue, WARN - yellow, ERROR - red)
+- **Intelligent Color Detection**: Automatically detects terminal capabilities and respects `NO_COLOR` environment variable
+- **Performance Logging**: Enhanced timing information for file operations and build stages
 
 ## 🎥 Demo
 
@@ -1720,10 +1744,32 @@ Kaniko supports several environment variables for configuration:
 
 - `FF_KANIKO_DISABLE_HTTP2` - Disable HTTP/2.0 for compatibility with registries that don't support it. Set to `true`, `1`, `yes`, or `on` to disable HTTP/2 and force HTTP/1.1. This is useful when working with registries that have issues with HTTP/2 protocol.
 
+#### Timeout Configuration
+
+The following environment variables control timeouts for various operations to prevent hangs and improve reliability:
+
+- `RESOLVE_SOURCES_TIMEOUT` - Timeout for resolving source files during build context initialization. Defaults to `5m`. Format: `5m`, `10m`, `30m`.
+- `DIRECTORY_SCAN_TIMEOUT` - Timeout for directory scanning operations. Defaults to `10m`. Format: `10m`, `15m`, `30m`.
+- `IMAGE_RETRIEVE_TIMEOUT` - Timeout for retrieving images from remote registries. Defaults to `15m`. Format: `15m`, `30m`, `1h`.
+- `REMOTE_CACHE_TIMEOUT` - Timeout for remote cache operations. Defaults to `5m`. Format: `5m`, `10m`, `15m`.
+
 **Example**:
 ```bash
 export FF_KANIKO_OCI_STAGES=true
 export FF_KANIKO_DISABLE_HTTP2=true
+export RESOLVE_SOURCES_TIMEOUT=10m
+export DIRECTORY_SCAN_TIMEOUT=15m
+export IMAGE_RETRIEVE_TIMEOUT=30m
+export REMOTE_CACHE_TIMEOUT=10m
+```
+
+#### Resource Limits Configuration
+
+- `MAX_FILES_PROCESSED` - Maximum number of files to process during directory scanning. Defaults to `100000` (100k files). This helps prevent resource exhaustion on very large projects.
+
+**Example**:
+```bash
+export MAX_FILES_PROCESSED=200000
 ```
 
 #### Registry Configuration
@@ -2248,7 +2294,9 @@ Kaniko provides comprehensive logging and monitoring capabilities:
 - **Structured JSON Logging** - Machine-readable logs for analysis and monitoring
 - **Custom Kaniko Format** - Clean, readable logs with progress indicators
 - **Compact Mode** - Minimal logging for CI/CD environments
-- **Color-coded Output** - Visual distinction between log levels
+- **Color-coded Output** - Visual distinction between log levels (INFO - blue, WARN - yellow, ERROR - red)
+  - Automatically detects terminal capabilities and disables colors when `NO_COLOR` environment variable is set
+  - Intelligent color detection based on `TERM` variable for better CI/CD compatibility
 - **Timestamp Control** - Configurable timestamp formatting
 - **Context-aware Logging** - Rich context information for debugging
 - **Log Grouping** - Related log messages grouped for better readability
