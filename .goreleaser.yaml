@@ -111,7 +111,9 @@ release:
     
     Verify image signatures using the public key from the repository:
     ```bash
-    cosign verify --key cosign.pub ghcr.io/<repository>/executor:{{ .Version }}
+    export USERNAME=<your-github-username>
+    cosign login ghcr.io -u $USERNAME && \
+    cosign verify --key cosign.pub ghcr.io/gosayram/kaniko/executor:{{ .Version }}
     ```
     
     The `cosign.pub` file is available in the repository root.
@@ -135,6 +137,8 @@ release:
     
     **Docker images are signed with Cosign.** Verify signatures using:
     ```bash
+    export USERNAME=<your-github-username>
+    cosign login ghcr.io -u $USERNAME && \
     cosign verify --key cosign.pub ghcr.io/gosayram/kaniko/executor:{{ .Version }}
     ```
 
