@@ -17,7 +17,10 @@ limitations under the License.
 package dockerfile
 
 import (
+	"fmt"
 	"strings"
+
+	"github.com/containerd/platforms"
 
 	d "github.com/docker/docker/builder/dockerfile"
 	"github.com/moby/buildkit/frontend/dockerfile/instructions"
@@ -166,4 +169,54 @@ func (b *BuildArgs) GetAllowed(key string) (string, bool) {
 	}
 
 	return "", false
+}
+
+// InitPredefinedArgs initializes predefined build args such as TARGETOS, TARGETARCH, BUILDPLATFORM, TARGETPLATFORM
+func (b *BuildArgs) InitPredefinedArgs(customPlatform string, lastStage string) error {
+	buildSpec := platforms.Normalize(platforms.DefaultSpec())
+	build := platforms.Format(buildSpec)
+
+	var target = build
+	var targetSpec = buildSpec
+	var err error
+	if customPlatform != "" {
+		target = customPlatform
+		targetSpec, err = platforms.Parse(customPlatform)
+		if err != nil {
+			return fmt.Errorf("failed to parse target platform %q: %v", customPlatform, err)
+		}
+	}
+
+	var targetStage = "default"
+	if lastStage != "" {
+		targetStage = lastStage
+	}
+
+	// Add predefined args to allowedArgs
+	predefined := map[string]*string{
+		"BUILDPLATFORM":   &build,
+		"BUILDOS":         &buildSpec.OS,
+		"BUILDOSVERSION":  &buildSpec.OSVersion,
+		"BUILDARCH":       &buildSpec.Architecture,
+		"BUILDVARIANT":    &buildSpec.Variant,
+		"TARGETPLATFORM":  &target,
+		"TARGETOS":        &targetSpec.OS,
+		"TARGETOSVERSION": &targetSpec.OSVersion,
+		"TARGETARCH":      &targetSpec.Architecture,
+		"TARGETVARIANT":   &targetSpec.Variant,
+		"TARGETSTAGE":     &targetStage,
+	}
+
+	// Merge predefined args into allowedArgs
+	for k, v := range predefined {
+		// Create a copy of the string value to avoid sharing pointers
+		if v != nil {
+			val := *v
+			b.allowedArgs[k] = &val
+			// Also add to the underlying BuildArgs
+			b.BuildArgs.AddArg(k, &val)
+		}
+	}
+
+	return nil
 }

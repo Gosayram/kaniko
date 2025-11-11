@@ -153,7 +153,7 @@ func CheckPushPermissions(opts *config.KanikoOptions) error {
 		}
 		tr := newRetry(rt)
 		logrus.Infof("Checking push permissions for registry %s", registryName)
-		if pushErr := checkRemotePushPermission(destRef, creds.GetKeychain(), tr); pushErr != nil {
+		if pushErr := checkRemotePushPermission(destRef, creds.GetKeychain(&opts.RegistryOptions), tr); pushErr != nil {
 			logrus.Errorf("Push permission check failed for registry %s: %v", registryName, pushErr)
 			return errors.Wrapf(pushErr, "checking push permission for %q", destRef)
 		}
@@ -344,7 +344,7 @@ func pushToDestination(image v1.Image, opts *config.KanikoOptions, destRef name.
 		return err
 	}
 
-	pushAuth, err := resolvePushAuth(destRef, registryName)
+	pushAuth, err := resolvePushAuth(destRef, registryName, opts)
 	if err != nil {
 		return err
 	}
@@ -374,9 +374,9 @@ func configureInsecureRegistry(opts *config.KanikoOptions, registryName string, 
 	return nil
 }
 
-func resolvePushAuth(destRef name.Tag, registryName string) (authn.Authenticator, error) {
+func resolvePushAuth(destRef name.Tag, registryName string, opts *config.KanikoOptions) (authn.Authenticator, error) {
 	logrus.Infof("Attempting to resolve authentication for registry %s", registryName)
-	pushAuth, err := creds.GetKeychain().Resolve(destRef.Context().Registry)
+	pushAuth, err := creds.GetKeychain(&opts.RegistryOptions).Resolve(destRef.Context().Registry)
 	if err != nil {
 		logrus.Errorf("Failed to resolve authentication for registry %s: %v", registryName, err)
 		return nil, errors.Wrap(err, "resolving pushAuth")

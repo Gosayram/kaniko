@@ -18,6 +18,7 @@ package commands
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -51,20 +52,11 @@ type CopyCommand struct {
 
 // ExecuteCommand executes the COPY command by copying files from source to destination.
 func (c *CopyCommand) ExecuteCommand(config *v1.Config, buildArgs *dockerfile.BuildArgs) error {
-	// Reduced verbose logging for performance - removed debug logs that create noise in pipelines
-
-	// Rootless: automatic permission validation before execution
-	rootlessManager := rootless.GetManager()
-	if rootlessManager.IsRootlessMode() {
-		if err := rootlessManager.ValidateCommandPermissions("COPY"); err != nil {
-			return err
-		}
+	if err := c.validateRootlessPermissions(); err != nil {
+		return err
 	}
 
-	// Use common helper for setup
 	helper := NewCommonCommandHelper()
-
-	// Setup file context
 	c.fileContext = helper.SetupFileContext(c.cmd, c.fileContext)
 
 	// Reset snapshotFiles at start of execution
@@ -72,57 +64,111 @@ func (c *CopyCommand) ExecuteCommand(config *v1.Config, buildArgs *dockerfile.Bu
 	c.snapshotFiles = []string{}
 	c.mu.Unlock()
 
-	// Setup environment and permissions
 	replacementEnvs := buildArgs.ReplacementEnvs(config.Env)
-	uid, gid, err := helper.SetupUserGroup(c.cmd.Chown, replacementEnvs)
+	uid, gid, chmod, useDefaultChmod, err := c.setupPermissions(helper, replacementEnvs)
 	if err != nil {
 		return err
 	}
 
-	// Resolve sources and destination using common helper
 	srcs, dest, err := helper.ResolveSourcesAndDestination(c.cmd, c.fileContext, replacementEnvs)
 	if err != nil {
 		return err
 	}
 
-	// Get file permissions using common helper
-	chmod, useDefaultChmod, err := helper.SetupFilePermissions(c.cmd.Chmod, replacementEnvs)
-	if err != nil {
+	if err := c.copySources(srcs, dest, config, uid, gid, chmod, useDefaultChmod); err != nil {
 		return err
 	}
 
-	// Removed verbose debug logging for performance
-
-	// Copy each source
-	err = c.copySources(srcs, dest, config, uid, gid, chmod, useDefaultChmod)
-	if err != nil {
+	if err := c.handleHeredocSources(dest, config, uid, gid, chmod); err != nil {
 		return err
 	}
 
+	c.logExecutionResults()
+	return nil
+}
+
+// validateRootlessPermissions validates rootless permissions if needed
+func (c *CopyCommand) validateRootlessPermissions() error {
+	rootlessManager := rootless.GetManager()
+	if !rootlessManager.IsRootlessMode() {
+		return nil
+	}
+	return rootlessManager.ValidateCommandPermissions("COPY")
+}
+
+// setupPermissions sets up user/group and file permissions
+func (c *CopyCommand) setupPermissions(
+	helper *CommonCommandHelper,
+	replacementEnvs []string,
+) (uid, gid int64, chmod os.FileMode, useDefaultChmod bool, err error) {
+	uid, gid, err = helper.SetupUserGroup(c.cmd.Chown, replacementEnvs)
+	if err != nil {
+		return 0, 0, 0, false, err
+	}
+
+	chmod, useDefaultChmod, err = helper.SetupFilePermissions(c.cmd.Chmod, replacementEnvs)
+	if err != nil {
+		return 0, 0, 0, false, err
+	}
+
+	return uid, gid, chmod, useDefaultChmod, nil
+}
+
+// handleHeredocSources handles heredoc syntax in COPY (<<EOF)
+func (c *CopyCommand) handleHeredocSources(
+	dest string,
+	config *v1.Config,
+	uid, gid int64,
+	chmod os.FileMode,
+) error {
+	for _, src := range c.cmd.SourceContents {
+		fullPath := filepath.Join(c.fileContext.Root, src.Path)
+		cwd := config.WorkingDir
+		if cwd == "" {
+			cwd = kConfig.RootDir
+		}
+		destPath, err := util.DestinationFilepath(fullPath, dest, cwd)
+		if err != nil {
+			return errors.Wrap(err, "find destination path for heredoc")
+		}
+
+		srcFile := strings.NewReader(src.Data)
+		// Check for integer overflow before conversion
+		if uid < 0 || uid > math.MaxUint32 || gid < 0 || gid > math.MaxUint32 {
+			return errors.Errorf("uid or gid out of uint32 range: uid=%d, gid=%d", uid, gid)
+		}
+		// nolint:gosec // G115: uid and gid are validated above to be within uint32 range
+		if err = util.CreateFile(destPath, srcFile, chmod, uint32(uid), uint32(gid)); err != nil {
+			return errors.Wrap(err, "creating file from heredoc")
+		}
+		c.mu.Lock()
+		c.snapshotFiles = append(c.snapshotFiles, destPath)
+		c.mu.Unlock()
+	}
+	return nil
+}
+
+// logExecutionResults logs the results of COPY command execution
+func (c *CopyCommand) logExecutionResults() {
 	c.mu.Lock()
 	finalFiles := len(c.snapshotFiles)
 	c.mu.Unlock()
-	// Reduced logging - only log if significant number of files or in debug mode
+
 	if finalFiles > 0 {
 		logrus.Debugf("COPY: Command completed. Total files added to snapshot: %d", finalFiles)
+		return
 	}
 
 	// If no files were copied, log warning (like original kaniko does)
-	// Original kaniko behavior: empty tarPath results in no layer, but build continues
-	// This matches snapshot.go behavior where empty files list returns "", nil
-	if finalFiles == 0 {
-		if c.cmd.From != "" {
-			logrus.Warnf("COPY --from=%s: No files were added to snapshot. "+
-				"This means NO LAYER will be created for this command.", c.cmd.From)
-			logrus.Warnf("   This may indicate that files were not created in stage %s, "+
-				"but build will continue (like original kaniko behavior).", c.cmd.From)
-		} else {
-			logrus.Warnf("COPY: WARNING: No files were added to snapshot for command %s! "+
-				"This means NO LAYER will be created!", c.cmd.String())
-		}
+	if c.cmd.From != "" {
+		logrus.Warnf("COPY --from=%s: No files were added to snapshot. "+
+			"This means NO LAYER will be created for this command.", c.cmd.From)
+		logrus.Warnf("   This may indicate that files were not created in stage %s, "+
+			"but build will continue (like original kaniko behavior).", c.cmd.From)
+	} else {
+		logrus.Warnf("COPY: WARNING: No files were added to snapshot for command %s! "+
+			"This means NO LAYER will be created!", c.cmd.String())
 	}
-
-	return nil
 }
 
 // Note: setupUserGroup and resolveSourcesAndDest functions have been moved to common.go

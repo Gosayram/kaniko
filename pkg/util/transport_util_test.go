@@ -21,6 +21,7 @@ import (
 	"crypto/x509"
 	"fmt"
 	"net/http"
+	"os"
 	"testing"
 
 	"github.com/Gosayram/kaniko/pkg/config"
@@ -171,5 +172,111 @@ func Test_makeTransport(t *testing.T) {
 			tt.check(tlsConfig, certPool, err)
 		})
 
+	}
+}
+
+func TestMakeTransport_DisableHTTP2(t *testing.T) {
+	registryName := "test.registry.io"
+
+	// Save and restore environment
+	oldValue := os.Getenv("FF_KANIKO_DISABLE_HTTP2")
+	defer func() {
+		if oldValue == "" {
+			os.Unsetenv("FF_KANIKO_DISABLE_HTTP2")
+		} else {
+			os.Setenv("FF_KANIKO_DISABLE_HTTP2", oldValue)
+		}
+	}()
+
+	tests := []struct {
+		name           string
+		envValue       string
+		expectDisabled bool
+	}{
+		{
+			name:           "HTTP2 disabled via env",
+			envValue:       "true",
+			expectDisabled: true,
+		},
+		{
+			name:           "HTTP2 disabled via env (1)",
+			envValue:       "1",
+			expectDisabled: true,
+		},
+		{
+			name:           "HTTP2 disabled via env (yes)",
+			envValue:       "yes",
+			expectDisabled: true,
+		},
+		{
+			name:           "HTTP2 disabled via env (on)",
+			envValue:       "on",
+			expectDisabled: true,
+		},
+		{
+			name:           "HTTP2 enabled (false)",
+			envValue:       "false",
+			expectDisabled: false,
+		},
+		{
+			name:           "HTTP2 enabled (empty)",
+			envValue:       "",
+			expectDisabled: false,
+		},
+	}
+
+	savedSystemCertLoader := systemCertLoader
+	savedSystemKeyPairLoader := systemKeyPairLoader
+	defer func() {
+		systemCertLoader = savedSystemCertLoader
+		systemKeyPairLoader = savedSystemKeyPairLoader
+	}()
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Set environment variable
+			if tt.envValue != "" {
+				os.Setenv("FF_KANIKO_DISABLE_HTTP2", tt.envValue)
+			} else {
+				os.Unsetenv("FF_KANIKO_DISABLE_HTTP2")
+			}
+
+			systemCertLoader = &mockedCertPool{}
+			systemKeyPairLoader = &mockedKeyPairLoader{}
+
+			opts := &config.RegistryOptions{}
+			tr, err := MakeTransport(opts, registryName)
+			if err != nil {
+				t.Fatalf("MakeTransport failed: %v", err)
+			}
+
+			httpTransport := tr.(*http.Transport)
+
+			if tt.expectDisabled {
+				if httpTransport.ForceAttemptHTTP2 {
+					t.Error("ForceAttemptHTTP2 should be false when FF_KANIKO_DISABLE_HTTP2 is set")
+				}
+				if httpTransport.TLSClientConfig == nil {
+					t.Error("TLSClientConfig should be initialized when disabling HTTP/2")
+				} else {
+					nextProtos := httpTransport.TLSClientConfig.NextProtos
+					foundHTTP11 := false
+					for _, proto := range nextProtos {
+						if proto == "http/1.1" {
+							foundHTTP11 = true
+							break
+						}
+					}
+					if !foundHTTP11 {
+						t.Error("NextProtos should include 'http/1.1' when disabling HTTP/2")
+					}
+				}
+			} else {
+				// When not disabled, ForceAttemptHTTP2 should be true (default)
+				if !httpTransport.ForceAttemptHTTP2 {
+					t.Error("ForceAttemptHTTP2 should be true (default) when FF_KANIKO_DISABLE_HTTP2 is not set")
+				}
+			}
+		})
 	}
 }

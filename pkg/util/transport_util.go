@@ -128,5 +128,16 @@ func MakeTransport(opts *config.RegistryOptions, registryName string) (http.Roun
 		tr.(*http.Transport).TLSClientConfig.Certificates = []tls.Certificate{cert}
 	}
 
+	// FF_KANIKO_DISABLE_HTTP2: disable HTTP/2.0 for compatibility with registries that don't support it
+	if config.EnvBool("FF_KANIKO_DISABLE_HTTP2") {
+		tr.(*http.Transport).ForceAttemptHTTP2 = false
+		if tr.(*http.Transport).TLSClientConfig == nil {
+			tr.(*http.Transport).TLSClientConfig = &tls.Config{
+				MinVersion: tls.VersionTLS12, // Set minimum TLS version to 1.2 for security
+			}
+		}
+		tr.(*http.Transport).TLSClientConfig.NextProtos = []string{"http/1.1"}
+	}
+
 	return tr, nil
 }

@@ -429,6 +429,8 @@ func writeToTar(t util.Tar, files, whiteouts []string) error {
 	defer timing.DefaultRun.Stop(timer)
 
 	addedPaths := make(map[string]bool)
+	// Skip snapshotting rootdir - mark it as already added
+	addedPaths[config.RootDir] = true
 	fileStatsCache := make(map[string]os.FileInfo)
 
 	if err := writeWhiteoutsToTar(t, whiteouts, addedPaths); err != nil {
@@ -560,6 +562,10 @@ func getFileInfoWithCache(path string, cache map[string]os.FileInfo) (os.FileInf
 
 func addParentDirectories(t util.Tar, addedPaths map[string]bool, path string) error {
 	for _, parentPath := range util.ParentDirectories(path) {
+		// Skip snapshotting rootdir - it's already marked as added in writeToTar
+		if parentPath == config.RootDir {
+			continue
+		}
 		if _, pathAdded := addedPaths[parentPath]; pathAdded {
 			continue
 		}
