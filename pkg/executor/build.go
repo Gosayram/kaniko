@@ -252,14 +252,18 @@ func configureIncrementalSnapshots(snapshotter *snapshot.Snapshotter, opts *conf
 	// This ensures periodic full scans for reliability
 	if !opts.IntegrityCheck {
 		opts.IntegrityCheck = true
-		logrus.Debugf("Integrity check enabled by default for incremental snapshots")
+		if logrus.IsLevelEnabled(logrus.DebugLevel) {
+			logging.AsyncDebugf("Integrity check enabled by default for incremental snapshots")
+		}
 	}
 
 	// Enable full scan backup by default if not explicitly disabled
 	// This provides safety net for incremental snapshots
 	if !opts.FullScanBackup {
 		opts.FullScanBackup = true
-		logrus.Debugf("Full scan backup enabled by default for incremental snapshots")
+		if logrus.IsLevelEnabled(logrus.DebugLevel) {
+			logging.AsyncDebugf("Full scan backup enabled by default for incremental snapshots")
+		}
 	}
 
 	snapshotter.ConfigureIncrementalSnapshots(
@@ -463,7 +467,9 @@ func initConfig(img partial.WithConfigFile, opts *config.KanikoOptions) (*v1.Con
 			// This ensures compatibility with existing Dockerfiles that expect root
 			// Users can specify --default-user for non-root builds if needed
 			const defaultUser = "root"
-			logrus.Debugf("No user specified. Using default user: %s (Docker-compatible)", defaultUser)
+			if logrus.IsLevelEnabled(logrus.DebugLevel) {
+				logging.AsyncDebugf("No user specified. Using default user: %s (Docker-compatible)", defaultUser)
+			}
 			imageConfig.Config.User = defaultUser
 		}
 	}
@@ -568,21 +574,27 @@ func (s *stageBuilder) calculatePrefetchKeys(
 		// Get files for this command
 		files, err := command.FilesUsedFromContext(cfg, args)
 		if err != nil {
-			logrus.Debugf("Failed to get files for prefetch command %d: %v", i, err)
+			if logrus.IsLevelEnabled(logrus.DebugLevel) {
+				logging.AsyncDebugf("Failed to get files for prefetch command %d: %v", i, err)
+			}
 			continue
 		}
 
 		// Populate composite key for this command
 		compositeKey, err = s.populateCompositeKey(command, files, compositeKey, args, cfg.Env)
 		if err != nil {
-			logrus.Debugf("Failed to populate composite key for prefetch command %d: %v", i, err)
+			if logrus.IsLevelEnabled(logrus.DebugLevel) {
+				logging.AsyncDebugf("Failed to populate composite key for prefetch command %d: %v", i, err)
+			}
 			continue
 		}
 
 		// Calculate hash
 		ck, err := compositeKey.Hash()
 		if err != nil {
-			logrus.Debugf("Failed to hash composite key for prefetch command %d: %v", i, err)
+			if logrus.IsLevelEnabled(logrus.DebugLevel) {
+				logging.AsyncDebugf("Failed to hash composite key for prefetch command %d: %v", i, err)
+			}
 			continue
 		}
 
@@ -603,7 +615,10 @@ func (s *stageBuilder) populateCompositeKey(
 	replacementEnvs := args.ReplacementEnvs(env)
 	// The sort order of `replacementEnvs` is basically undefined, sort it
 	// so we can ensure a stable cache key.
-	sort.Strings(replacementEnvs)
+	// Optimized: check if already sorted before sorting (reduces CPU usage)
+	if !sort.StringsAreSorted(replacementEnvs) {
+		sort.Strings(replacementEnvs)
+	}
 	// Use the special argument "|#" at the start of the args array. This will
 	// avoid conflicts with any RUN command since commands can not
 	// start with | (vertical bar). The "#" (number of build envs) is there to
@@ -666,7 +681,9 @@ func (s *stageBuilder) computeCacheKeys(
 			return nil, errors.Wrapf(err, "failed to populate composite cache key for command %s", commandStr)
 		}
 
-		logrus.Debugf("Optimize: composite key for command %v %v", commandStr, currentCompositeKey)
+		if logrus.IsLevelEnabled(logrus.DebugLevel) {
+			logging.AsyncDebugf("Optimize: composite key for command %v %v", commandStr, currentCompositeKey)
+		}
 		ck, err := currentCompositeKey.Hash()
 		if err != nil {
 			return nil, errors.Wrapf(err, "failed to hash composite key for command %s", commandStr)
@@ -1214,6 +1231,12 @@ func (s *stageBuilder) getLayerOptionFromOpts() []tarball.LayerOption {
 
 	if s.opts.CompressedCaching {
 		layerOpts = append(layerOpts, tarball.WithCompressedCaching)
+	}
+
+	// Optimized: support DisableCompression option (set CompressionLevel=0 to disable)
+	if s.opts.DisableCompression {
+		// Don't add compression level option, layer will be uncompressed
+		return layerOpts
 	}
 
 	if s.opts.CompressionLevel > 0 {
@@ -2860,9 +2883,10 @@ func optimizePerformance(opts *config.KanikoOptions) {
 	}
 
 	// 2. Set optimal compression level (check for -1 which is default flag value, or 0)
+	// Conservative default: 1-2 for speed and lower CPU usage (especially with multiple parallel builds)
 	if opts.CompressionLevel <= 0 {
-		opts.CompressionLevel = 3 // Good balance between speed and compression
-		logrus.Info("Set compression level to 3 for optimal performance")
+		opts.CompressionLevel = 2 // Conservative default for lower CPU usage
+		logrus.Info("Set compression level to 2 for optimal performance and lower CPU usage")
 	}
 
 	// 3. Enable compressed caching for better layer handling
@@ -2942,17 +2966,23 @@ func optimizeNetwork(opts *config.KanikoOptions) {
 }
 
 // initializeNetworkManager initializes the advanced network manager
-// Per performance plan: uses environment variables for configuration
-func initializeNetworkManager(_ *config.KanikoOptions) *network.Manager {
+// Per performance plan: uses environment variables and options for configuration
+func initializeNetworkManager(opts *config.KanikoOptions) *network.Manager {
 	logrus.Info("Initializing advanced network manager")
 
-	// Read network settings from environment variables (per performance plan)
+	// Use MaxNetworkConcurrency from options if set, otherwise use environment or default
 	maxConcurrency := MaxConcurrency
-	if val := os.Getenv("KANIKO_MAX_CONCURRENCY"); val != "" {
+	if opts != nil && opts.MaxNetworkConcurrency > 0 {
+		maxConcurrency = opts.MaxNetworkConcurrency
+		logrus.Debugf("Using MaxNetworkConcurrency from options: %d", maxConcurrency)
+	} else if val := os.Getenv("KANIKO_MAX_CONCURRENCY"); val != "" {
 		if intVal, err := strconv.Atoi(val); err == nil && intVal > 0 {
 			maxConcurrency = intVal
 			logrus.Infof("Using KANIKO_MAX_CONCURRENCY=%d", intVal)
 		}
+	} else {
+		// Use conservative default from constants (already set to 5)
+		maxConcurrency = MaxConcurrency
 	}
 
 	maxIdleConns := MaxIdleConns
@@ -3068,8 +3098,8 @@ func optimizeFilesystem(opts *config.KanikoOptions) {
 	}
 
 	if opts.CompressionLevel <= 0 {
-		opts.CompressionLevel = 3 // Good balance between speed and compression
-		logrus.Info("Set compression level to 3 for optimal filesystem performance")
+		opts.CompressionLevel = 2 // Conservative default for lower CPU usage
+		logrus.Info("Set compression level to 2 for optimal filesystem performance and lower CPU usage")
 	}
 
 	logrus.Info("Filesystem optimizations applied successfully")

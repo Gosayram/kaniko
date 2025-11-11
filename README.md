@@ -405,6 +405,12 @@ docker run -v $(pwd):/workspace \
       - [Flag `--preload-timeout`](#flag---preload-timeout)
       - [Flag `--enable-smart-cache`](#flag---enable-smart-cache)
       - [Flag `--max-concurrent-cache-checks`](#flag---max-concurrent-cache-checks)
+      - [Flag `--max-workers`](#flag---max-workers)
+      - [Flag `--max-parallel-hashing`](#flag---max-parallel-hashing)
+      - [Flag `--max-parallel-copy`](#flag---max-parallel-copy)
+      - [Flag `--disable-compression`](#flag---disable-compression)
+      - [Flag `--max-file-hash-size`](#flag---max-file-hash-size)
+      - [Flag `--max-network-concurrency`](#flag---max-network-concurrency)
       - [Flag `--cache-max-conns`](#flag---cache-max-conns)
       - [Flag `--cache-max-conns-per-host`](#flag---cache-max-conns-per-host)
       - [Flag `--cache-max-concurrent-requests`](#flag---cache-max-concurrent-requests)
@@ -444,6 +450,9 @@ docker run -v $(pwd):/workspace \
       - [**How Parallel Execution Works**](#how-parallel-execution-works)
       - [**Parallel Execution Configuration**](#parallel-execution-configuration)
       - [**Best Practices for Parallel Execution**](#best-practices-for-parallel-execution)
+      - [**CPU Optimization \& Resource Management**](#cpu-optimization--resource-management)
+      - [**CPU Configuration**](#cpu-configuration)
+      - [**CPU Optimization Best Practices**](#cpu-optimization-best-practices)
       - [**Build Optimization Engine**](#build-optimization-engine)
       - [**Optimization Features**](#optimization-features)
       - [**Advanced Snapshotting**](#advanced-snapshotting)
@@ -1711,9 +1720,45 @@ Set this flag to `true` to enable smart cache with LRU eviction and automatic pr
 
 #### Flag `--max-concurrent-cache-checks`
 
-Set this flag to specify the maximum number of concurrent cache checks. This controls parallel cache lookups for better performance. Defaults to `5` for optimal balance between speed and resource usage.
+Set this flag to specify the maximum number of concurrent cache checks. This controls parallel cache lookups for better performance. Defaults to `3` for optimal balance between speed and CPU resource usage, especially with multiple parallel builds.
 
 **Example**: `--max-concurrent-cache-checks=10`
+
+#### Flag `--max-workers`
+
+Set this flag to specify the maximum number of workers for parallel operations. When set to `0` (default), automatically uses `min(6, NumCPU)` with a maximum of 8 workers. This conservative default helps avoid excessive CPU usage when running multiple parallel builds.
+
+**Example**: `--max-workers=4`
+
+#### Flag `--max-parallel-hashing`
+
+Set this flag to specify the maximum number of parallel file hashing operations. When set to `0` (default), automatically uses `4` workers. This conservative default helps reduce CPU usage for CPU-intensive hashing operations.
+
+**Example**: `--max-parallel-hashing=8`
+
+#### Flag `--max-parallel-copy`
+
+Set this flag to specify the maximum number of parallel file copy operations. When set to `0` (default), automatically uses `2` workers. This conservative default is optimized for I/O-bound operations and helps prevent excessive CPU usage.
+
+**Example**: `--max-parallel-copy=4`
+
+#### Flag `--disable-compression`
+
+Set this flag to `true` to disable layer compression for maximum build speed. This significantly reduces CPU usage but increases layer size. Useful for development builds or when CPU resources are limited. Defaults to `false`.
+
+**Example**: `--disable-compression=true`
+
+#### Flag `--max-file-hash-size`
+
+Set this flag to specify the maximum file size in bytes for full hashing. Files larger than this limit use partial hashing (first 64KB + last 64KB + file size) to reduce CPU usage while maintaining good change detection. Defaults to `10485760` (10MB).
+
+**Example**: `--max-file-hash-size=20971520` (20MB)
+
+#### Flag `--max-network-concurrency`
+
+Set this flag to specify the maximum number of parallel network requests. When set to `0` (default), automatically uses `5` workers. This conservative default is optimized for I/O-bound network operations and helps prevent excessive CPU usage.
+
+**Example**: `--max-network-concurrency=10`
 
 #### Flag `--cache-max-conns`
 
@@ -1825,7 +1870,7 @@ Set this flag to specify the compression algorithm for local cache files. Option
 
 #### Flag `--compression-level`
 
-Set this flag to specify the compression level. For zstd, the default is `3` which provides optimal balance between speed and size. Higher values provide better compression but are slower.
+Set this flag to specify the compression level. For zstd, the default is `2` which provides optimal balance between speed, size, and CPU usage. Higher values provide better compression but are slower and use more CPU. The conservative default helps reduce CPU usage, especially with multiple parallel builds.
 
 **Example**: `--compression-level=6`
 
@@ -1995,6 +2040,38 @@ Kaniko automatically analyzes Dockerfile commands to determine which can be exec
 - **Avoid Shared Resources** - Commands that modify the same files/directories will run sequentially
 - **Use Multi-Stage Builds** - Cross-stage dependencies are automatically handled with filesystem sync
 - **Monitor Build Logs** - Check execution groups in logs to understand parallelization
+
+#### **CPU Optimization & Resource Management**
+Kaniko includes comprehensive CPU optimization features to reduce resource consumption, especially when running multiple parallel builds:
+
+- **Conservative Defaults** - Optimized default values for parallel operations to prevent excessive CPU usage
+- **Partial File Hashing** - Large files (>10MB) use partial hashing (first+last 64KB + size) instead of full hashing to reduce CPU-intensive operations
+- **Sharded Cache** - File hash cache uses sharding to reduce lock contention and improve parallel performance
+- **Optimized Algorithms** - Heap-based sorting (O(log n)) instead of repeated sorting (O(n log n)) in dependency graph
+- **Async Logging** - Non-blocking async logging reduces CPU overhead in hot paths
+- **Buffer Pooling** - Reusable buffers for I/O operations reduce memory allocations and CPU usage
+- **Smart String Operations** - Pre-allocated strings.Builder and optimized string concatenation
+- **Conditional Sorting** - Skip sorting when data is already sorted to avoid unnecessary CPU usage
+
+#### **CPU Configuration**
+```bash
+# CPU resource limits (for optimization and multiple parallel builds)
+--max-workers=0                    # Maximum workers (0=auto: min(6, NumCPU), max: 8)
+--max-parallel-hashing=0           # Parallel hashing workers (0=auto: 4)
+--max-parallel-copy=0              # Parallel copy workers (0=auto: 2)
+--max-network-concurrency=0        # Network concurrency (0=auto: 5)
+--max-file-hash-size=10485760     # Max file size for full hashing (default: 10MB)
+--disable-compression=false        # Disable compression for maximum speed
+--compression-level=2              # Compression level (default: 2 for lower CPU usage)
+--max-concurrent-cache-checks=3   # Concurrent cache checks (default: 3)
+```
+
+#### **CPU Optimization Best Practices**
+- **Multiple Parallel Builds** - Use conservative defaults when running multiple builds simultaneously
+- **Large Files** - Files larger than 10MB automatically use partial hashing to reduce CPU usage
+- **Development Builds** - Use `--disable-compression=true` for faster builds when layer size is not critical
+- **Limited CPU Resources** - Lower `--max-workers` and `--max-parallel-hashing` values for CPU-constrained environments
+- **Network Operations** - Adjust `--max-network-concurrency` based on network bandwidth and CPU availability
 
 #### **Build Optimization Engine**
 - **Pattern Detection** - Automatic detection of common Dockerfile patterns

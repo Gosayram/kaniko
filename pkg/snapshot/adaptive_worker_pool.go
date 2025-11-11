@@ -27,11 +27,15 @@ import (
 
 // Constants for worker pool
 const (
-	ioIntensiveMultiplier = 2
+	// Conservative defaults for CPU usage optimization
+	// Changed from 2.0 to 1.0 to avoid excessive CPU usage, especially with multiple parallel builds
+	ioIntensiveMultiplier = 1.0
 	queueBufferMultiplier = 2
 	adjustmentCooldownSec = 5
 	sleepIntervalMs       = 10
 	mixedTaskMultiplier   = 1.5
+	// Maximum absolute limit for workers to prevent excessive CPU usage
+	maxWorkersAbsoluteLimit = 8
 )
 
 // AdaptiveWorkerPool provides an adaptive worker pool that adjusts size based on workload
@@ -75,12 +79,23 @@ type WorkerPoolStats struct {
 }
 
 // NewAdaptiveWorkerPool creates a new adaptive worker pool
+// Uses conservative defaults to avoid excessive CPU usage, especially with multiple parallel builds
 func NewAdaptiveWorkerPool(minWorkers, maxWorkers int) *AdaptiveWorkerPool {
 	if minWorkers <= 0 {
 		minWorkers = 1
 	}
 	if maxWorkers <= 0 {
-		maxWorkers = runtime.NumCPU() * ioIntensiveMultiplier
+		// Conservative default: min(8, NumCPU) instead of NumCPU * 2
+		// This prevents excessive CPU usage when multiple builds run in parallel
+		numCPU := runtime.NumCPU()
+		maxWorkers = numCPU
+		if maxWorkers > maxWorkersAbsoluteLimit {
+			maxWorkers = maxWorkersAbsoluteLimit
+		}
+	}
+	// Apply absolute limit to prevent excessive CPU usage
+	if maxWorkers > maxWorkersAbsoluteLimit {
+		maxWorkers = maxWorkersAbsoluteLimit
 	}
 	if minWorkers > maxWorkers {
 		minWorkers = maxWorkers
@@ -301,19 +316,27 @@ func (awp *AdaptiveWorkerPool) WaitForCompletion() {
 }
 
 // GetOptimalWorkerCount calculates the optimal number of workers based on system resources
+// Uses conservative limits to avoid excessive CPU usage
 func GetOptimalWorkerCount(taskType string) int {
 	numCPU := runtime.NumCPU()
+	var optimal int
 
 	switch taskType {
 	case "cpu_intensive":
-		return numCPU
+		optimal = numCPU
 	case "io_intensive":
-		return numCPU * ioIntensiveMultiplier
+		optimal = int(float64(numCPU) * ioIntensiveMultiplier)
 	case "mixed":
-		return int(float64(numCPU) * mixedTaskMultiplier)
+		optimal = int(float64(numCPU) * mixedTaskMultiplier)
 	default:
-		return numCPU
+		optimal = numCPU
 	}
+
+	// Apply absolute limit to prevent excessive CPU usage
+	if optimal > maxWorkersAbsoluteLimit {
+		optimal = maxWorkersAbsoluteLimit
+	}
+	return optimal
 }
 
 // Errors

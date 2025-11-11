@@ -36,6 +36,8 @@ const (
 	mbToBytes           = 1024 * 1024
 	percentageBase      = 100
 	directoryPerms      = 0o750
+	// Conservative max workers limit for I/O-bound operations
+	maxWorkersLimit = 4
 )
 
 // AdvancedCopy provides high-performance file copying with sendfile() and parallel processing
@@ -81,9 +83,16 @@ type CopyTask struct {
 }
 
 // NewAdvancedCopy creates a new advanced copy instance
+// Uses conservative defaults to avoid excessive CPU usage
 func NewAdvancedCopy(maxWorkers, bufferSize int, useSendfile bool) *AdvancedCopy {
 	if maxWorkers <= 0 {
-		maxWorkers = runtime.NumCPU()
+		// Conservative default: min(4, NumCPU) for I/O operations
+		// Copy operations are I/O bound, not CPU bound
+		numCPU := runtime.NumCPU()
+		maxWorkers = numCPU
+		if maxWorkers > maxWorkersLimit {
+			maxWorkers = maxWorkersLimit
+		}
 	}
 	if bufferSize <= 0 {
 		bufferSize = defaultBufferSizeKB * kbToBytes // Optimized for large files

@@ -211,7 +211,10 @@ func (s *Snapshotter) getWhiteoutFiles(shdCheckDelete bool) ([]string, error) {
 	}
 
 	filesToWhiteout := removeObsoleteWhiteouts(deletedFiles)
-	sort.Strings(filesToWhiteout)
+	// Optimized: check if already sorted before sorting (reduces CPU usage)
+	if !sort.StringsAreSorted(filesToWhiteout) {
+		sort.Strings(filesToWhiteout)
+	}
 	return filesToWhiteout, nil
 }
 
@@ -258,7 +261,10 @@ func (s *Snapshotter) takeRegularSnapshot(files []string, shdCheckDelete, forceB
 		logrus.Debugf("Taking snapshot of %d files...", len(filesToAdd))
 	}
 
-	sort.Strings(filesToAdd)
+	// Optimized: check if already sorted before sorting (reduces CPU usage)
+	if !sort.StringsAreSorted(filesToAdd) {
+		sort.Strings(filesToAdd)
+	}
 
 	// Verify files exist before adding to layered map
 	verifyFilesExist(filesToAdd)
@@ -354,14 +360,22 @@ func (s *Snapshotter) scanFullFilesystem() (filesToAdd, filesToWhiteout []string
 	}
 	timer := timing.Start("Resolving Paths")
 
-	filesToAdd = []string{}
+	// Optimized: pre-allocate slice with capacity to reduce reallocations
+	// Estimate capacity based on resolved files (most will be added)
+	filesToAdd = make([]string, 0, len(changedPaths))
 	resolvedFiles, err := filesystem.ResolvePaths(changedPaths, s.ignorelist)
 	if err != nil {
 		return nil, nil, err
 	}
+	// Optimized: pre-allocate if we know approximate size
+	if cap(filesToAdd) < len(resolvedFiles) {
+		filesToAdd = make([]string, 0, len(resolvedFiles))
+	}
 	for _, path := range resolvedFiles {
 		if util.CheckIgnoreList(path) {
-			logrus.Debugf("Not adding %s to layer, as it's ignored", path)
+			if logrus.IsLevelEnabled(logrus.DebugLevel) {
+				logrus.Debugf("Not adding %s to layer, as it's ignored", path)
+			}
 			continue
 		}
 		filesToAdd = append(filesToAdd, path)
@@ -385,8 +399,13 @@ func (s *Snapshotter) scanFullFilesystem() (filesToAdd, filesToWhiteout []string
 	filesToWhiteout = removeObsoleteWhiteouts(deletedPaths)
 	timing.DefaultRun.Stop(timer)
 
-	sort.Strings(filesToAdd)
-	sort.Strings(filesToWhiteout)
+	// Optimized: check if already sorted before sorting (reduces CPU usage)
+	if !sort.StringsAreSorted(filesToAdd) {
+		sort.Strings(filesToAdd)
+	}
+	if !sort.StringsAreSorted(filesToWhiteout) {
+		sort.Strings(filesToWhiteout)
+	}
 
 	return filesToAdd, filesToWhiteout, nil
 }

@@ -19,6 +19,7 @@ limitations under the License.
 package cache
 
 import (
+	"runtime"
 	"sync"
 
 	v1 "github.com/google/go-containerregistry/pkg/v1"
@@ -189,13 +190,33 @@ func (uc *UnifiedCache) Prefetch(keys []string) {
 	}
 }
 
-// prefetchWorker performs prefetching in background
+// prefetchWorker performs prefetching in background with batched parallel processing
 func (uc *UnifiedCache) prefetchWorker() {
 	defer func() {
 		uc.prefetchMutex.Lock()
 		uc.prefetching = false
 		uc.prefetchMutex.Unlock()
 	}()
+
+	// Conservative default: 2-4 workers for prefetch (network I/O bound)
+	const maxPrefetchWorkers = 4
+	const minPrefetchWorkers = 2
+	maxWorkers := minPrefetchWorkers
+	if numCPU := runtime.NumCPU(); numCPU > maxWorkers {
+		if numCPU < maxPrefetchWorkers {
+			maxWorkers = numCPU
+		} else {
+			maxWorkers = maxPrefetchWorkers
+		}
+	}
+	if maxWorkers <= 0 {
+		maxWorkers = 1
+	}
+
+	// Batch size: 10-20 keys per batch (balance between overhead and parallelism)
+	const batchSize = 10
+	workers := make(chan struct{}, maxWorkers)
+	var wg sync.WaitGroup
 
 	for {
 		uc.prefetchMutex.Lock()
@@ -204,13 +225,33 @@ func (uc *UnifiedCache) prefetchWorker() {
 			break
 		}
 
-		// Get next key
-		key := uc.prefetchKeys[0]
-		uc.prefetchKeys = uc.prefetchKeys[1:]
+		// Get batch of keys
+		batchSizeActual := batchSize
+		if len(uc.prefetchKeys) < batchSizeActual {
+			batchSizeActual = len(uc.prefetchKeys)
+		}
+		batch := make([]string, batchSizeActual)
+		copy(batch, uc.prefetchKeys[:batchSizeActual])
+		uc.prefetchKeys = uc.prefetchKeys[batchSizeActual:]
 		uc.prefetchMutex.Unlock()
 
-		// Prefetch key (non-blocking)
-		uc.prefetchKey(key)
+		// Process batch in parallel
+		for _, key := range batch {
+			wg.Add(1)
+			go func(k string) {
+				defer wg.Done()
+
+				// Acquire worker
+				workers <- struct{}{}
+				defer func() { <-workers }()
+
+				// Prefetch key (non-blocking)
+				uc.prefetchKey(k)
+			}(key)
+		}
+
+		// Wait for batch to complete before processing next batch
+		wg.Wait()
 	}
 }
 

@@ -510,17 +510,21 @@ func pushLayerToCache(opts *config.KanikoOptions, cacheKey, tarPath, createdBy s
 		layerOpts = append(layerOpts, tarball.WithCompressedCaching)
 	}
 
-	if opts.CompressionLevel > 0 {
-		layerOpts = append(layerOpts, tarball.WithCompressionLevel(opts.CompressionLevel))
-	}
+	// Optimized: support DisableCompression option (set CompressionLevel=0 to disable)
+	if !opts.DisableCompression {
+		if opts.CompressionLevel > 0 {
+			layerOpts = append(layerOpts, tarball.WithCompressionLevel(opts.CompressionLevel))
+		}
 
-	switch opts.Compression {
-	case config.ZStd:
-		layerOpts = append(layerOpts, tarball.WithCompression("zstd"), tarball.WithMediaType(types.OCILayerZStd))
+		switch opts.Compression {
+		case config.ZStd:
+			layerOpts = append(layerOpts, tarball.WithCompression("zstd"), tarball.WithMediaType(types.OCILayerZStd))
 
-	case config.GZip:
-		// layer already gzipped by default
+		case config.GZip:
+			// layer already gzipped by default
+		}
 	}
+	// If DisableCompression is true, layer will be uncompressed (no compression options added)
 
 	layer, err := tarball.LayerFromFile(tarPath, layerOpts...)
 	if err != nil {

@@ -30,8 +30,10 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -46,6 +48,7 @@ import (
 	"github.com/moby/patternmatcher/ignorefile"
 
 	"github.com/Gosayram/kaniko/pkg/config"
+	"github.com/Gosayram/kaniko/pkg/logging"
 	"github.com/Gosayram/kaniko/pkg/timing"
 )
 
@@ -56,6 +59,8 @@ const (
 	DoNotChangeGID = -1
 	// SafeDefaultUID is the safe default UID to use when UID is not specified
 	SafeDefaultUID = 1000
+	// Default paths collection capacity for filesystem operations
+	defaultPathsCapacity = 100
 	// SafeDefaultGID is the safe default GID to use when GID is not specified
 	SafeDefaultGID = 1000
 	// DefaultDirPerm is the default directory permission (750)
@@ -489,6 +494,48 @@ var defaultIgnoreList = []IgnoreListEntry{
 
 var ignorelist = append([]IgnoreListEntry{}, defaultIgnoreList...)
 
+// Optimized ignore list lookup: map for O(1) exact matches
+// This significantly reduces CPU usage when checking ignore list for each file
+var (
+	ignoreListExactMap   map[string]bool   // For exact path matches (O(1) lookup)
+	ignoreListPrefixList []IgnoreListEntry // For prefix matches (small list, checked only if exact match fails)
+	ignoreListMapMutex   sync.RWMutex      // Protects map updates
+	ignoreListMapValid   bool              // Whether map is up-to-date
+)
+
+// initIgnoreListMap initializes the optimized ignore list map
+func initIgnoreListMap() {
+	ignoreListMapMutex.Lock()
+	defer ignoreListMapMutex.Unlock()
+
+	ignoreListExactMap = make(map[string]bool)
+	ignoreListPrefixList = make([]IgnoreListEntry, 0)
+
+	for _, entry := range ignorelist {
+		if entry.PrefixMatchOnly {
+			// Store prefix entries separately (need to check prefix)
+			ignoreListPrefixList = append(ignoreListPrefixList, entry)
+		} else {
+			// Store exact entries in map for O(1) lookup
+			cleanPath := filepath.Clean(entry.Path)
+			ignoreListExactMap[cleanPath] = true
+		}
+	}
+
+	ignoreListMapValid = true
+}
+
+// ensureIgnoreListMapValid ensures the ignore list map is up-to-date
+func ensureIgnoreListMapValid() {
+	ignoreListMapMutex.RLock()
+	valid := ignoreListMapValid
+	ignoreListMapMutex.RUnlock()
+
+	if !valid {
+		initIgnoreListMap()
+	}
+}
+
 var volumes = []string{}
 
 // skipKanikoDir opts to skip the '/kaniko' dir for otiai10.copy which should be ignored in root
@@ -528,6 +575,10 @@ func AddToIgnoreList(entry IgnoreListEntry) {
 		Path:            filepath.Clean(entry.Path),
 		PrefixMatchOnly: entry.PrefixMatchOnly,
 	})
+	// Invalidate map to force rebuild on next access
+	ignoreListMapMutex.Lock()
+	ignoreListMapValid = false
+	ignoreListMapMutex.Unlock()
 }
 
 // AddToDefaultIgnoreList adds an entry to the default ignore list
@@ -1335,8 +1386,25 @@ func checkLinkDestination(absLink, absDest, link, dest string) error {
 }
 
 // IsInProvidedIgnoreList checks if a path matches any entry in the provided ignore list
+// Optimized: uses map for O(1) exact matches (reduces CPU usage in hot path)
 func IsInProvidedIgnoreList(path string, wl []IgnoreListEntry) bool {
 	path = filepath.Clean(path)
+
+	// For global ignore list, use optimized map lookup
+	if len(wl) == len(ignorelist) {
+		ensureIgnoreListMapValid()
+
+		ignoreListMapMutex.RLock()
+		// Check exact match in map (O(1))
+		if ignoreListExactMap[path] {
+			ignoreListMapMutex.RUnlock()
+			return true
+		}
+		ignoreListMapMutex.RUnlock()
+		return false
+	}
+
+	// For custom ignore lists, fall back to linear search
 	for _, entry := range wl {
 		if !entry.PrefixMatchOnly && path == entry.Path {
 			return true
@@ -1352,8 +1420,31 @@ func IsInIgnoreList(path string) bool {
 }
 
 // CheckCleanedPathAgainstProvidedIgnoreList checks if a cleaned path matches ignore list entries
+// Optimized: uses map for O(1) exact matches, then checks prefix list (reduces CPU usage in hot path)
 func CheckCleanedPathAgainstProvidedIgnoreList(path string, wl []IgnoreListEntry) bool {
-	_ = wl // unused parameter
+	// For global ignore list, use optimized map lookup
+	if len(wl) == len(ignorelist) {
+		ensureIgnoreListMapValid()
+
+		ignoreListMapMutex.RLock()
+		// Check exact match in map first (O(1))
+		if ignoreListExactMap[path] {
+			ignoreListMapMutex.RUnlock()
+			return true
+		}
+
+		// Check prefix matches (usually small list)
+		for _, entry := range ignoreListPrefixList {
+			if hasCleanedFilepathPrefix(path, entry.Path, entry.PrefixMatchOnly) {
+				ignoreListMapMutex.RUnlock()
+				return true
+			}
+		}
+		ignoreListMapMutex.RUnlock()
+		return false
+	}
+
+	// For custom ignore lists, fall back to linear search
 	for _, entry := range wl {
 		if hasCleanedFilepathPrefix(path, entry.Path, entry.PrefixMatchOnly) {
 			return true
@@ -2447,7 +2538,11 @@ func copyTargetFile(target, destFile string) error {
 	}
 	defer dest.Close()
 
-	if _, err := io.Copy(dest, srcFile); err != nil {
+	// Optimized: use buffer pool for io.Copy to reduce allocations
+	bufferPool := GetGlobalBufferPool()
+	buf := bufferPool.GetLargeBuffer() // 1MB buffer for file copying
+	defer bufferPool.PutLargeBuffer(buf)
+	if _, err := io.CopyBuffer(dest, srcFile, buf); err != nil {
 		return err
 	}
 
@@ -2559,6 +2654,9 @@ func InitIgnoreList() error {
 		return errors.Wrap(err, "checking filesystem mount paths for ignore list")
 	}
 
+	// Initialize optimized map after building ignore list
+	initIgnoreListMap()
+
 	return nil
 }
 
@@ -2608,7 +2706,8 @@ func WalkFS(
 }
 
 func gowalkDir(dir string, existingPaths map[string]struct{}, changeFunc func(string) (bool, error)) walkFSResult {
-	foundPaths := make([]string, 0)
+	// Optimized: two-pass approach - collect paths first, then process in parallel
+	// This reduces CPU usage by parallelizing changeFunc calls which may be CPU-intensive
 	deletedFiles := existingPaths // Make a reference.
 
 	// Use common ignore handling for walk operations
@@ -2616,70 +2715,197 @@ func gowalkDir(dir string, existingPaths map[string]struct{}, changeFunc func(st
 	ignoreHandling.UseCleanedPath = false // WalkFS uses IsInIgnoreList, not CheckCleanedPathAgainstIgnoreList
 	ignoreHandling.LogIgnored = false     // WalkFS doesn't log ignored files
 
-	// Create callback using common pattern
-	callback := CreateIgnoreCallback(ignoreHandling, func(path string, ent *godirwalk.Dirent) error {
+	// First pass: collect all paths that need processing
+	pathsToProcess := make([]string, 0, defaultPathsCapacity) // Pre-allocate with reasonable capacity
+	pathsMutex := sync.Mutex{}
+
+	collectCallback := CreateIgnoreCallback(ignoreHandling, func(path string, ent *godirwalk.Dirent) error {
 		_ = ent // unused parameter
-		logrus.Tracef("Analyzing path '%s'", path)
+		// Optimized logging: use async logging for hot paths (reduces CPU usage)
+		if logrus.IsLevelEnabled(logrus.TraceLevel) {
+			logging.AsyncTracef("Collecting path '%s'", path)
+		}
 
 		// File is existing on disk, remove it from deleted files.
 		delete(deletedFiles, path)
 
-		if isChanged, err := changeFunc(path); err != nil {
-			return err
-		} else if isChanged {
-			foundPaths = append(foundPaths, path)
-		}
+		// Collect path for parallel processing
+		pathsMutex.Lock()
+		pathsToProcess = append(pathsToProcess, path)
+		pathsMutex.Unlock()
 
 		return nil
 	})
 
 	// Use common walk options
 	walkOpts := DefaultWalkOptions()
-	walkOpts.Callback = callback
+	walkOpts.Callback = collectCallback
 
 	if err := godirwalk.Walk(dir, CreateWalkOptions(walkOpts)); err != nil {
 		return walkFSResult{nil, deletedFiles}
 	}
 
+	// Second pass: process paths in parallel with limited worker pool
+	// Conservative default: 4-6 workers for file processing (may be CPU or I/O bound)
+	maxWorkers := 4
+	if numCPU := runtime.NumCPU(); numCPU < maxWorkers {
+		maxWorkers = numCPU
+	}
+	if maxWorkers <= 0 {
+		maxWorkers = 1
+	}
+
+	workers := make(chan struct{}, maxWorkers)
+	var wg sync.WaitGroup
+	foundPaths := make([]string, 0, len(pathsToProcess)) // Pre-allocate with capacity
+	foundPathsMutex := sync.Mutex{}
+
+	// Process paths in parallel
+	for _, path := range pathsToProcess {
+		wg.Add(1)
+		go func(p string) {
+			defer wg.Done()
+
+			// Acquire worker
+			workers <- struct{}{}
+			defer func() { <-workers }()
+
+			// Process file change check (may be CPU-intensive)
+			if isChanged, err := changeFunc(p); err != nil {
+				// Log error but continue processing other files
+				if logrus.IsLevelEnabled(logrus.DebugLevel) {
+					logrus.Debugf("Error checking file %s: %v", p, err)
+				}
+			} else if isChanged {
+				foundPathsMutex.Lock()
+				foundPaths = append(foundPaths, p)
+				foundPathsMutex.Unlock()
+			}
+		}(path)
+	}
+
+	// Wait for all processing to complete
+	wg.Wait()
+
 	return walkFSResult{foundPaths, deletedFiles}
 }
 
+// processStatBatch processes a batch of paths and returns results
+func processStatBatch(
+	pathBatch []string,
+	existing map[string]os.FileInfo,
+) (batchResults map[string]os.FileInfo, batchFoundPaths []string) {
+	fsCache := GetGlobalFileSystemCache()
+	batchResults = make(map[string]os.FileInfo, len(pathBatch))
+	batchFoundPaths = make([]string, 0, len(pathBatch))
+
+	for _, p := range pathBatch {
+		// Optimized: use cached stat instead of direct os.Lstat (reduces CPU usage)
+		if fi, err := fsCache.CachedLstat(p); err == nil {
+			if fiPrevious, ok := existing[p]; ok {
+				// check if file changed
+				if !isSame(fiPrevious, fi) {
+					batchResults[p] = fi
+					batchFoundPaths = append(batchFoundPaths, p)
+				}
+			} else {
+				// new path
+				batchResults[p] = fi
+				batchFoundPaths = append(batchFoundPaths, p)
+			}
+		}
+	}
+	return batchResults, batchFoundPaths
+}
+
+// collectPathsForStat collects all paths that need stat operations
+func collectPathsForStat(dir string) ([]string, error) {
+	ignoreHandling := GetProcessorIgnoreHandling(FileProcessorTypeStat)
+	const initialCapacity = 100
+	pathsToStat := make([]string, 0, initialCapacity)
+	pathsMutex := sync.Mutex{}
+
+	collectCallback := CreateIgnoreCallback(ignoreHandling, func(path string, ent *godirwalk.Dirent) error {
+		_ = ent // unused parameter
+		pathsMutex.Lock()
+		pathsToStat = append(pathsToStat, path)
+		pathsMutex.Unlock()
+		return nil
+	})
+
+	walkOpts := DefaultWalkOptions()
+	walkOpts.Callback = collectCallback
+
+	if err := godirwalk.Walk(dir, CreateWalkOptions(walkOpts)); err != nil {
+		return nil, err
+	}
+	return pathsToStat, nil
+}
+
 // GetFSInfoMap given a directory gets a map of FileInfo for all files
+// Optimized: uses parallel stat operations with limited worker pool (reduces CPU usage)
 func GetFSInfoMap(dir string, existing map[string]os.FileInfo) (fileMap map[string]os.FileInfo, foundPaths []string) {
 	fileMap = map[string]os.FileInfo{}
 	foundPaths = []string{}
 	timer := timing.Start("Walking filesystem with Stat")
 
-	// Use common ignore handling for stat operations
-	ignoreHandling := GetProcessorIgnoreHandling(FileProcessorTypeStat)
-
-	// Create callback using common pattern
-	callback := CreateIgnoreCallback(ignoreHandling, func(path string, ent *godirwalk.Dirent) error {
-		_ = ent // unused parameter
-
-		if fi, err := os.Lstat(path); err == nil {
-			if fiPrevious, ok := existing[path]; ok {
-				// check if file changed
-				if !isSame(fiPrevious, fi) {
-					fileMap[path] = fi
-					foundPaths = append(foundPaths, path)
-				}
-			} else {
-				// new path
-				fileMap[path] = fi
-				foundPaths = append(foundPaths, path)
-			}
-		}
-		return nil
-	})
-
-	// Use common walk options
-	walkOpts := DefaultWalkOptions()
-	walkOpts.Callback = callback
-
-	if err := godirwalk.Walk(dir, CreateWalkOptions(walkOpts)); err != nil {
+	// First pass: collect all paths that need stat
+	pathsToStat, err := collectPathsForStat(dir)
+	if err != nil {
+		timing.DefaultRun.Stop(timer)
 		return fileMap, foundPaths
 	}
+
+	// Second pass: parallel stat operations with batched processing
+	// Conservative default: 4-6 workers for stat operations (I/O bound, not CPU bound)
+	maxWorkers := 4
+	if numCPU := runtime.NumCPU(); numCPU < maxWorkers {
+		maxWorkers = numCPU
+	}
+	if maxWorkers <= 0 {
+		maxWorkers = 1
+	}
+
+	// Batch size: 50-100 paths per batch (balance between overhead and parallelism)
+	const batchSize = 50
+	workers := make(chan struct{}, maxWorkers)
+	var wg sync.WaitGroup
+	fileMapMutex := sync.Mutex{}
+
+	// Process paths in batches
+	for i := 0; i < len(pathsToStat); i += batchSize {
+		end := i + batchSize
+		if end > len(pathsToStat) {
+			end = len(pathsToStat)
+		}
+		batch := pathsToStat[i:end]
+
+		wg.Add(1)
+		go func(pathBatch []string) {
+			defer wg.Done()
+
+			// Acquire worker
+			workers <- struct{}{}
+			defer func() { <-workers }()
+
+			// Process batch of paths
+			batchResults, batchFoundPaths := processStatBatch(pathBatch, existing)
+
+			// Merge batch results into shared map (single lock acquisition per batch)
+			if len(batchResults) > 0 {
+				fileMapMutex.Lock()
+				for p, fi := range batchResults {
+					fileMap[p] = fi
+				}
+				foundPaths = append(foundPaths, batchFoundPaths...)
+				fileMapMutex.Unlock()
+			}
+		}(batch)
+	}
+
+	// Wait for all stat operations to complete
+	wg.Wait()
+
 	timing.DefaultRun.Stop(timer)
 	return fileMap, foundPaths
 }

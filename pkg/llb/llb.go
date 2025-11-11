@@ -22,6 +22,7 @@ package llb
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 
 	v1 "github.com/google/go-containerregistry/pkg/v1"
@@ -43,6 +44,9 @@ const (
 	OpTypeRun OpType = "run"
 	// OpTypeMetadata represents a metadata-only operation
 	OpTypeMetadata OpType = "metadata"
+	// String builder capacity estimates
+	stringBuilderHeaderSize = 128 // Estimated header size in bytes
+	stringBuilderOpSize     = 64  // Estimated size per operation in bytes
 )
 
 // Operation represents a single operation in the build graph
@@ -560,14 +564,19 @@ func (g *Graph) String() string {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
 
-	result := fmt.Sprintf("Graph (%d operations):\n", len(g.Operations))
+	// Optimized: use strings.Builder instead of string concatenation (reduces CPU usage)
+	var b strings.Builder
+	// Pre-allocate capacity for better performance
+	b.Grow(stringBuilderHeaderSize + len(g.Operations)*stringBuilderOpSize)
+
+	b.WriteString(fmt.Sprintf("Graph (%d operations):\n", len(g.Operations)))
 	for _, op := range g.Operations {
 		deps := op.GetDependencies()
 		depIDs := make([]string, len(deps))
 		for i, dep := range deps {
 			depIDs[i] = dep.ID
 		}
-		result += fmt.Sprintf("  %s: deps=%v\n", op.ID, depIDs)
+		b.WriteString(fmt.Sprintf("  %s: deps=%v\n", op.ID, depIDs))
 	}
-	return result
+	return b.String()
 }

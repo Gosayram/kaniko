@@ -74,3 +74,65 @@ func Configure(level, format string, logTimestamp bool) error {
 
 	return nil
 }
+
+// AsyncDebug logs a debug message asynchronously (safe for hot paths)
+func AsyncDebug(args ...interface{}) {
+	asyncLogger := GetAsyncLogger()
+	if asyncLogger != nil && asyncLogger.IsEnabled() {
+		asyncLogger.Log(logrus.DebugLevel, fmt.Sprint(args...), nil)
+	} else {
+		logrus.Debug(args...)
+	}
+}
+
+// AsyncDebugf logs a formatted debug message asynchronously (safe for hot paths)
+func AsyncDebugf(format string, args ...interface{}) {
+	asyncLogger := GetAsyncLogger()
+	if asyncLogger != nil && asyncLogger.IsEnabled() {
+		asyncLogger.Log(logrus.DebugLevel, fmt.Sprintf(format, args...), nil)
+	} else {
+		logrus.Debugf(format, args...)
+	}
+}
+
+// AsyncTrace logs a trace message asynchronously (safe for hot paths)
+func AsyncTrace(args ...interface{}) {
+	asyncLogger := GetAsyncLogger()
+	if asyncLogger != nil && asyncLogger.IsEnabled() {
+		asyncLogger.Log(logrus.TraceLevel, fmt.Sprint(args...), nil)
+	} else {
+		logrus.Trace(args...)
+	}
+}
+
+// AsyncTracef logs a formatted trace message asynchronously (safe for hot paths)
+func AsyncTracef(format string, args ...interface{}) {
+	asyncLogger := GetAsyncLogger()
+	if asyncLogger != nil && asyncLogger.IsEnabled() {
+		asyncLogger.Log(logrus.TraceLevel, fmt.Sprintf(format, args...), nil)
+	} else {
+		logrus.Tracef(format, args...)
+	}
+}
+
+// AsyncInfo logs an info message asynchronously (safe for non-critical messages)
+func AsyncInfo(args ...interface{}) {
+	asyncLogger := GetAsyncLogger()
+	if asyncLogger != nil && asyncLogger.IsEnabled() {
+		asyncLogger.Log(logrus.InfoLevel, fmt.Sprint(args...), nil)
+	} else {
+		logrus.Info(args...)
+	}
+}
+
+// AsyncInfof logs a formatted info message asynchronously (safe for non-critical messages)
+func AsyncInfof(format string, args ...interface{}) {
+	asyncLogger := GetAsyncLogger()
+	if asyncLogger != nil && asyncLogger.IsEnabled() {
+		asyncLogger.Log(logrus.InfoLevel, fmt.Sprintf(format, args...), nil)
+	} else {
+		logrus.Infof(format, args...)
+	}
+}
+
+// Note: Error, Fatal, Panic are intentionally NOT wrapped - they must remain synchronous

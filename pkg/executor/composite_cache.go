@@ -144,8 +144,12 @@ func (s *CompositeCache) AddPath(p string, context util.FileContext) error {
 			fh = cachedHash
 		} else {
 			// Compute hash if not cached
+			// Use partial hashing for large files (default: 10MB limit)
+			// This reduces CPU usage while maintaining good change detection
 			var hashErr error
-			fh, hashErr = util.CacheHasher()(p)
+			maxFileHashSize := int64(defaultMaxFileHashSizeMB * fileHashBytesPerMegabyte) // Default: 10MB
+			hasher := util.CacheHasherWithLimit(maxFileHashSize)
+			fh, hashErr = hasher(p)
 			if hashErr != nil {
 				return hashErr
 			}
@@ -209,8 +213,12 @@ func hashDir(p string, context util.FileContext) (isEmpty bool, hash string, err
 				fileHash = cachedHash
 			} else {
 				// Compute hash if not cached
+				// Use partial hashing for large files (default: 10MB limit)
+				// This reduces CPU usage while maintaining good change detection
 				var hashErr error
-				fileHash, hashErr = util.CacheHasher()(path)
+				maxFileHashSize := int64(defaultMaxFileHashSizeMB * fileHashBytesPerMegabyte) // Default: 10MB
+				hasher := util.CacheHasherWithLimit(maxFileHashSize)
+				fileHash, hashErr = hasher(path)
 				if hashErr != nil {
 					// If file hashing fails, log warning and continue
 					// This prevents build failures when some files can't be hashed

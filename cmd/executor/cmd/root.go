@@ -92,10 +92,13 @@ const (
 	defaultPreloadTimeout  = 10   // Default preload timeout in minutes
 
 	// Compression constants
-	defaultCompressionLevel = 3 // Optimal balance between speed and size for zstd
+	// Conservative default: 1-2 for speed and lower CPU usage (especially with multiple parallel builds)
+	// Level 3 was too CPU-intensive for multiple parallel builds
+	defaultCompressionLevel = 2 // Conservative default for lower CPU usage
 
 	// Cache optimization constants
-	defaultMaxConcurrentCacheChecks   = 5
+	// Conservative default: 3-5 instead of higher values to avoid excessive CPU usage
+	defaultMaxConcurrentCacheChecks   = 3
 	defaultCacheMaxConns              = 10
 	defaultCacheMaxConnsPerHost       = 5
 	defaultCacheMaxConcurrentRequests = 5
@@ -746,6 +749,25 @@ func addParallelExecutionFlags() {
 		"Use dependency graph to optimize command execution order. Default: true (enabled per plan)")
 	RootCmd.PersistentFlags().BoolVarP(&opts.EnableLazyImageLoading, "enable-lazy-image-loading", "", true,
 		"Load image layers on demand for memory optimization. Default: true (enabled per plan)")
+
+	// CPU resource limits (for optimization and multiple parallel builds)
+	RootCmd.PersistentFlags().IntVarP(&opts.MaxWorkers, "max-workers", "", 0,
+		"Maximum number of workers for parallel operations (0 = auto: min(6, NumCPU), max: 8). "+
+			"Conservative default to avoid excessive CPU usage with multiple parallel builds. Default: auto")
+	RootCmd.PersistentFlags().IntVarP(&opts.MaxParallelHashing, "max-parallel-hashing", "", 0,
+		"Maximum number of parallel file hashing operations (0 = auto: 4). "+
+			"Conservative default for CPU-intensive hashing. Default: 4")
+	RootCmd.PersistentFlags().IntVarP(&opts.MaxParallelCopy, "max-parallel-copy", "", 0,
+		"Maximum number of parallel file copy operations (0 = auto: 2). "+
+			"Conservative default for I/O-bound operations. Default: 2")
+	RootCmd.PersistentFlags().BoolVar(&opts.DisableCompression, "disable-compression", false,
+		"Disable layer compression for maximum speed (increases layer size but reduces CPU usage)")
+
+	// Default max file hash size: 10MB (10 * 1024 * 1024 bytes)
+	const defaultMaxFileHashSizeBytes = 10 * 1024 * 1024
+	RootCmd.PersistentFlags().Int64VarP(&opts.MaxFileHashSize, "max-file-hash-size", "", defaultMaxFileHashSizeBytes,
+		"Maximum file size for full hashing in bytes (files larger use partial hashing: first+last 64KB + size). "+
+			"Default: 10MB (10485760 bytes)")
 }
 
 func addSecurityFlags() {
@@ -780,6 +802,11 @@ func addUnifiedCacheFlags() {
 	RootCmd.PersistentFlags().IntVarP(&opts.MaxConcurrentCacheChecks,
 		"max-concurrent-cache-checks", "", defaultMaxConcurrentCacheChecks,
 		"Maximum number of concurrent cache checks. Default: 5 for optimal balance between speed and resource usage")
+
+	// Network concurrency limits
+	RootCmd.PersistentFlags().IntVarP(&opts.MaxNetworkConcurrency, "max-network-concurrency", "", 0,
+		"Maximum number of parallel network requests (0 = auto: 5). "+
+			"Conservative default for I/O-bound network operations. Default: 5")
 
 	// Connection pooling flags for registry cache
 	RootCmd.PersistentFlags().IntVarP(&opts.CacheMaxConns, "cache-max-conns", "", defaultCacheMaxConns,
