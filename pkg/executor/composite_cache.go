@@ -32,6 +32,9 @@ import (
 
 // Global file hash cache to avoid recomputing hashes for the same files
 // (per performance plan: cache file hashes to avoid repeated calculations)
+//
+// Deprecated: Use FileHashCache with invalidation instead.
+// Kept for backward compatibility during migration.
 var (
 	fileHashCache   = make(map[string]string)
 	fileHashCacheMu sync.RWMutex
@@ -121,25 +124,36 @@ func (s *CompositeCache) AddPath(p string, context util.FileContext) error {
 		return nil
 	}
 
-	// Check cache first (per performance plan: cache file hashes)
-	fileHashCacheMu.RLock()
-	cachedHash, exists := fileHashCache[p]
-	fileHashCacheMu.RUnlock()
-
+	// Use new FileHashCache with invalidation if opts are available
+	// Otherwise fall back to old cache for backward compatibility
 	var fh string
-	if exists {
-		fh = cachedHash
-	} else {
-		// Compute hash if not cached
+	if opts := getOptsForHashCache(); opts != nil {
+		// Use new cache with invalidation
 		var hashErr error
-		fh, hashErr = util.CacheHasher()(p)
+		fh, hashErr = getFileHashWithCache(p, context, opts)
 		if hashErr != nil {
 			return hashErr
 		}
-		// Cache the result (per performance plan: cache file hashes)
-		fileHashCacheMu.Lock()
-		fileHashCache[p] = fh
-		fileHashCacheMu.Unlock()
+	} else {
+		// Fall back to old cache (backward compatibility)
+		fileHashCacheMu.RLock()
+		cachedHash, exists := fileHashCache[p]
+		fileHashCacheMu.RUnlock()
+
+		if exists {
+			fh = cachedHash
+		} else {
+			// Compute hash if not cached
+			var hashErr error
+			fh, hashErr = util.CacheHasher()(p)
+			if hashErr != nil {
+				return hashErr
+			}
+			// Cache the result (per performance plan: cache file hashes)
+			fileHashCacheMu.Lock()
+			fileHashCache[p] = fh
+			fileHashCacheMu.Unlock()
+		}
 	}
 
 	if _, err := sha.Write([]byte(fh)); err != nil {
@@ -172,28 +186,42 @@ func hashDir(p string, context util.FileContext) (isEmpty bool, hash string, err
 			return nil
 		}
 
-		// Check cache first (per performance plan: cache file hashes)
-		fileHashCacheMu.RLock()
-		cachedHash, exists := fileHashCache[path]
-		fileHashCacheMu.RUnlock()
-
+		// Use new FileHashCache with invalidation if opts are available
+		// Otherwise fall back to old cache for backward compatibility
 		var fileHash string
-		if exists {
-			fileHash = cachedHash
-		} else {
-			// Compute hash if not cached
+		if opts := getOptsForHashCache(); opts != nil {
+			// Use new cache with invalidation
 			var hashErr error
-			fileHash, hashErr = util.CacheHasher()(path)
+			fileHash, hashErr = getFileHashWithCache(path, context, opts)
 			if hashErr != nil {
 				// If file hashing fails, log warning and continue
 				// This prevents build failures when some files can't be hashed
 				logrus.Debugf("Failed to hash file %s: %v, skipping", path, hashErr)
 				return nil
 			}
-			// Cache the result (per performance plan: cache file hashes)
-			fileHashCacheMu.Lock()
-			fileHashCache[path] = fileHash
-			fileHashCacheMu.Unlock()
+		} else {
+			// Fall back to old cache (backward compatibility)
+			fileHashCacheMu.RLock()
+			cachedHash, exists := fileHashCache[path]
+			fileHashCacheMu.RUnlock()
+
+			if exists {
+				fileHash = cachedHash
+			} else {
+				// Compute hash if not cached
+				var hashErr error
+				fileHash, hashErr = util.CacheHasher()(path)
+				if hashErr != nil {
+					// If file hashing fails, log warning and continue
+					// This prevents build failures when some files can't be hashed
+					logrus.Debugf("Failed to hash file %s: %v, skipping", path, hashErr)
+					return nil
+				}
+				// Cache the result (per performance plan: cache file hashes)
+				fileHashCacheMu.Lock()
+				fileHashCache[path] = fileHash
+				fileHashCacheMu.Unlock()
+			}
 		}
 
 		if _, err := sha.Write([]byte(fileHash)); err != nil {

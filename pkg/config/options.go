@@ -26,8 +26,11 @@ import (
 
 // CacheOptions are base image cache options that are set by command line arguments
 type CacheOptions struct {
-	CacheDir string
-	CacheTTL time.Duration
+	CacheDir              string
+	CacheTTL              time.Duration
+	LocalCacheUseMMap     bool        // --local-cache-use-mmap (experimental, for faster file access)
+	LocalCacheCompress    bool        // --local-cache-compress (experimental, for space savings)
+	LocalCacheCompression Compression // --local-cache-compression=zstd (experimental)
 }
 
 // RegistryOptions are all the options related to the registries, set by command line arguments.
@@ -155,6 +158,36 @@ type KanikoOptions struct {
 
 	// Unified cache options (for combining multiple cache sources)
 	EnableUnifiedCache bool // --enable-unified-cache=true (enabled by default for better performance)
+
+	// Parallel cache check options (for performance optimization)
+	MaxConcurrentCacheChecks int // --max-concurrent-cache-checks=5 (default: 5 for optimal balance)
+
+	// Connection pooling options for registry cache (for performance optimization)
+	CacheMaxConns              int           // --cache-max-conns=10 (default: 10)
+	CacheMaxConnsPerHost       int           // --cache-max-conns-per-host=5 (default: 5)
+	CacheMaxConcurrentRequests int           // --cache-max-concurrent-requests=5 (default: 5)
+	CacheDisableHTTP2          bool          // --cache-disable-http2=false (default: false, enable HTTP/2)
+	CacheRequestTimeout        time.Duration // --cache-request-timeout=30s (default: 30s)
+
+	// Aggressive prefetching options (for performance optimization)
+	PrefetchWindow int // --prefetch-window=10 (default: 10, increased from 3 for better cache hit rate)
+
+	// Cache result caching options (for performance optimization)
+	CacheResultTTL         time.Duration // --cache-result-ttl=5m (default: 5 minutes)
+	CacheResultMaxEntries  int           // --cache-result-max-entries=1000 (default: 1000)
+	CacheResultMaxMemoryMB int           // --cache-result-max-memory-mb=100 (default: 100 MB)
+
+	// File hash cache options (for performance optimization)
+	FileHashCacheMaxEntries  int // --file-hash-cache-max-entries=10000 (default: 10000)
+	FileHashCacheMaxMemoryMB int // --file-hash-cache-max-memory-mb=200 (default: 200 MB)
+
+	// Parallel layer loading options (for performance optimization)
+	LayerLoadMaxConcurrent int // --layer-load-max-concurrent=3 (default: 3)
+
+	// Predictive caching options (experimental, for performance optimization)
+	EnablePredictiveCache      bool // --enable-predictive-cache=false (default: false, experimental)
+	PredictiveCacheMaxLayers   int  // --predictive-cache-max-layers=20 (default: 20, limit prefetch)
+	PredictiveCacheMaxMemoryMB int  // --predictive-cache-max-memory-mb=50 (default: 50 MB, limit memory)
 
 	// Debug options for enhanced debugging and development
 	DebugOptions

@@ -19,10 +19,12 @@ package cache
 
 import (
 	"fmt"
+	"net/http"
 	"os"
 	"path"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/go-containerregistry/pkg/name"
@@ -32,24 +34,154 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/tarball"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
+	"golang.org/x/net/http2"
 
 	"github.com/Gosayram/kaniko/pkg/config"
 	"github.com/Gosayram/kaniko/pkg/creds"
 	"github.com/Gosayram/kaniko/pkg/util"
 )
 
+const (
+	defaultIdleConnTimeout     = 90 * time.Second
+	defaultCacheRequestTimeout = 30 * time.Second
+	defaultCacheResultTTL      = 5 * time.Minute
+)
+
 // LayerCache is the layer cache
 type LayerCache interface {
 	RetrieveLayer(string) (v1.Image, error)
+	// RetrieveLayersBatch retrieves multiple layers in parallel
+	// Returns a map of cache key to image (or error if not found)
+	// This allows parallel downloading/verification while maintaining order of application
+	RetrieveLayersBatch(keys []string) map[string]LayerResult
 }
 
-// RegistryCache is the registry cache
+// LayerResult represents the result of retrieving a layer
+type LayerResult struct {
+	Image v1.Image
+	Error error
+}
+
+// RegistryCache is the registry cache with connection pooling support
 type RegistryCache struct {
-	Opts *config.KanikoOptions
+	Opts        *config.KanikoOptions
+	client      *http.Client
+	mu          sync.Mutex   // Protects client initialization
+	resultCache *ResultCache // In-memory cache for results
+}
+
+// initClient initializes the HTTP client with connection pooling if not already initialized
+func (rc *RegistryCache) initClient(registryName string) error {
+	rc.mu.Lock()
+	defer rc.mu.Unlock()
+
+	// Double-check pattern: client might have been initialized while we were waiting
+	if rc.client != nil {
+		return nil
+	}
+
+	// Get base transport with TLS configuration
+	baseTransport, err := util.MakeTransport(&rc.Opts.RegistryOptions, registryName)
+	if err != nil {
+		return errors.Wrapf(err, "making base transport for registry %q", registryName)
+	}
+
+	// Clone and configure transport for connection pooling
+	transport := baseTransport.(*http.Transport).Clone()
+
+	// Set connection pooling parameters
+	maxConns := rc.Opts.CacheMaxConns
+	if maxConns <= 0 {
+		maxConns = 10 // Default
+	}
+	maxConnsPerHost := rc.Opts.CacheMaxConnsPerHost
+	if maxConnsPerHost <= 0 {
+		maxConnsPerHost = 5 // Default
+	}
+
+	transport.MaxIdleConns = maxConns
+	transport.MaxIdleConnsPerHost = maxConnsPerHost
+	transport.IdleConnTimeout = defaultIdleConnTimeout
+	transport.DisableKeepAlives = false
+
+	// Configure HTTP/2 with fallback to HTTP/1.1
+	if !rc.Opts.CacheDisableHTTP2 {
+		// Try to enable HTTP/2
+		if err := http2.ConfigureTransport(transport); err != nil {
+			logrus.Warnf("Failed to configure HTTP/2 for cache transport, falling back to HTTP/1.1: %v", err)
+			// HTTP/1.1 will be used automatically
+		} else {
+			logrus.Debugf("HTTP/2 enabled for cache transport")
+		}
+	} else {
+		logrus.Debugf("HTTP/2 disabled for cache transport (using HTTP/1.1)")
+		// Explicitly disable HTTP/2
+		transport.ForceAttemptHTTP2 = false
+	}
+
+	// Set request timeout
+	requestTimeout := rc.Opts.CacheRequestTimeout
+	if requestTimeout <= 0 {
+		requestTimeout = defaultCacheRequestTimeout
+	}
+
+	// Create HTTP client with connection pooling
+	rc.client = &http.Client{
+		Transport: transport,
+		Timeout:   requestTimeout,
+	}
+
+	logrus.Debugf("Initialized cache HTTP client with connection pooling (maxConns=%d, maxConnsPerHost=%d, timeout=%v)",
+		maxConns, maxConnsPerHost, requestTimeout)
+
+	return nil
+}
+
+// initResultCache initializes the result cache if not already done
+func (rc *RegistryCache) initResultCache() {
+	rc.mu.Lock()
+	defer rc.mu.Unlock()
+
+	if rc.resultCache != nil {
+		return
+	}
+
+	// Get configuration values
+	ttl := rc.Opts.CacheResultTTL
+	if ttl <= 0 {
+		ttl = defaultCacheResultTTL
+	}
+	maxEntries := rc.Opts.CacheResultMaxEntries
+	if maxEntries <= 0 {
+		maxEntries = 1000 // Default
+	}
+	maxMemoryMB := rc.Opts.CacheResultMaxMemoryMB
+	if maxMemoryMB <= 0 {
+		maxMemoryMB = 100 // Default
+	}
+
+	rc.resultCache = NewResultCache(maxEntries, maxMemoryMB, ttl)
+	logrus.Debugf("Initialized result cache (maxEntries=%d, maxMemoryMB=%d, ttl=%v)",
+		maxEntries, maxMemoryMB, ttl)
 }
 
 // RetrieveLayer retrieves a layer from the cache given the cache key ck.
 func (rc *RegistryCache) RetrieveLayer(ck string) (v1.Image, error) {
+	// Initialize result cache if not already done
+	if rc.resultCache == nil {
+		rc.initResultCache()
+	}
+
+	// Check result cache first
+	if cachedResult, found := rc.resultCache.Get(ck); found {
+		logrus.Debugf("Cache result cache hit for key: %s", ck)
+		if cachedResult.Error != nil {
+			return nil, cachedResult.Error
+		}
+		return cachedResult.Image, nil
+	}
+
+	// Cache miss - perform actual lookup
 	cache, err := Destination(rc.Opts, ck)
 	if err != nil {
 		return nil, errors.Wrap(err, "getting cache destination")
@@ -69,20 +201,87 @@ func (rc *RegistryCache) RetrieveLayer(ck string) (v1.Image, error) {
 		}
 	}
 
-	tr, err := util.MakeTransport(&rc.Opts.RegistryOptions, registryName)
-	if err != nil {
-		return nil, errors.Wrapf(err, "making transport for registry %q", registryName)
+	// Initialize client with connection pooling if not already done
+	if rc.client == nil {
+		if initErr := rc.initClient(registryName); initErr != nil {
+			return nil, initErr
+		}
 	}
 
-	img, err := remote.Image(cacheRef, remote.WithTransport(tr), remote.WithAuthFromKeychain(creds.GetKeychain()))
+	// Get transport from the pooled client
+	transport := rc.client.Transport
+
+	// Use the pooled client's transport for the request
+	img, err := remote.Image(cacheRef, remote.WithTransport(transport), remote.WithAuthFromKeychain(creds.GetKeychain()))
 	if err != nil {
+		// Cache the error result
+		rc.resultCache.Set(ck, nil, err)
 		return nil, err
 	}
 
 	if err := verifyImage(img, rc.Opts.CacheTTL, cache); err != nil {
+		// Cache the error result
+		rc.resultCache.Set(ck, nil, err)
 		return nil, err
 	}
+
+	// Cache the successful result
+	rc.resultCache.Set(ck, img, nil)
 	return img, nil
+}
+
+// retrieveLayersBatchHelper is a helper function to retrieve multiple layers in parallel
+func retrieveLayersBatchHelper(
+	keys []string,
+	retrieveFunc func(string) (v1.Image, error),
+	opts *config.KanikoOptions,
+) map[string]LayerResult {
+	results := make(map[string]LayerResult)
+	if len(keys) == 0 {
+		return results
+	}
+
+	// Get max concurrent from options
+	maxConcurrent := opts.LayerLoadMaxConcurrent
+	if maxConcurrent <= 0 {
+		maxConcurrent = 3 // Default
+	}
+
+	// Use semaphore to limit concurrent requests
+	sem := make(chan struct{}, maxConcurrent)
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+
+	for _, key := range keys {
+		wg.Add(1)
+		go func(ck string) {
+			defer wg.Done()
+
+			// Acquire semaphore
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			// Retrieve layer (uses result cache internally)
+			img, err := retrieveFunc(ck)
+
+			// Store result
+			mu.Lock()
+			results[ck] = LayerResult{
+				Image: img,
+				Error: err,
+			}
+			mu.Unlock()
+		}(key)
+	}
+
+	wg.Wait()
+	return results
+}
+
+// RetrieveLayersBatch retrieves multiple layers in parallel
+// This allows parallel downloading/verification while maintaining order of application
+func (rc *RegistryCache) RetrieveLayersBatch(keys []string) map[string]LayerResult {
+	return retrieveLayersBatchHelper(keys, rc.RetrieveLayer, rc.Opts)
 }
 
 func verifyImage(img v1.Image, cacheTTL time.Duration, cache string) error {
@@ -107,11 +306,56 @@ func verifyImage(img v1.Image, cacheTTL time.Duration, cache string) error {
 
 // LayoutCache is the OCI image layout cache
 type LayoutCache struct {
-	Opts *config.KanikoOptions
+	Opts        *config.KanikoOptions
+	resultCache *ResultCache // In-memory cache for results
+	mu          sync.Mutex   // Protects result cache initialization
+}
+
+// initResultCache initializes the result cache if not already done
+func (lc *LayoutCache) initResultCache() {
+	lc.mu.Lock()
+	defer lc.mu.Unlock()
+
+	if lc.resultCache != nil {
+		return
+	}
+
+	// Get configuration values
+	ttl := lc.Opts.CacheResultTTL
+	if ttl <= 0 {
+		ttl = defaultCacheResultTTL
+	}
+	maxEntries := lc.Opts.CacheResultMaxEntries
+	if maxEntries <= 0 {
+		maxEntries = 1000 // Default
+	}
+	maxMemoryMB := lc.Opts.CacheResultMaxMemoryMB
+	if maxMemoryMB <= 0 {
+		maxMemoryMB = 100 // Default
+	}
+
+	lc.resultCache = NewResultCache(maxEntries, maxMemoryMB, ttl)
+	logrus.Debugf("Initialized result cache for layout cache (maxEntries=%d, maxMemoryMB=%d, ttl=%v)",
+		maxEntries, maxMemoryMB, ttl)
 }
 
 // RetrieveLayer retrieves a layer from the OCI layout cache given the cache key ck.
 func (lc *LayoutCache) RetrieveLayer(ck string) (v1.Image, error) {
+	// Initialize result cache if not already done
+	if lc.resultCache == nil {
+		lc.initResultCache()
+	}
+
+	// Check result cache first
+	if cachedResult, found := lc.resultCache.Get(ck); found {
+		logrus.Debugf("Cache result cache hit for key: %s", ck)
+		if cachedResult.Error != nil {
+			return nil, cachedResult.Error
+		}
+		return cachedResult.Image, nil
+	}
+
+	// Cache miss - perform actual lookup
 	cache, err := Destination(lc.Opts, ck)
 	if err != nil {
 		return nil, errors.Wrap(err, "getting cache destination")
@@ -120,13 +364,26 @@ func (lc *LayoutCache) RetrieveLayer(ck string) (v1.Image, error) {
 
 	var img v1.Image
 	if img, err = locateImage(strings.TrimPrefix(cache, "oci:")); err != nil {
+		// Cache the error result
+		lc.resultCache.Set(ck, nil, err)
 		return nil, errors.Wrap(err, "locating cache image")
 	}
 
 	if err := verifyImage(img, lc.Opts.CacheTTL, cache); err != nil {
+		// Cache the error result
+		lc.resultCache.Set(ck, nil, err)
 		return nil, err
 	}
+
+	// Cache the successful result
+	lc.resultCache.Set(ck, img, nil)
 	return img, nil
+}
+
+// RetrieveLayersBatch retrieves multiple layers in parallel
+// This allows parallel downloading/verification while maintaining order of application
+func (lc *LayoutCache) RetrieveLayersBatch(keys []string) map[string]LayerResult {
+	return retrieveLayersBatchHelper(keys, lc.RetrieveLayer, lc.Opts)
 }
 
 func locateImage(imagePath string) (v1.Image, error) {
