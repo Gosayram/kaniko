@@ -81,6 +81,7 @@ type KanikoOptions struct {
 	OCILayoutPath            string
 	Compression              Compression // --compression=zstd (default: zstd for better performance)
 	CompressionLevel         int         // --compression-level=3 (default: 3 for optimal balance)
+	DisableCompression       bool        // --disable-compression (default: false, set CompressionLevel=0 to disable)
 	ImageFSExtractRetry      int
 	SingleSnapshot           bool
 	Reproducible             bool
@@ -142,6 +143,13 @@ type KanikoOptions struct {
 	OptimizeExecutionOrder bool
 	// --enable-lazy-image-loading=true (load image layers on demand for memory optimization, enabled by default)
 	EnableLazyImageLoading bool
+
+	// CPU resource limits (for optimization and multiple parallel builds)
+	MaxWorkers            int   // --max-workers=6 (default: min(6, NumCPU), max: 8)
+	MaxParallelHashing    int   // --max-parallel-hashing=4 (default: 4)
+	MaxParallelCopy       int   // --max-parallel-copy=2 (default: 2)
+	MaxFileHashSize       int64 // --max-file-hash-size=10MB (default: 10MB, files larger use partial hashing)
+	MaxNetworkConcurrency int   // --max-network-concurrency=5 (default: 5, conservative for I/O operations)
 
 	// Source policy for security (validates image sources before loading)
 	// Set via SetSourcePolicy() to avoid circular dependencies

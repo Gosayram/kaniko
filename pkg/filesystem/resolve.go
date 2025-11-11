@@ -67,7 +67,9 @@ func ResolvePaths(paths []string, wl []util.IgnoreListEntry) (pathsToAdd []strin
 
 		// If the path is a symlink we need to also consider the target of that
 		// link
-		evaled, e = filepath.EvalSymlinks(f)
+		// Optimized: use cached symlink evaluation to reduce CPU usage
+		fsCache := util.GetGlobalFileSystemCache()
+		evaled, e = fsCache.CachedEvalSymlinks(f)
 		if e != nil {
 			if !os.IsNotExist(e) {
 				logrus.Errorf("Couldn't eval %s with link %s", f, link)
@@ -152,7 +154,9 @@ func resolveSymlinkAncestor(path string) (string, error) {
 			// to test whether there are any links in the path. If the output of
 			// EvalSymlinks is different than the input we know one of the nodes in the
 			// path is a link.
-			target, err := filepath.EvalSymlinks(newPath)
+			// Optimized: use cached symlink evaluation to reduce CPU usage
+			fsCache := util.GetGlobalFileSystemCache()
+			target, err := fsCache.CachedEvalSymlinks(newPath)
 			if err != nil {
 				return "", err
 			}

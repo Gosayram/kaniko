@@ -33,6 +33,7 @@ const (
 // GlobalManager provides global access to structured logging across Kaniko
 type GlobalManager struct {
 	integrationManager *IntegrationManager
+	asyncLogger        *AsyncLogger
 	initialized        bool
 	mutex              sync.RWMutex
 }
@@ -71,6 +72,10 @@ func (gm *GlobalManager) Initialize(level, format string, enableStructured bool)
 	if enableStructured {
 		gm.integrationManager.EnableStructuredLogging()
 	}
+
+	// Initialize and start async logger for non-critical logs
+	gm.asyncLogger = GetAsyncLogger()
+	gm.asyncLogger.Start()
 
 	gm.initialized = true
 	logrus.Info("Global logging manager initialized")
@@ -232,10 +237,22 @@ func (gm *GlobalManager) Close() {
 	gm.mutex.Lock()
 	defer gm.mutex.Unlock()
 
+	// Stop async logger and flush all pending logs
+	if gm.asyncLogger != nil {
+		gm.asyncLogger.Stop()
+	}
+
 	if gm.integrationManager != nil {
 		gm.integrationManager.Close()
 	}
 
 	gm.initialized = false
 	logrus.Info("Global logging manager closed")
+}
+
+// GetAsyncLogger returns the async logger instance
+func (gm *GlobalManager) GetAsyncLogger() *AsyncLogger {
+	gm.mutex.RLock()
+	defer gm.mutex.RUnlock()
+	return gm.asyncLogger
 }

@@ -17,6 +17,7 @@ limitations under the License.
 package executor
 
 import (
+	"container/heap"
 	"fmt"
 	"path/filepath"
 	"sort"
@@ -29,6 +30,12 @@ import (
 
 	"github.com/Gosayram/kaniko/pkg/commands"
 	"github.com/Gosayram/kaniko/pkg/dockerfile"
+)
+
+const (
+	// String builder capacity estimates
+	stringBuilderHeaderSize = 256 // Estimated header size in bytes
+	stringBuilderNodeSize   = 64  // Estimated size per node in bytes
 )
 
 // CommandNode represents a command in the dependency graph
@@ -217,8 +224,31 @@ func isParentDirectory(path1, path2 string) bool {
 	return !strings.HasPrefix(rel, "..") && rel != "."
 }
 
+// IntHeap is a min-heap of integers for maintaining sorted queue
+// Optimized: uses heap instead of sort.Ints in loop (reduces CPU usage from O(n log n) to O(log n) per operation)
+type IntHeap []int
+
+func (h IntHeap) Len() int           { return len(h) }
+func (h IntHeap) Less(i, j int) bool { return h[i] < h[j] }
+func (h IntHeap) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
+
+// Push adds an element to the heap (implements heap.Interface)
+func (h *IntHeap) Push(x interface{}) {
+	*h = append(*h, x.(int))
+}
+
+// Pop removes and returns the minimum element from the heap (implements heap.Interface)
+func (h *IntHeap) Pop() interface{} {
+	old := *h
+	n := len(old)
+	x := old[n-1]
+	*h = old[0 : n-1]
+	return x
+}
+
 // topologicalSort performs topological sorting using Kahn's algorithm
 // Returns the execution order and error if cycle is detected
+// Optimized: uses heap instead of sort.Ints in loop (reduces CPU usage)
 func (g *DependencyGraph) topologicalSort() ([]int, error) {
 	g.mutex.Lock()
 	defer g.mutex.Unlock()
@@ -241,22 +271,21 @@ func (g *DependencyGraph) topologicalSort() ([]int, error) {
 	}
 
 	// Find nodes with no dependencies (in-degree = 0)
-	queue := []int{}
+	// Optimized: use heap instead of slice + sort.Ints for better performance
+	queue := &IntHeap{}
+	heap.Init(queue)
 	for i, degree := range inDegree {
 		if degree == 0 {
-			queue = append(queue, i)
+			heap.Push(queue, i)
 		}
 	}
-	// Sort to ensure stable execution order
-	sort.Ints(queue)
 
 	order := []int{}
 
 	// Process nodes in topological order
-	for len(queue) > 0 {
-		// Get next node with no dependencies
-		current := queue[0]
-		queue = queue[1:]
+	for queue.Len() > 0 {
+		// Get next node with no dependencies (min element from heap)
+		current := heap.Pop(queue).(int)
 		order = append(order, current)
 
 		// Decrease in-degree for dependents
@@ -265,12 +294,11 @@ func (g *DependencyGraph) topologicalSort() ([]int, error) {
 			for _, dependent := range node.Dependents {
 				inDegree[dependent]--
 				if inDegree[dependent] == 0 {
-					queue = append(queue, dependent)
+					// Optimized: use heap.Push instead of append + sort (O(log n) instead of O(n log n))
+					heap.Push(queue, dependent)
 				}
 			}
 		}
-		// Keep queue sorted for stable order
-		sort.Ints(queue)
 	}
 
 	// Check for cycles (nodes not in order)
@@ -357,12 +385,17 @@ func (g *DependencyGraph) String() string {
 	g.mutex.RLock()
 	defer g.mutex.RUnlock()
 
-	result := fmt.Sprintf("DependencyGraph (%d nodes):\n", len(g.nodes))
+	// Optimized: use strings.Builder instead of string concatenation (reduces CPU usage)
+	var b strings.Builder
+	// Pre-allocate capacity for better performance
+	b.Grow(stringBuilderHeaderSize + len(g.nodes)*stringBuilderNodeSize)
+
+	b.WriteString(fmt.Sprintf("DependencyGraph (%d nodes):\n", len(g.nodes)))
 	for i, node := range g.nodes {
-		result += fmt.Sprintf("  Node %d: deps=%v, dependents=%v\n", i, node.Dependencies, node.Dependents)
+		b.WriteString(fmt.Sprintf("  Node %d: deps=%v, dependents=%v\n", i, node.Dependencies, node.Dependents))
 	}
-	result += fmt.Sprintf("Execution order: %v\n", g.order)
-	return result
+	b.WriteString(fmt.Sprintf("Execution order: %v\n", g.order))
+	return b.String()
 }
 
 // contains checks if a slice contains a value

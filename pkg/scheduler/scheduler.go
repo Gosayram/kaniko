@@ -21,6 +21,7 @@ package scheduler
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/pkg/errors"
@@ -43,6 +44,9 @@ const (
 	EdgeStateCompleted
 	// EdgeStateFailed means the edge has failed
 	EdgeStateFailed
+	// String builder capacity estimates
+	stringBuilderHeaderSize = 128 // Estimated header size in bytes
+	stringBuilderEdgeSize   = 64  // Estimated size per edge in bytes
 )
 
 // Edge represents an edge in the execution graph
@@ -478,14 +482,19 @@ func (s *Scheduler) String() string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	result := fmt.Sprintf("Scheduler (%d edges):\n", len(s.edges))
+	// Optimized: use strings.Builder instead of string concatenation (reduces CPU usage)
+	var b strings.Builder
+	// Pre-allocate capacity for better performance
+	b.Grow(stringBuilderHeaderSize + len(s.edges)*stringBuilderEdgeSize)
+
+	b.WriteString(fmt.Sprintf("Scheduler (%d edges):\n", len(s.edges)))
 	for _, edge := range s.edges {
 		deps := edge.GetDependencies()
 		depIDs := make([]string, len(deps))
 		for i, dep := range deps {
 			depIDs[i] = dep.ID
 		}
-		result += fmt.Sprintf("  %s [%v]: deps=%v\n", edge.ID, edge.GetState(), depIDs)
+		b.WriteString(fmt.Sprintf("  %s [%v]: deps=%v\n", edge.ID, edge.GetState(), depIDs))
 	}
-	return result
+	return b.String()
 }

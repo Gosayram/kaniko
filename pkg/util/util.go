@@ -21,6 +21,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"hash"
 	"io"
 	"math"
 	"os"
@@ -102,6 +103,16 @@ func Hasher() func(string) (string, error) {
 
 // CacheHasher takes into account everything the regular hasher does except for mtime
 func CacheHasher() func(string) (string, error) {
+	return CacheHasherWithLimit(0) // 0 = no limit, full hashing
+}
+
+// CacheHasherWithLimit creates a hasher with a size limit for partial hashing of large files
+// For files larger than maxFileHashSize, uses partial hashing (first 64KB + last 64KB + size)
+// For files <= maxFileHashSize, uses full hashing
+// maxFileHashSize: 0 = no limit (full hashing), >0 = use partial hashing for larger files
+func CacheHasherWithLimit(maxFileHashSize int64) func(string) (string, error) {
+	const partialHashChunkSize = 64 * 1024 // 64KB chunks for partial hashing
+
 	hasher := func(p string) (string, error) {
 		// MD5 is used here for non-cryptographic purposes (file change detection)
 		// The hash is only used internally for caching, not for security-sensitive operations
@@ -110,37 +121,121 @@ func CacheHasher() func(string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		h.Write([]byte(fi.Mode().String()))
 
-		h.Write([]byte(strconv.FormatUint(uint64(fi.Sys().(*syscall.Stat_t).Uid), 36)))
-		h.Write([]byte(","))
-		h.Write([]byte(strconv.FormatUint(uint64(fi.Sys().(*syscall.Stat_t).Gid), 36)))
+		// Hash file metadata (mode, uid, gid)
+		hashFileMetadata(h, fi)
 
+		// Hash file content based on file type
 		if fi.Mode().IsRegular() {
-			// Validate the file path to prevent directory traversal
-			if err := ValidateFilePath(p); err != nil {
-				return "", err
-			}
-			// #nosec G304 - path is validated before use
-			f, err := os.Open(p)
-			if err != nil {
-				return "", err
-			}
-			defer f.Close()
-			if _, err := io.Copy(h, f); err != nil {
+			if err := hashRegularFile(h, p, fi.Size(), maxFileHashSize, partialHashChunkSize); err != nil {
 				return "", err
 			}
 		} else if fi.Mode()&os.ModeSymlink == os.ModeSymlink {
-			linkPath, err := os.Readlink(p)
-			if err != nil {
+			if err := hashSymlink(h, p); err != nil {
 				return "", err
 			}
-			h.Write([]byte(linkPath))
 		}
 
 		return hex.EncodeToString(h.Sum(nil)), nil
 	}
 	return hasher
+}
+
+// hashFileMetadata hashes file metadata (mode, uid, gid)
+func hashFileMetadata(h hash.Hash, fi os.FileInfo) {
+	h.Write([]byte(fi.Mode().String()))
+	h.Write([]byte(strconv.FormatUint(uint64(fi.Sys().(*syscall.Stat_t).Uid), 36)))
+	h.Write([]byte(","))
+	h.Write([]byte(strconv.FormatUint(uint64(fi.Sys().(*syscall.Stat_t).Gid), 36)))
+}
+
+// hashRegularFile hashes a regular file (partial or full based on size)
+func hashRegularFile(h hash.Hash, path string, fileSize, maxFileHashSize, partialHashChunkSize int64) error {
+	// Validate the file path to prevent directory traversal
+	if err := ValidateFilePath(path); err != nil {
+		return err
+	}
+
+	usePartialHashing := maxFileHashSize > 0 && fileSize > maxFileHashSize
+
+	if usePartialHashing {
+		return hashFilePartial(h, path, fileSize, partialHashChunkSize)
+	}
+	return hashFileFull(h, path)
+}
+
+// hashFilePartial performs partial hashing for large files: first 64KB + last 64KB + size
+func hashFilePartial(h hash.Hash, path string, fileSize, partialHashChunkSize int64) error {
+	// #nosec G304 - path is validated before use
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	// Hash file size first
+	h.Write([]byte(strconv.FormatInt(fileSize, 10)))
+
+	// Optimized: use buffer pool instead of make() to reduce allocations
+	bufferPool := GetGlobalBufferPool()
+	chunk := bufferPool.GetMediumBuffer() // 64KB = medium buffer
+	defer bufferPool.PutMediumBuffer(chunk)
+
+	// Read and hash first chunk
+	n, err := f.ReadAt(chunk, 0)
+	if err != nil && err != io.EOF {
+		return err
+	}
+	if n > 0 {
+		h.Write(chunk[:n])
+	}
+
+	// Read and hash last chunk (if file is large enough)
+	if fileSize > partialHashChunkSize {
+		startPos := fileSize - partialHashChunkSize
+		if startPos < 0 {
+			startPos = 0
+		}
+		n, err := f.ReadAt(chunk, startPos)
+		if err != nil && err != io.EOF {
+			return err
+		}
+		if n > 0 {
+			h.Write(chunk[:n])
+		}
+	}
+
+	return nil
+}
+
+// hashFileFull performs full hashing for small files
+func hashFileFull(h hash.Hash, path string) error {
+	// #nosec G304 - path is validated before use
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	// Use buffer pool for io.Copy to reduce allocations
+	bufferPool := GetGlobalBufferPool()
+	buf := bufferPool.GetMediumBuffer() // 64KB buffer for file reading
+	defer bufferPool.PutMediumBuffer(buf)
+
+	if _, err := io.CopyBuffer(h, f, buf); err != nil {
+		return err
+	}
+	return nil
+}
+
+// hashSymlink hashes a symlink by reading its target path
+func hashSymlink(h hash.Hash, path string) error {
+	linkPath, err := os.Readlink(path)
+	if err != nil {
+		return err
+	}
+	h.Write([]byte(linkPath))
+	return nil
 }
 
 // MtimeHasher returns a hash function, which only looks at mtime to determine if a file has changed.
@@ -172,10 +267,13 @@ func RedoHasher() func(string) (string, error) {
 			return "", err
 		}
 
-		logrus.Debugf("Hash components for file: %s, mode: %s, mtime: %s, size: %s, user-id: %s, group-id: %s",
-			p, []byte(fi.Mode().String()), []byte(fi.ModTime().String()),
-			[]byte(strconv.FormatInt(fi.Size(), 16)), []byte(strconv.FormatUint(uint64(fi.Sys().(*syscall.Stat_t).Uid), 36)),
-			[]byte(strconv.FormatUint(uint64(fi.Sys().(*syscall.Stat_t).Gid), 36)))
+		// Optimized: conditional logging to reduce CPU usage in hot path
+		if logrus.IsLevelEnabled(logrus.DebugLevel) {
+			logrus.Debugf("Hash components for file: %s, mode: %s, mtime: %s, size: %s, user-id: %s, group-id: %s",
+				p, fi.Mode().String(), fi.ModTime().String(),
+				strconv.FormatInt(fi.Size(), 16), strconv.FormatUint(uint64(fi.Sys().(*syscall.Stat_t).Uid), 36),
+				strconv.FormatUint(uint64(fi.Sys().(*syscall.Stat_t).Gid), 36))
+		}
 
 		h.Write([]byte(fi.Mode().String()))
 		h.Write([]byte(fi.ModTime().String()))
@@ -192,7 +290,11 @@ func RedoHasher() func(string) (string, error) {
 // SHA256 returns the shasum of the contents of r
 func SHA256(r io.Reader) (string, error) {
 	hasher := sha256.New()
-	_, err := io.Copy(hasher, r)
+	// Optimized: use buffer pool for io.Copy to reduce allocations
+	bufferPool := GetGlobalBufferPool()
+	buf := bufferPool.GetMediumBuffer() // 64KB buffer
+	defer bufferPool.PutMediumBuffer(buf)
+	_, err := io.CopyBuffer(hasher, r, buf)
 	if err != nil {
 		return "", err
 	}

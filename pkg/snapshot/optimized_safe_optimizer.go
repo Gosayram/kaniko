@@ -26,6 +26,7 @@ import (
 	"github.com/sirupsen/logrus"
 
 	"github.com/Gosayram/kaniko/pkg/config"
+	"github.com/Gosayram/kaniko/pkg/logging"
 )
 
 // Constants for optimization
@@ -120,8 +121,11 @@ type IncrementalIntegrityStats struct {
 func NewOptimizedSafeSnapshotOptimizer(
 	snapshotter *Snapshotter, opts *config.KanikoOptions) *OptimizedSafeSnapshotOptimizer {
 	// Calculate optimal worker count based on task type
+	// Use MaxWorkers from options if set, otherwise use conservative default
 	maxWorkers := GetOptimalWorkerCount("mixed")
-	if opts.MaxParallelCommands > 0 {
+	if opts.MaxWorkers > 0 {
+		maxWorkers = opts.MaxWorkers
+	} else if opts.MaxParallelCommands > 0 {
 		maxWorkers = opts.MaxParallelCommands
 	}
 
@@ -225,8 +229,9 @@ func (osso *OptimizedSafeSnapshotOptimizer) incrementalScan(
 	osso.stats.IncrementalSnapshots++
 	osso.statsMutex.Unlock()
 
-	// Use cached hashes to identify changed files
-	changedFiles = make([]string, 0)
+	// Optimized: pre-allocate with reasonable initial capacity
+	const initialCapacity = 100
+	changedFiles = make([]string, 0, initialCapacity)
 	deletedFiles = make(map[string]struct{})
 
 	// Copy existing paths for deletion tracking
@@ -309,7 +314,10 @@ func (oph *OptimizedParallelHasher) HashFilesOptimized(dir string) ([]string, er
 		oph.updateStats(time.Since(start))
 	}()
 
-	changedFiles := make([]string, 0)
+	// Optimized: pre-allocate with reasonable initial capacity
+	// Estimate: typical projects have 100-1000 files, so start with 100
+	const initialCapacity = 100
+	changedFiles := make([]string, 0, initialCapacity)
 	var mutex sync.Mutex
 
 	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
@@ -331,7 +339,9 @@ func (oph *OptimizedParallelHasher) HashFilesOptimized(dir string) ([]string, er
 		}
 
 		if err := oph.workerPool.Submit(task); err != nil {
-			logrus.Debugf("Failed to submit hashing task for %s: %v", path, err)
+			if logrus.IsLevelEnabled(logrus.DebugLevel) {
+				logging.AsyncDebugf("Failed to submit hashing task for %s: %v", path, err)
+			}
 		}
 
 		return nil

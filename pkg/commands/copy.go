@@ -156,7 +156,9 @@ func (c *CopyCommand) copySourcesParallel(
 	errChan := make(chan error, len(srcs))
 
 	// Limit concurrent copies to avoid overwhelming the filesystem
-	maxConcurrent := 4
+	// Conservative default: 2 workers for I/O-bound operations (not CPU-bound)
+	// This prevents excessive CPU usage, especially with multiple parallel builds
+	maxConcurrent := 2
 	if len(srcs) < maxConcurrent {
 		maxConcurrent = len(srcs)
 	}

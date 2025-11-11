@@ -17,14 +17,17 @@ limitations under the License.
 package executor
 
 import (
+	"context"
 	"os"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
 	"github.com/sirupsen/logrus"
 
 	"github.com/Gosayram/kaniko/pkg/config"
+	"github.com/Gosayram/kaniko/pkg/logging"
 	"github.com/Gosayram/kaniko/pkg/util"
 )
 
@@ -32,6 +35,11 @@ const (
 	fileHashEntryMetadataOverhead = 100 // ~100 bytes for entry metadata
 	fileHashBytesPerKilobyte      = 1024
 	fileHashBytesPerMegabyte      = fileHashBytesPerKilobyte * fileHashBytesPerKilobyte
+	// FNV-1a hash constants
+	fnvOffsetBasis = uint32(2166136261) // FNV-1a offset basis
+	fnvPrime       = uint32(16777619)   // FNV-1a prime
+	// Default file hash size limit (10MB)
+	defaultMaxFileHashSizeMB = 10
 )
 
 // FileHashCacheEntry represents a cached file hash with metadata for invalidation
@@ -44,14 +52,37 @@ type FileHashCacheEntry struct {
 	CachedAt time.Time
 }
 
-// FileHashCache provides optimized file hash caching with invalidation
-type FileHashCache struct {
+// FileHashCacheShard represents a single shard of the cache
+type FileHashCacheShard struct {
 	mu            sync.RWMutex
 	cache         map[string]*FileHashCacheEntry
+	currentMemory int64 // Current memory usage in bytes for this shard
+}
+
+// FileHashCache provides optimized file hash caching with invalidation
+// Uses sharding to reduce lock contention (optimized for read-heavy workloads)
+type FileHashCache struct {
+	shards        []*FileHashCacheShard
+	shardCount    int
 	maxEntries    int
 	maxMemoryMB   int
-	currentMemory int64 // Current memory usage in bytes
+	totalMemory   int64 // Total memory usage across all shards (approximate)
+	totalMemoryMu sync.RWMutex
+
+	// Background cleanup
+	cleanupCtx     context.Context
+	cleanupCancel  context.CancelFunc
+	cleanupOnce    sync.Once
+	cleanupRunning int32 // Atomic flag
 }
+
+const (
+	// Default shard count for file hash cache (reduces lock contention)
+	// Using power of 2 for efficient modulo operation
+	defaultShardCount = 16
+	// Default cleanup interval for background cache cleanup
+	defaultCleanupInterval = 30 * time.Second
+)
 
 // Global file hash cache instance (initialized on first use)
 var (
@@ -86,7 +117,7 @@ func GetGlobalFileHashCache(opts *config.KanikoOptions) *FileHashCache {
 	return globalFileHashCache
 }
 
-// NewFileHashCache creates a new file hash cache
+// NewFileHashCache creates a new file hash cache with sharding
 func NewFileHashCache(maxEntries, maxMemoryMB int) *FileHashCache {
 	if maxEntries <= 0 {
 		maxEntries = 10000 // Default
@@ -95,19 +126,54 @@ func NewFileHashCache(maxEntries, maxMemoryMB int) *FileHashCache {
 		maxMemoryMB = 200 // Default
 	}
 
-	return &FileHashCache{
-		cache:       make(map[string]*FileHashCacheEntry),
-		maxEntries:  maxEntries,
-		maxMemoryMB: maxMemoryMB,
+	shardCount := defaultShardCount
+	shards := make([]*FileHashCacheShard, shardCount)
+	for i := range shards {
+		shards[i] = &FileHashCacheShard{
+			cache:         make(map[string]*FileHashCacheEntry),
+			currentMemory: 0,
+		}
 	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	fhc := &FileHashCache{
+		shards:        shards,
+		shardCount:    shardCount,
+		maxEntries:    maxEntries,
+		maxMemoryMB:   maxMemoryMB,
+		cleanupCtx:    ctx,
+		cleanupCancel: cancel,
+	}
+
+	// Start background cleanup goroutine
+	fhc.startBackgroundCleanup()
+
+	return fhc
+}
+
+// getShard returns the shard for a given key (using hash-based sharding)
+func (fhc *FileHashCache) getShard(key string) *FileHashCacheShard {
+	// Simple hash function for sharding (FNV-1a style)
+	hash := fnvOffsetBasis
+	for i := 0; i < len(key); i++ {
+		hash ^= uint32(key[i])
+		hash *= fnvPrime
+	}
+	// Use modulo with shardCount (power of 2, so bitwise AND is faster)
+	// Safe conversion: shardCount is always positive and small, so uint32 conversion is safe
+	shardIndex := int(hash) & (fhc.shardCount - 1)
+	return fhc.shards[shardIndex]
 }
 
 // Get retrieves a cached hash if available and valid
+// Uses sharding to reduce lock contention
 func (fhc *FileHashCache) Get(path string) (string, bool) {
-	fhc.mu.RLock()
-	defer fhc.mu.RUnlock()
+	shard := fhc.getShard(path)
+	shard.mu.RLock()
+	defer shard.mu.RUnlock()
 
-	entry, exists := fhc.cache[path]
+	entry, exists := shard.cache[path]
 	if !exists {
 		return "", false
 	}
@@ -156,9 +222,11 @@ func (fhc *FileHashCache) isEntryValid(path string, entry *FileHashCacheEntry) (
 }
 
 // Set stores a file hash with metadata for invalidation
+// Uses sharding to reduce lock contention
 func (fhc *FileHashCache) Set(path, hash string) error {
-	fhc.mu.Lock()
-	defer fhc.mu.Unlock()
+	shard := fhc.getShard(path)
+	shard.mu.Lock()
+	defer shard.mu.Unlock()
 
 	// Get file metadata for invalidation
 	fi, err := os.Lstat(path)
@@ -174,13 +242,14 @@ func (fhc *FileHashCache) Set(path, hash string) error {
 	// Estimate entry size
 	entrySize := int64(len(path) + len(hash) + fileHashEntryMetadataOverhead)
 
-	// Check if we need to evict entries
+	// Check if we need to evict entries (check total memory across all shards)
 	fhc.evictIfNeeded(entrySize)
 
 	// Remove old entry if exists (to update memory tracking)
-	if oldEntry, exists := fhc.cache[path]; exists {
+	if oldEntry, exists := shard.cache[path]; exists {
 		oldSize := int64(len(path) + len(oldEntry.Hash) + fileHashEntryMetadataOverhead)
-		fhc.currentMemory -= oldSize
+		shard.currentMemory -= oldSize
+		fhc.updateTotalMemory(-oldSize)
 	}
 
 	// Create new entry
@@ -194,60 +263,178 @@ func (fhc *FileHashCache) Set(path, hash string) error {
 	}
 
 	// Store entry
-	fhc.cache[path] = entry
-	fhc.currentMemory += entrySize
+	shard.cache[path] = entry
+	shard.currentMemory += entrySize
+	fhc.updateTotalMemory(entrySize)
 
-	logrus.Debugf("Cached file hash for: %s (memory: %d bytes, entries: %d)",
-		path, fhc.currentMemory, len(fhc.cache))
+	if logrus.IsLevelEnabled(logrus.DebugLevel) {
+		logging.AsyncDebugf("Cached file hash for: %s (shard memory: %d bytes, total entries: %d)",
+			path, shard.currentMemory, fhc.getTotalEntries())
+	}
 
 	return nil
 }
 
+// updateTotalMemory updates the approximate total memory usage
+func (fhc *FileHashCache) updateTotalMemory(delta int64) {
+	fhc.totalMemoryMu.Lock()
+	fhc.totalMemory += delta
+	if fhc.totalMemory < 0 {
+		fhc.totalMemory = 0 // Safety check
+	}
+	fhc.totalMemoryMu.Unlock()
+}
+
+// getTotalEntries returns the total number of entries across all shards
+func (fhc *FileHashCache) getTotalEntries() int {
+	total := 0
+	for _, shard := range fhc.shards {
+		shard.mu.RLock()
+		total += len(shard.cache)
+		shard.mu.RUnlock()
+	}
+	return total
+}
+
 // evictIfNeeded evicts entries if limits are exceeded
+// Works across all shards to maintain global limits
+// Note: evictInvalidEntries is called periodically in background, but we still check here
+// for immediate cleanup when needed (e.g., when adding new entry)
 func (fhc *FileHashCache) evictIfNeeded(newEntrySize int64) {
+	// Quick check: only evict invalid entries if we're close to limits
+	// Full cleanup happens in background
+	fhc.totalMemoryMu.RLock()
+	totalMemory := fhc.totalMemory
+	fhc.totalMemoryMu.RUnlock()
+
 	maxMemoryBytes := int64(fhc.maxMemoryMB) * fileHashBytesPerMegabyte
+	// Only do immediate cleanup if we're at 80% of limit
+	if totalMemory+newEntrySize > maxMemoryBytes*80/100 {
+		fhc.evictInvalidEntries()
+	}
 
-	// Evict invalid entries first (check file metadata)
+	// Check and evict by memory limit (critical - must be synchronous)
+	fhc.evictByMemoryLimit(maxMemoryBytes, newEntrySize)
+
+	// Check and evict by entry count limit (critical - must be synchronous)
+	fhc.evictByEntryLimit()
+}
+
+// startBackgroundCleanup starts a background goroutine for periodic cache cleanup
+func (fhc *FileHashCache) startBackgroundCleanup() {
+	fhc.cleanupOnce.Do(func() {
+		if atomic.CompareAndSwapInt32(&fhc.cleanupRunning, 0, 1) {
+			go fhc.backgroundCleanupWorker()
+		}
+	})
+}
+
+// backgroundCleanupWorker performs periodic cleanup of invalid cache entries
+func (fhc *FileHashCache) backgroundCleanupWorker() {
+	ticker := time.NewTicker(defaultCleanupInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-fhc.cleanupCtx.Done():
+			return
+		case <-ticker.C:
+			// Periodic cleanup of invalid entries (non-blocking for main operations)
+			fhc.evictInvalidEntries()
+		}
+	}
+}
+
+// Stop stops the background cleanup goroutine
+func (fhc *FileHashCache) Stop() {
+	if atomic.LoadInt32(&fhc.cleanupRunning) == 1 {
+		fhc.cleanupCancel()
+		atomic.StoreInt32(&fhc.cleanupRunning, 0)
+	}
+}
+
+// evictInvalidEntries removes entries that are too old or have invalid metadata
+func (fhc *FileHashCache) evictInvalidEntries() {
 	now := time.Now()
-	for path, entry := range fhc.cache {
-		// Check if entry is too old (safety check)
-		if now.Sub(entry.CachedAt) > 24*time.Hour {
-			entrySize := int64(len(path) + len(entry.Hash) + fileHashEntryMetadataOverhead)
-			delete(fhc.cache, path)
-			fhc.currentMemory -= entrySize
-			continue
-		}
+	for _, shard := range fhc.shards {
+		shard.mu.Lock()
+		for path, entry := range shard.cache {
+			shouldEvict := false
 
-		// Check if file metadata changed (quick check without lock)
-		valid, err := fhc.isEntryValidUnlocked(path, entry)
-		if err != nil || !valid {
-			entrySize := int64(len(path) + len(entry.Hash) + fileHashEntryMetadataOverhead)
-			delete(fhc.cache, path)
-			fhc.currentMemory -= entrySize
+			// Check if entry is too old (safety check)
+			if now.Sub(entry.CachedAt) > 24*time.Hour {
+				shouldEvict = true
+			} else {
+				// Check if file metadata changed (quick check without lock)
+				valid, err := fhc.isEntryValidUnlocked(path, entry)
+				if err != nil || !valid {
+					shouldEvict = true
+				}
+			}
+
+			if shouldEvict {
+				entrySize := int64(len(path) + len(entry.Hash) + fileHashEntryMetadataOverhead)
+				delete(shard.cache, path)
+				shard.currentMemory -= entrySize
+				fhc.updateTotalMemory(-entrySize)
+			}
 		}
+		shard.mu.Unlock()
 	}
+}
 
-	// Check if we still need to evict (memory limit)
-	for fhc.currentMemory+newEntrySize > maxMemoryBytes && len(fhc.cache) > 0 {
-		// Evict oldest entry (simplified: evict first found)
-		for path, entry := range fhc.cache {
-			entrySize := int64(len(path) + len(entry.Hash) + fileHashEntryMetadataOverhead)
-			delete(fhc.cache, path)
-			fhc.currentMemory -= entrySize
+// evictByMemoryLimit evicts entries until memory usage is below limit
+func (fhc *FileHashCache) evictByMemoryLimit(maxMemoryBytes, newEntrySize int64) {
+	for {
+		// Check total memory usage
+		fhc.totalMemoryMu.RLock()
+		totalMemory := fhc.totalMemory
+		fhc.totalMemoryMu.RUnlock()
+
+		if totalMemory+newEntrySize <= maxMemoryBytes {
 			break
 		}
-	}
 
-	// Check if we still need to evict (entry count limit)
-	for len(fhc.cache) >= fhc.maxEntries && len(fhc.cache) > 0 {
-		// Evict oldest entry
-		for path, entry := range fhc.cache {
-			entrySize := int64(len(path) + len(entry.Hash) + fileHashEntryMetadataOverhead)
-			delete(fhc.cache, path)
-			fhc.currentMemory -= entrySize
-			break
+		// Evict one entry
+		if !fhc.evictOneEntry() {
+			break // No more entries to evict
 		}
 	}
+}
+
+// evictByEntryLimit evicts entries until entry count is below limit
+func (fhc *FileHashCache) evictByEntryLimit() {
+	for {
+		totalEntries := fhc.getTotalEntries()
+		if totalEntries < fhc.maxEntries {
+			break
+		}
+
+		// Evict one entry
+		if !fhc.evictOneEntry() {
+			break // No more entries to evict
+		}
+	}
+}
+
+// evictOneEntry evicts a single entry from any shard
+// Returns true if an entry was evicted, false otherwise
+func (fhc *FileHashCache) evictOneEntry() bool {
+	for _, shard := range fhc.shards {
+		shard.mu.Lock()
+		if len(shard.cache) > 0 {
+			for path, entry := range shard.cache {
+				entrySize := int64(len(path) + len(entry.Hash) + fileHashEntryMetadataOverhead)
+				delete(shard.cache, path)
+				shard.currentMemory -= entrySize
+				fhc.updateTotalMemory(-entrySize)
+				shard.mu.Unlock()
+				return true
+			}
+		}
+		shard.mu.Unlock()
+	}
+	return false
 }
 
 // isEntryValidUnlocked checks entry validity without acquiring lock
@@ -271,25 +458,31 @@ func (fhc *FileHashCache) isEntryValidUnlocked(path string, entry *FileHashCache
 	return true, nil
 }
 
-// Clear removes all cached entries
+// Clear removes all cached entries across all shards
 func (fhc *FileHashCache) Clear() {
-	fhc.mu.Lock()
-	defer fhc.mu.Unlock()
-
-	fhc.cache = make(map[string]*FileHashCacheEntry)
-	fhc.currentMemory = 0
+	for _, shard := range fhc.shards {
+		shard.mu.Lock()
+		shard.cache = make(map[string]*FileHashCacheEntry)
+		shard.currentMemory = 0
+		shard.mu.Unlock()
+	}
+	fhc.totalMemoryMu.Lock()
+	fhc.totalMemory = 0
+	fhc.totalMemoryMu.Unlock()
 }
 
 // GetStats returns cache statistics
 func (fhc *FileHashCache) GetStats() map[string]interface{} {
-	fhc.mu.RLock()
-	defer fhc.mu.RUnlock()
+	fhc.totalMemoryMu.RLock()
+	totalMemory := fhc.totalMemory
+	fhc.totalMemoryMu.RUnlock()
 
 	return map[string]interface{}{
-		"entries":       len(fhc.cache),
+		"entries":       fhc.getTotalEntries(),
 		"max_entries":   fhc.maxEntries,
-		"memory_bytes":  fhc.currentMemory,
+		"memory_bytes":  totalMemory,
 		"max_memory_mb": fhc.maxMemoryMB,
+		"shard_count":   fhc.shardCount,
 	}
 }
 
@@ -314,19 +507,31 @@ func getFileHashWithCache(path string, _ util.FileContext, opts *config.KanikoOp
 
 	// Check cache first
 	if cachedHash, found := cache.Get(path); found {
-		logrus.Debugf("File hash cache hit for: %s", path)
+		if logrus.IsLevelEnabled(logrus.DebugLevel) {
+			logging.AsyncDebugf("File hash cache hit for: %s", path)
+		}
 		return cachedHash, nil
 	}
 
 	// Cache miss - compute hash
-	hash, err := util.CacheHasher()(path)
+	// Use MaxFileHashSize from options for partial hashing of large files
+	maxFileHashSize := int64(defaultMaxFileHashSizeMB * fileHashBytesPerMegabyte) // Default: 10MB
+	if opts != nil && opts.MaxFileHashSize > 0 {
+		maxFileHashSize = opts.MaxFileHashSize
+	}
+
+	// Use CacheHasherWithLimit for optimized hashing of large files
+	hasher := util.CacheHasherWithLimit(maxFileHashSize)
+	hash, err := hasher(path)
 	if err != nil {
 		return "", err
 	}
 
 	// Cache the result
 	if err := cache.Set(path, hash); err != nil {
-		logrus.Debugf("Failed to cache file hash for %s: %v", path, err)
+		if logrus.IsLevelEnabled(logrus.DebugLevel) {
+			logging.AsyncDebugf("Failed to cache file hash for %s: %v", path, err)
+		}
 		// Continue even if caching fails
 	}
 

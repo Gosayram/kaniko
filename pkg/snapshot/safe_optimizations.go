@@ -29,6 +29,7 @@ import (
 
 	"github.com/Gosayram/kaniko/pkg/config"
 	"github.com/Gosayram/kaniko/pkg/filesystem"
+	"github.com/Gosayram/kaniko/pkg/logging"
 	"github.com/Gosayram/kaniko/pkg/util"
 )
 
@@ -38,6 +39,8 @@ const (
 	minFileSizeBytes         = 2048
 	percentageMultiplier     = 100
 	averageDivisor           = 2
+	// Conservative max workers limit for I/O-bound operations
+	maxWorkersLimit = 4
 )
 
 // SafeSnapshotOptimizer provides safe optimizations for snapshot operations
@@ -164,9 +167,18 @@ type CacheStats struct {
 
 // NewSafeSnapshotOptimizer creates a new safe snapshot optimizer
 func NewSafeSnapshotOptimizer(snapshotter *Snapshotter, opts *config.KanikoOptions) *SafeSnapshotOptimizer {
-	maxWorkers := opts.MaxParallelCommands
+	// Use MaxWorkers from options if set, otherwise use conservative default
+	maxWorkers := opts.MaxWorkers
 	if maxWorkers <= 0 {
-		maxWorkers = runtime.NumCPU()
+		maxWorkers = opts.MaxParallelCommands
+	}
+	if maxWorkers <= 0 {
+		// Conservative default: min(4, NumCPU) instead of NumCPU
+		numCPU := runtime.NumCPU()
+		maxWorkers = numCPU
+		if maxWorkers > maxWorkersLimit {
+			maxWorkers = maxWorkersLimit
+		}
 	}
 
 	optimizer := &SafeSnapshotOptimizer{
@@ -182,7 +194,12 @@ func NewSafeSnapshotOptimizer(snapshotter *Snapshotter, opts *config.KanikoOptio
 	}
 
 	// Initialize components
-	optimizer.parallelHasher = NewParallelHasher(maxWorkers, snapshotter.l.hasher, opts.IntegrityCheck)
+	// Use MaxParallelHashing from options if set, otherwise use maxWorkers
+	hashWorkers := maxWorkers
+	if opts.MaxParallelHashing > 0 {
+		hashWorkers = opts.MaxParallelHashing
+	}
+	optimizer.parallelHasher = NewParallelHasher(hashWorkers, snapshotter.l.hasher, opts.IntegrityCheck)
 	optimizer.integrityChecker = NewIntegrityChecker(opts.MaxExpectedChanges)
 	optimizer.symlinkResolver = NewSafeSymlinkResolver()
 	optimizer.metadataCache = NewMetadataCache(defaultMetadataCacheSize) // Optimized for large projects
@@ -192,7 +209,16 @@ func NewSafeSnapshotOptimizer(snapshotter *Snapshotter, opts *config.KanikoOptio
 }
 
 // NewParallelHasher creates a new parallel hasher
+// Uses conservative defaults to avoid excessive CPU usage
 func NewParallelHasher(maxWorkers int, hasher func(string) (string, error), integrityCheck bool) *ParallelHasher {
+	// Apply conservative limit if not set
+	if maxWorkers <= 0 {
+		numCPU := runtime.NumCPU()
+		maxWorkers = numCPU
+		if maxWorkers > maxWorkersLimit {
+			maxWorkers = maxWorkersLimit
+		}
+	}
 	return &ParallelHasher{
 		maxWorkers:     maxWorkers,
 		hasher:         hasher,
@@ -252,16 +278,23 @@ func (sso *SafeSnapshotOptimizer) OptimizedWalkFS(
 		sso.updateStats(time.Since(start))
 	}()
 
-	logrus.Debugf("Starting optimized filesystem walk for %s", dir)
+	// Optimized logging: use async logging for hot paths (reduces CPU usage)
+	if logrus.IsLevelEnabled(logrus.DebugLevel) {
+		logging.AsyncDebugf("Starting optimized filesystem walk for %s", dir)
+	}
 
 	// 1. Parallel directory scanning
-	logrus.Debugf("Starting parallel directory scan for %s", dir)
+	if logrus.IsLevelEnabled(logrus.DebugLevel) {
+		logging.AsyncDebugf("Starting parallel directory scan for %s", dir)
+	}
 	scanResults, err := sso.parallelDirectoryScan(dir)
 	if err != nil {
 		logrus.Warnf("Parallel directory scan failed: %v, falling back to standard WalkFS", err)
 		return nil, nil, fmt.Errorf("parallel directory scan failed: %w", err)
 	}
-	logrus.Debugf("Parallel directory scan completed: found %d files", len(scanResults.files))
+	if logrus.IsLevelEnabled(logrus.DebugLevel) {
+		logging.AsyncDebugf("Parallel directory scan completed: found %d files", len(scanResults.files))
+	}
 
 	// 2. Parallel file hashing with integrity verification
 	changedFiles, err = sso.parallelFileHashing(scanResults.files)
@@ -283,14 +316,19 @@ func (sso *SafeSnapshotOptimizer) OptimizedWalkFS(
 		resolvedFiles = changedFiles
 	}
 
-	logrus.Debugf("Optimized walk completed: %d files changed", len(resolvedFiles))
+	if logrus.IsLevelEnabled(logrus.DebugLevel) {
+		logging.AsyncDebugf("Optimized walk completed: %d files changed", len(resolvedFiles))
+	}
 	return resolvedFiles, scanResults.deletedFiles, nil
 }
 
 // parallelDirectoryScan performs parallel directory scanning
 func (sso *SafeSnapshotOptimizer) parallelDirectoryScan(dir string) (*ScanResults, error) {
+	// Optimized: pre-allocate with reasonable initial capacity
+	// Estimate: typical projects have 100-1000 files, so start with 100
+	const initialCapacity = 100
 	results := &ScanResults{
-		files:        make([]string, 0),
+		files:        make([]string, 0, initialCapacity),
 		deletedFiles: make(map[string]struct{}),
 	}
 
@@ -306,7 +344,9 @@ func (sso *SafeSnapshotOptimizer) parallelDirectoryScan(dir string) (*ScanResult
 				return filepath.SkipDir
 			}
 			// For other errors, log and continue
-			logrus.Debugf("Skipping problematic path %s: %v", path, err)
+			if logrus.IsLevelEnabled(logrus.DebugLevel) {
+				logging.AsyncDebugf("Skipping problematic path %s: %v", path, err)
+			}
 			return nil
 		}
 
@@ -358,27 +398,37 @@ func (sso *SafeSnapshotOptimizer) shouldProcessFile(path string, info os.FileInf
 		}
 		for _, system := range systemHiddenFiles {
 			if baseName == system {
-				logrus.Debugf("🚫 Skipping system hidden file: %s", path)
+				if logrus.IsLevelEnabled(logrus.DebugLevel) {
+					logging.AsyncDebugf("🚫 Skipping system hidden file: %s", path)
+				}
 				return false
 			}
 		}
 		// Allow all other hidden files (including .output, .next, etc.)
-		logrus.Debugf("Processing hidden file: %s", path)
+		if logrus.IsLevelEnabled(logrus.DebugLevel) {
+			logging.AsyncDebugf("Processing hidden file: %s", path)
+		}
 	}
 
 	// Skip if in ignore list
 	if util.CheckIgnoreList(path) {
-		logrus.Debugf("🚫 Skipping ignored file: %s", path)
+		if logrus.IsLevelEnabled(logrus.DebugLevel) {
+			logging.AsyncDebugf("🚫 Skipping ignored file: %s", path)
+		}
 		return false
 	}
 
 	// Skip if too small (likely not important)
 	if info.Size() < minFileSizeBytes { // Optimized for better performance
-		logrus.Debugf("🚫 Skipping small file: %s (size: %d)", path, info.Size())
+		if logrus.IsLevelEnabled(logrus.DebugLevel) {
+			logging.AsyncDebugf("🚫 Skipping small file: %s (size: %d)", path, info.Size())
+		}
 		return false
 	}
 
-	logrus.Debugf("Processing file: %s", path)
+	if logrus.IsLevelEnabled(logrus.DebugLevel) {
+		logging.AsyncDebugf("Processing file: %s", path)
+	}
 	return true
 }
 
@@ -393,7 +443,8 @@ func (sso *SafeSnapshotOptimizer) parallelFileHashing(files []string) ([]string,
 
 // sequentialFileHashing performs sequential file hashing
 func (sso *SafeSnapshotOptimizer) sequentialFileHashing(files []string) ([]string, error) {
-	changedFiles := make([]string, 0)
+	// Optimized: pre-allocate with capacity to reduce reallocations
+	changedFiles := make([]string, 0, len(files))
 
 	for _, file := range files {
 		// Check cache first
@@ -405,14 +456,18 @@ func (sso *SafeSnapshotOptimizer) sequentialFileHashing(files []string) ([]strin
 		// Compute hash
 		hash, err := sso.parallelHasher.hasher(file)
 		if err != nil {
-			logrus.Debugf("Failed to hash file %s: %v", file, err)
+			if logrus.IsLevelEnabled(logrus.DebugLevel) {
+				logging.AsyncDebugf("Failed to hash file %s: %v", file, err)
+			}
 			continue
 		}
 
 		// Check if file changed
 		changed, err := sso.snapshotter.l.CheckFileChange(file)
 		if err != nil {
-			logrus.Debugf("Failed to check file change for %s: %v", file, err)
+			if logrus.IsLevelEnabled(logrus.DebugLevel) {
+				logging.AsyncDebugf("Failed to check file change for %s: %v", file, err)
+			}
 			continue
 		}
 		if changed {
@@ -542,7 +597,9 @@ func (ssr *SafeSymlinkResolver) SafeResolveSymlinks(paths []string) ([]string, e
 		// Resolve symlink
 		resolvedPath, err := ssr.resolveSymlink(path)
 		if err != nil {
-			logrus.Debugf("Failed to resolve symlink %s: %v", path, err)
+			if logrus.IsLevelEnabled(logrus.DebugLevel) {
+				logging.AsyncDebugf("Failed to resolve symlink %s: %v", path, err)
+			}
 			resolved = append(resolved, path) // Use original path
 			ssr.recordError()
 			continue

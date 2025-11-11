@@ -372,6 +372,14 @@ func (e *SimpleExecutor) executeGroupParallelWithCacheGroup(
 	var commandErrors []error
 	var errorMutex sync.Mutex
 
+	// Limit concurrent commands to avoid excessive CPU usage
+	// Use MaxParallelCommands from options if set, otherwise use conservative default
+	maxParallelCommands := 4 // Conservative default
+	if e.opts.MaxParallelCommands > 0 {
+		maxParallelCommands = e.opts.MaxParallelCommands
+	}
+	commandGroup.SetLimit(maxParallelCommands)
+
 	// Execute all commands in the group in parallel
 	for _, index := range group {
 		index := index // Capture for closure
