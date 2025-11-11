@@ -31,6 +31,7 @@ import (
 	"github.com/google/go-containerregistry/pkg/name"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/empty"
+	"github.com/google/go-containerregistry/pkg/v1/layout"
 	"github.com/google/go-containerregistry/pkg/v1/mutate"
 	"github.com/google/go-containerregistry/pkg/v1/tarball"
 	"github.com/google/go-containerregistry/pkg/v1/types"
@@ -938,6 +939,12 @@ func (s *stageBuilder) unpackFilesystemIfNeeded() error {
 		shouldUnpack = true
 	}
 
+	// Force unpack for final stage if materialize is enabled
+	if s.stage.Final && s.opts.Materialize {
+		logrus.Info("Unpacking rootfs as materialize is enabled for final stage.")
+		shouldUnpack = true
+	}
+
 	if !shouldUnpack {
 		logrus.Info("Skipping unpacking as no commands require it.")
 		return nil
@@ -1546,19 +1553,7 @@ func DoBuild(opts *config.KanikoOptions) (v1.Image, error) {
 	timer := timing.Start("Total Build Time")
 	defer timing.DefaultRun.Stop(timer)
 
-	// Initialize global logging manager
-	globalLogger := logging.GetGlobalManager()
-	if !globalLogger.IsInitialized() {
-		if err := globalLogger.Initialize("info", "kaniko", true); err != nil {
-			logrus.Warnf("Failed to initialize structured logging: %v", err)
-		}
-	}
-
-	// Generate build ID for tracking
-	buildID := fmt.Sprintf("build-%d", time.Now().Unix())
-	buildStartTime := time.Now()
-	// Note: We'll get the actual stage count after parsing the Dockerfile
-	globalLogger.LogBuildStart(buildID, opts.DockerfilePath, 0)
+	globalLogger, buildID, buildStartTime := initializeBuildLogging(opts)
 
 	kanikoStages, stageNameToIdx, fileContext, err := initBuildStages(opts)
 	if err != nil {
@@ -1570,9 +1565,119 @@ func DoBuild(opts *config.KanikoOptions) (v1.Image, error) {
 		return nil, err
 	}
 
+	// nolint:govet // shadow: err is intentionally reused in error handling chain
+	if err := performPreCleanup(opts); err != nil {
+		return nil, err
+	}
+
+	var contextTarball string
+	contextTarball, err = prepareBuildContext(opts, kanikoStages)
+	if err != nil {
+		return nil, err
+	}
+
+	var args *dockerfile.BuildArgs
+	args, err = initializeBuildArgsForDoBuild(opts, kanikoStages)
+	if err != nil {
+		return nil, err
+	}
+
+	return executeBuildStages(
+		kanikoStages, opts, args, crossStageDependencies,
+		stageNameToIdx, fileContext, globalLogger, buildID,
+		buildStartTime, timer, contextTarball,
+	)
+}
+
+// initializeBuildLogging initializes logging and returns logger, build ID, and start time
+func initializeBuildLogging(opts *config.KanikoOptions) (*logging.GlobalManager, string, time.Time) {
+	globalLogger := logging.GetGlobalManager()
+	if !globalLogger.IsInitialized() {
+		if err := globalLogger.Initialize("info", "kaniko", true); err != nil {
+			logrus.Warnf("Failed to initialize structured logging: %v", err)
+		}
+	}
+
+	buildID := fmt.Sprintf("build-%d", time.Now().Unix())
+	buildStartTime := time.Now()
+	globalLogger.LogBuildStart(buildID, opts.DockerfilePath, 0)
+
+	return globalLogger, buildID, buildStartTime
+}
+
+// performPreCleanup performs filesystem cleanup before build if requested
+func performPreCleanup(opts *config.KanikoOptions) error {
+	if !opts.PreCleanup {
+		return nil
+	}
+
+	logrus.Info("Cleaning filesystem before build")
+	if err := util.DeleteFilesystem(); err != nil {
+		return errors.Wrap(err, "failed to clean filesystem before build")
+	}
+
+	return nil
+}
+
+// prepareBuildContext creates a snapshot of build context if requested
+func prepareBuildContext(opts *config.KanikoOptions, kanikoStages []config.KanikoStage) (string, error) {
+	if !opts.PreserveContext {
+		return "", nil
+	}
+
+	if len(kanikoStages) <= 1 && !opts.PreCleanup && !opts.Cleanup {
+		logrus.Info("Skipping context snapshot as no-one requires it")
+		return "", nil
+	}
+
+	logrus.Info("Creating snapshot of build context")
+	snapshotter, err := makeSnapshotter(opts)
+	if err != nil {
+		return "", err
+	}
+
+	contextTarball, err := snapshotter.TakeSnapshotFS()
+	if err != nil {
+		return "", errors.Wrap(err, "failed to create context snapshot")
+	}
+
+	return contextTarball, nil
+}
+
+// initializeBuildArgsForDoBuild initializes build arguments with predefined args for DoBuild
+func initializeBuildArgsForDoBuild(
+	opts *config.KanikoOptions,
+	kanikoStages []config.KanikoStage,
+) (*dockerfile.BuildArgs, error) {
+	args := dockerfile.NewBuildArgs(opts.BuildArgs)
+	if len(kanikoStages) == 0 {
+		return args, nil
+	}
+
+	lastStage := kanikoStages[len(kanikoStages)-1]
+	if err := args.InitPredefinedArgs(opts.CustomPlatform, lastStage.BaseName); err != nil {
+		return nil, errors.Wrap(err, "failed to initialize predefined build args")
+	}
+
+	return args, nil
+}
+
+// executeBuildStages executes all build stages
+func executeBuildStages(
+	kanikoStages []config.KanikoStage,
+	opts *config.KanikoOptions,
+	args *dockerfile.BuildArgs,
+	crossStageDependencies map[int][]string,
+	stageNameToIdx map[string]string,
+	fileContext util.FileContext,
+	globalLogger *logging.GlobalManager,
+	buildID string,
+	buildStartTime time.Time,
+	timer *timing.Timer,
+	contextTarball string,
+) (v1.Image, error) {
 	digestToCacheKey := make(map[string]string)
 	stageIdxToDigest := make(map[string]string)
-	var args *dockerfile.BuildArgs
 
 	for index := range kanikoStages {
 		stage := &kanikoStages[index]
@@ -1589,14 +1694,14 @@ func DoBuild(opts *config.KanikoOptions) (v1.Image, error) {
 		}
 
 		if stage.Final {
-			// Log build completion
 			buildDuration := time.Since(buildStartTime).Milliseconds()
 			globalLogger.LogBuildComplete(buildID, buildDuration, true)
-			return handleFinalImage(sourceImage, opts, timer)
+			return handleFinalImage(sourceImage, opts, timer, contextTarball)
 		}
 
-		if err := handleNonFinalStage(index, stage, sourceImage, crossStageDependencies, args); err != nil {
-			// Log build failure
+		if err := handleNonFinalStage(
+			index, stage, sourceImage, crossStageDependencies, args, opts, contextTarball,
+		); err != nil {
 			buildDuration := time.Since(buildStartTime).Milliseconds()
 			globalLogger.LogBuildComplete(buildID, buildDuration, false)
 			globalLogger.LogError("build", "stage", err, map[string]interface{}{
@@ -1732,7 +1837,12 @@ func buildStage(
 	return sourceImage, nil
 }
 
-func handleFinalImage(sourceImage v1.Image, opts *config.KanikoOptions, t *timing.Timer) (v1.Image, error) {
+func handleFinalImage(
+	sourceImage v1.Image,
+	opts *config.KanikoOptions,
+	t *timing.Timer,
+	contextTarball string,
+) (v1.Image, error) {
 	var err error
 	sourceImage, err = mutate.CreatedAt(sourceImage, v1.Time{Time: time.Now()})
 	if err != nil {
@@ -1743,6 +1853,20 @@ func handleFinalImage(sourceImage v1.Image, opts *config.KanikoOptions, t *timin
 		sourceImage, err = mutate.Canonical(sourceImage)
 		if err != nil {
 			return nil, err
+		}
+	}
+
+	// Handle cleanup and context restoration
+	if opts.Cleanup {
+		if err := util.DeleteFilesystem(); err != nil {
+			return nil, errors.Wrap(err, "failed to delete filesystem during cleanup")
+		}
+		if opts.PreserveContext && contextTarball != "" {
+			logrus.Info("Restoring build context after cleanup")
+			if _, err := util.UnpackLocalTarArchive(contextTarball, config.RootDir); err != nil {
+				return nil, errors.Wrap(err, "failed to restore context snapshot after cleanup")
+			}
+			logrus.Info("Context restored")
 		}
 	}
 
@@ -1938,9 +2062,12 @@ func handleNonFinalStage(
 	sourceImage v1.Image,
 	crossStageDependencies map[int][]string,
 	buildArgs *dockerfile.BuildArgs,
+	opts *config.KanikoOptions,
+	contextTarball string,
 ) error {
 	if stage.SaveStage {
-		if err := saveStageAsTarball(strconv.Itoa(index), sourceImage); err != nil {
+		useOCILayout := opts.UseOCIStages || config.EnvBool("FF_KANIKO_OCI_STAGES")
+		if err := saveStageAsTarballWithOpts(strconv.Itoa(index), sourceImage, useOCILayout); err != nil {
 			return err
 		}
 	}
@@ -1982,10 +2109,20 @@ func handleNonFinalStage(
 	}
 
 	// Delete the filesystem
-	return errors.Wrap(
-		util.DeleteFilesystem(),
-		fmt.Sprintf("deleting file system after stage %d", index),
-	)
+	if err := util.DeleteFilesystem(); err != nil {
+		return errors.Wrap(err, fmt.Sprintf("deleting file system after stage %d", index))
+	}
+
+	// Restore build context if preserved (but not if pre-cleanup was used)
+	if opts.PreserveContext && !opts.PreCleanup && contextTarball != "" {
+		logrus.Info("Restoring build context after stage")
+		if _, err := util.UnpackLocalTarArchive(contextTarball, config.RootDir); err != nil {
+			return errors.Wrap(err, "failed to restore context snapshot")
+		}
+		logrus.Info("Context restored")
+	}
+
+	return nil
 }
 
 // filesToSave returns all the files matching the given pattern in deps.
@@ -2637,8 +2774,9 @@ func fetchExtraStagesParallel(extraStages []string, opts *config.KanikoOptions) 
 				return
 			}
 
-			// Save as tarball
-			if err := saveStageAsTarball(name, sourceImage); err != nil {
+			// Save as tarball or OCI layout
+			useOCILayout := opts.UseOCIStages || config.EnvBool("FF_KANIKO_OCI_STAGES")
+			if err := saveStageAsTarballWithOpts(name, sourceImage, useOCILayout); err != nil {
 				errChan <- errors.Wrapf(err, "failed to save stage as tarball %s", name)
 				return
 			}
@@ -2699,7 +2837,7 @@ func extractImageToDependencyDir(imageName string, image v1.Image) error {
 	return err
 }
 
-func saveStageAsTarball(path string, image v1.Image) error {
+func saveStageAsTarballWithOpts(path string, image v1.Image, useOCILayout bool) error {
 	t := timing.Start("Saving stage as tarball")
 	defer timing.DefaultRun.Stop(t)
 	destRef, err := name.NewTag("temp/tag", name.WeakValidation)
@@ -2711,7 +2849,27 @@ func saveStageAsTarball(path string, image v1.Image) error {
 	if err := os.MkdirAll(filepath.Dir(tarPath), DefaultDirPerm); err != nil {
 		return err
 	}
+
+	if useOCILayout {
+		p, err := layout.Write(tarPath, empty.Index)
+		if err != nil {
+			return errors.Wrap(err, "writing empty OCI layout")
+		}
+		return p.AppendImage(image, layout.WithAnnotations(map[string]string{
+			"org.opencontainers.image.ref.name": destRef.Name(),
+		}))
+	}
+
 	return tarball.WriteToFile(tarPath, destRef, image)
+}
+
+func makeSnapshotter(opts *config.KanikoOptions) (*snapshot.Snapshotter, error) {
+	hasher, err := getHasher(opts.SnapshotMode)
+	if err != nil {
+		return nil, err
+	}
+	l := snapshot.NewLayeredMap(hasher)
+	return snapshot.NewSnapshotter(l, config.RootDir), nil
 }
 
 func getHasher(snapshotMode string) (func(string) (string, error), error) {

@@ -212,7 +212,12 @@ func (rc *RegistryCache) RetrieveLayer(ck string) (v1.Image, error) {
 	transport := rc.client.Transport
 
 	// Use the pooled client's transport for the request
-	img, err := remote.Image(cacheRef, remote.WithTransport(transport), remote.WithAuthFromKeychain(creds.GetKeychain()))
+	keychain := creds.GetKeychain(&rc.Opts.RegistryOptions)
+	img, err := remote.Image(
+		cacheRef,
+		remote.WithTransport(transport),
+		remote.WithAuthFromKeychain(keychain),
+	)
 	if err != nil {
 		// Cache the error result
 		rc.resultCache.Set(ck, nil, err)

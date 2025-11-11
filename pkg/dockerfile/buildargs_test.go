@@ -255,3 +255,144 @@ func TestBuildArgs_Clone(t *testing.T) {
 		t.Error("Clone modification should not affect original")
 	}
 }
+
+func TestBuildArgs_InitPredefinedArgs(t *testing.T) {
+	tests := []struct {
+		name           string
+		customPlatform string
+		lastStage      string
+		wantErr        bool
+		checkArgs      func(t *testing.T, args *BuildArgs)
+	}{
+		{
+			name:           "default platform",
+			customPlatform: "",
+			lastStage:      "final",
+			wantErr:        false,
+			checkArgs: func(t *testing.T, args *BuildArgs) {
+				// Check that predefined args are set
+				buildPlatform, ok := args.GetAllowed("BUILDPLATFORM")
+				if !ok {
+					t.Error("BUILDPLATFORM should be set")
+				}
+				if buildPlatform == "" {
+					t.Error("BUILDPLATFORM should have a value")
+				}
+
+				targetPlatform, ok := args.GetAllowed("TARGETPLATFORM")
+				if !ok {
+					t.Error("TARGETPLATFORM should be set")
+				}
+				if targetPlatform == "" {
+					t.Error("TARGETPLATFORM should have a value")
+				}
+
+				targetStage, ok := args.GetAllowed("TARGETSTAGE")
+				if !ok {
+					t.Error("TARGETSTAGE should be set")
+				}
+				if targetStage != "final" {
+					t.Errorf("TARGETSTAGE should be 'final', got %s", targetStage)
+				}
+
+				// Check OS and ARCH
+				buildOS, ok := args.GetAllowed("BUILDOS")
+				if !ok {
+					t.Error("BUILDOS should be set")
+				}
+				if buildOS == "" {
+					t.Error("BUILDOS should have a value")
+				}
+
+				targetOS, ok := args.GetAllowed("TARGETOS")
+				if !ok {
+					t.Error("TARGETOS should be set")
+				}
+				if targetOS == "" {
+					t.Error("TARGETOS should have a value")
+				}
+			},
+		},
+		{
+			name:           "custom platform",
+			customPlatform: "linux/arm64",
+			lastStage:      "builder",
+			wantErr:        false,
+			checkArgs: func(t *testing.T, args *BuildArgs) {
+				targetPlatform, ok := args.GetAllowed("TARGETPLATFORM")
+				if !ok {
+					t.Error("TARGETPLATFORM should be set")
+				}
+				if targetPlatform != "linux/arm64" {
+					t.Errorf("TARGETPLATFORM should be 'linux/arm64', got %s", targetPlatform)
+				}
+
+				targetArch, ok := args.GetAllowed("TARGETARCH")
+				if !ok {
+					t.Error("TARGETARCH should be set")
+				}
+				if targetArch != "arm64" {
+					t.Errorf("TARGETARCH should be 'arm64', got %s", targetArch)
+				}
+
+				targetOS, ok := args.GetAllowed("TARGETOS")
+				if !ok {
+					t.Error("TARGETOS should be set")
+				}
+				if targetOS != "linux" {
+					t.Errorf("TARGETOS should be 'linux', got %s", targetOS)
+				}
+
+				targetStage, ok := args.GetAllowed("TARGETSTAGE")
+				if !ok {
+					t.Error("TARGETSTAGE should be set")
+				}
+				if targetStage != "builder" {
+					t.Errorf("TARGETSTAGE should be 'builder', got %s", targetStage)
+				}
+			},
+		},
+		{
+			name:           "invalid platform",
+			customPlatform: "invalid-platform",
+			lastStage:      "final",
+			wantErr:        true,
+			checkArgs:      nil,
+		},
+		{
+			name:           "empty last stage uses default",
+			customPlatform: "",
+			lastStage:      "",
+			wantErr:        false,
+			checkArgs: func(t *testing.T, args *BuildArgs) {
+				targetStage, ok := args.GetAllowed("TARGETSTAGE")
+				if !ok {
+					t.Error("TARGETSTAGE should be set")
+				}
+				if targetStage != "default" {
+					t.Errorf("TARGETSTAGE should be 'default', got %s", targetStage)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			args := NewBuildArgs([]string{})
+			err := args.InitPredefinedArgs(tt.customPlatform, tt.lastStage)
+
+			if tt.wantErr {
+				if err == nil {
+					t.Error("Expected error but got none")
+				}
+			} else {
+				if err != nil {
+					t.Errorf("Unexpected error: %v", err)
+				}
+				if tt.checkArgs != nil {
+					tt.checkArgs(t, args)
+				}
+			}
+		})
+	}
+}

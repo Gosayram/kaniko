@@ -52,6 +52,7 @@ type RegistryOptions struct {
 	PushRetryMaxDelay            int
 	PushRetryBackoffMultiplier   float64
 	ImageDownloadRetry           int
+	CredentialHelpers            multiArg // --credential-helpers flag
 }
 
 // KanikoOptions are options that are set by command line arguments
@@ -98,6 +99,10 @@ type KanikoOptions struct {
 	ForceBuildMetadata       bool
 	InitialFSUnpacked        bool
 	SkipPushPermissionCheck  bool
+	PreserveContext          bool // --preserve-context: preserve build context across build stages
+	UseOCIStages             bool // Use OCI layout for intermediate stages instead of tarballs
+	Materialize              bool // --materialize: guarantee final FS state even with 100% cache hit
+	PreCleanup               bool // --pre-cleanup: clean filesystem before build
 
 	// Multi-platform build options
 	MultiPlatform       multiArg         // --multi-platform=linux/amd64,linux/arm64

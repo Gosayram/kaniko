@@ -348,12 +348,33 @@ func prepareShellCommand(
 		resolvedCmdLine[i] = resolved
 	}
 
-	shell = append(shell, strings.Join(resolvedCmdLine, " "))
+	cmd := strings.Join(resolvedCmdLine, " ")
+
+	// Heredoc support: handle heredoc syntax (<<EOF)
+	if len(cmdRun.Files) == 1 && cmd == fmt.Sprintf("<<%s", cmdRun.Files[0].Name) {
+		// If we encounter a line like 'RUN <<EOF',
+		// we implicitly want the file body to be executed as a script
+		cmd += " sh"
+	}
+	for _, h := range cmdRun.Files {
+		cmd += "\n" + h.Data + h.Name
+	}
+
+	shell = append(shell, cmd)
 	return shell, nil
 }
 
 // prepareDirectCommand prepares a direct command execution
 func prepareDirectCommand(cmdRun *instructions.RunCommand, replacementEnvs []string) ([]string, error) {
+	// Heredoc support: warn if heredoc is used in exec form (not supported)
+	if len(cmdRun.Files) > 0 {
+		// https://github.com/GoogleContainerTools/kaniko/issues/1713
+		logrus.Warnf(
+			"#1713 kaniko does not support heredoc syntax in 'RUN [\"<command>\", ...]' (Exec Form) statements: %v",
+			cmdRun.Files[0].Name,
+		)
+	}
+
 	// CRITICAL FIX: Resolve environment variables in command line for direct execution
 	newCommand := make([]string, len(cmdRun.CmdLine))
 	for i, cmd := range cmdRun.CmdLine {

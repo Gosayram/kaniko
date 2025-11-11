@@ -197,7 +197,7 @@ func remoteOptions(registryName string, opts *config.RegistryOptions, customPlat
 
 	return []remote.Option{
 		remote.WithTransport(tr),
-		remote.WithAuthFromKeychain(creds.GetKeychain()),
+		remote.WithAuthFromKeychain(creds.GetKeychain(opts)),
 		remote.WithPlatform(*platform),
 	}
 }

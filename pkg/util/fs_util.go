@@ -2001,7 +2001,19 @@ func CopyFile(src, dest string, fileCtx FileContext, uid, gid int64,
 	// Safe conversion after bounds checking - gosec G115 is a false positive here
 	safeUID := uint32(uid) //nolint:gosec // bounds checked above
 	safeGID := uint32(gid) //nolint:gosec // bounds checked above
-	return false, CreateFile(dest, srcFile, mode, safeUID, safeGID)
+	if err := CreateFile(dest, srcFile, mode, safeUID, safeGID); err != nil {
+		return false, err
+	}
+
+	// Preserve mtime when copying from other stages (COPY --from preserves mtime)
+	// Note: atime preservation is handled automatically by tar.FileInfoHeader during snapshotting
+	// This matches Docker behavior and improves cache compatibility
+	if err := os.Chtimes(dest, fi.ModTime(), fi.ModTime()); err != nil {
+		logrus.Debugf("Failed to preserve mtime for %s: %v", dest, err)
+		// Non-critical: continue even if mtime preservation fails
+	}
+
+	return false, nil
 }
 
 // NewFileContextFromDockerfile creates a FileContext from dockerfile and build context
@@ -2260,8 +2272,9 @@ func setFileTimes(path string, aTime, mTime time.Time) error {
 		aTime = time.Unix(0, 0)
 	}
 
-	// We set AccessTime because its a required arg but we only care about
-	// ModTime. The file will get accessed again so AccessTime will change.
+	// Preserve both AccessTime and ModTime when extracting from tar archives
+	// This matches Docker behavior and improves compatibility
+	// Note: AccessTime may change when file is accessed, but we preserve it from the tar archive
 	if err := os.Chtimes(path, aTime, mTime); err != nil {
 		return errors.Wrapf(
 			err,

@@ -350,6 +350,7 @@ docker run -v $(pwd):/workspace \
       - [Flag `--registry-map`](#flag---registry-map)
       - [Flag `--registry-mirror`](#flag---registry-mirror)
       - [Flag `--skip-default-registry-fallback`](#flag---skip-default-registry-fallback)
+      - [Flag `--credential-helpers`](#flag---credential-helpers)
       - [Flag `--reproducible`](#flag---reproducible)
       - [Flag `--single-snapshot`](#flag---single-snapshot)
       - [Flag `--skip-push-permission-check`](#flag---skip-push-permission-check)
@@ -361,6 +362,10 @@ docker run -v $(pwd):/workspace \
       - [Flag `--tar-path`](#flag---tar-path)
       - [Flag `--target`](#flag---target)
       - [Flag `--use-new-run`](#flag---use-new-run)
+      - [Flag `--preserve-context`](#flag---preserve-context)
+      - [Flag `--use-oci-stages`](#flag---use-oci-stages)
+      - [Flag `--materialize`](#flag---materialize)
+      - [Flag `--pre-cleanup`](#flag---pre-cleanup)
       - [Flag `--verbosity`](#flag---verbosity)
       - [Flag `--ignore-var-run`](#flag---ignore-var-run)
       - [Flag `--ignore-path`](#flag---ignore-path)
@@ -385,6 +390,11 @@ docker run -v $(pwd):/workspace \
       - [Flag `--debug-output-files`](#flag---debug-output-files)
       - [Flag `--debug-level`](#flag---debug-level)
       - [Flag `--debug-components`](#flag---debug-components)
+    - [Environment Variables](#environment-variables)
+      - [Build Configuration](#build-configuration)
+      - [Network Configuration](#network-configuration)
+      - [Registry Configuration](#registry-configuration)
+      - [Credential Environment Variables](#credential-environment-variables)
       - [Flag `--image-fs-extract-retry`](#flag---image-fs-extract-retry)
       - [Flag `--image-download-retry`](#flag---image-download-retry)
       - [Flag `--incremental-snapshots`](#flag---incremental-snapshots)
@@ -509,7 +519,7 @@ docker run -v $(pwd):/workspace \
     - [Dockerfile commands `--chown` support](#dockerfile-commands---chown-support)
     - [🌐 **ADVANCED NETWORK \& REGISTRY OPERATIONS** - Enterprise Connectivity](#-advanced-network--registry-operations---enterprise-connectivity)
       - [**Network Optimization**](#network-optimization)
-      - [**Network Configuration**](#network-configuration)
+      - [**Network Configuration**](#network-configuration-1)
       - [**Registry Intelligence**](#registry-intelligence)
       - [**Registry Features**](#registry-features)
       - [**Advanced Registry Operations**](#advanced-registry-operations)
@@ -532,10 +542,10 @@ Kaniko's modern implementation includes several advanced subsystems:
 
 #### **📋 Supported Dockerfile Commands**
 - **FROM** - Base image specification with multi-platform support
-- **RUN** - Shell and direct command execution with parallel processing
-- **COPY/ADD** - File copying with `--chown` support and optimization
+- **RUN** - Shell and direct command execution with parallel processing and heredoc syntax support (`<<EOF`)
+- **COPY/ADD** - File copying with `--chown` support, optimization, and heredoc syntax support (`<<EOF`)
 - **ENV** - Environment variable management
-- **ARG** - Build argument handling
+- **ARG** - Build argument handling with predefined args (BUILDPLATFORM, TARGETPLATFORM, TARGETOS, TARGETARCH, TARGETSTAGE, etc.)
 - **USER** - User switching with security validation
 - **WORKDIR** - Working directory management
 - **EXPOSE** - Port exposure
@@ -1191,6 +1201,29 @@ export IFS=''
 /kaniko/executor --build-arg "MY_VAR='value with spaces'" ...
 ```
 
+**Predefined Build Arguments**: Kaniko automatically provides the following predefined build arguments that are available in your Dockerfile:
+
+- `BUILDPLATFORM` - Platform of the build machine (e.g., `linux/amd64`)
+- `BUILDOS` - Operating system of the build machine (e.g., `linux`)
+- `BUILDOSVERSION` - OS version of the build machine
+- `BUILDARCH` - Architecture of the build machine (e.g., `amd64`)
+- `BUILDVARIANT` - Variant of the build architecture (e.g., `v7` for ARM)
+- `TARGETPLATFORM` - Platform of the target image (e.g., `linux/arm64`)
+- `TARGETOS` - Operating system of the target image (e.g., `linux`)
+- `TARGETOSVERSION` - OS version of the target image
+- `TARGETARCH` - Architecture of the target image (e.g., `arm64`)
+- `TARGETVARIANT` - Variant of the target architecture
+- `TARGETSTAGE` - Name of the target build stage (or `default` if not specified)
+
+These predefined arguments are automatically initialized and can be used in your Dockerfile ARG instructions. They are particularly useful for multi-platform builds and conditional logic based on build or target platform.
+
+**Example Dockerfile usage**:
+```dockerfile
+ARG TARGETPLATFORM
+ARG TARGETARCH
+RUN echo "Building for ${TARGETPLATFORM} with architecture ${TARGETARCH}"
+```
+
 #### Flag `--cache`
 
 Set this flag as `--cache=true` to opt into caching with kaniko.
@@ -1459,6 +1492,24 @@ Set this flag if you want the build process to fail if none of the mirrors liste
 
 If [registry-mirror](#flag---registry-mirror) is not set or is empty, this flag is ignored.
 
+#### Flag `--credential-helpers`
+
+Set this flag to selectively enable credential helpers for registry authentication. You can specify multiple helpers by setting the flag repeatedly. Available helpers: `env`, `google`, `ecr`, `acr`, `gitlab`.
+
+**Default behavior**: If not specified, all available credential helpers are used.
+
+**Examples**:
+- `--credential-helpers=env` - Use only environment-based credentials
+- `--credential-helpers=google --credential-helpers=ecr` - Use Google and ECR helpers
+- `--credential-helpers=""` - Disable all credential helpers
+
+**Supported helpers**:
+- `env` - Environment variable-based credentials (DOCKER_USERNAME, DOCKER_PASSWORD, etc.)
+- `google` - Google Container Registry credentials
+- `ecr` - Amazon ECR credentials
+- `acr` - Azure Container Registry credentials
+- `gitlab` - GitLab Container Registry credentials
+
 #### Flag `--reproducible`
 
 Set this flag to strip timestamps out of the built image and make it reproducible.
@@ -1508,6 +1559,47 @@ Set this flag to indicate which build stage is the target build stage.
 #### Flag `--use-new-run`
 
 Using this flag enables an experimental implementation of the Run command which does not rely on snapshotting at all. In this approach, in order to compute which files were changed, a marker file is created before executing the Run command. Then the entire filesystem is walked (takes ~1-3 seconds for 700Kfiles) to find all files whose ModTime is greater than the marker file. With this new run command implementation, the total build time is reduced seeing performance improvements in the range of ~75%. This new run mode trades off accuracy/correctness in some cases (potential for missed files in a "snapshot") for improved performance by avoiding the full filesystem snapshots.
+
+#### Flag `--preserve-context`
+
+Set this flag to preserve build context across build stages by taking a snapshot of the full filesystem before build and restoring it after switching stages. The context is also restored at the end if used together with `--cleanup`.
+
+This is useful for multi-stage builds where you need to maintain the build context across different stages, especially when stages modify the filesystem in ways that need to be preserved.
+
+**Example**: `--preserve-context` - Preserves build context across all stages
+
+#### Flag `--use-oci-stages`
+
+Set this flag to use OCI image layout for intermediate stages instead of tarballs. This improves performance and OCI compatibility. Can also be enabled via `FF_KANIKO_OCI_STAGES` environment variable.
+
+**Benefits**:
+- Better performance for multi-stage builds
+- Improved OCI compliance
+- More efficient storage of intermediate stages
+
+**Example**: `--use-oci-stages` or set `FF_KANIKO_OCI_STAGES=true`
+
+#### Flag `--materialize`
+
+Set this flag to guarantee that the final state of the filesystem corresponds to what was specified as the build target, even if we have 100% cache hit rate and wouldn't need to unpack any layers.
+
+This ensures that the final image filesystem is fully materialized, which is important for:
+- Verifying the final image state
+- Ensuring all files are present even with perfect cache hits
+- Debugging and validation scenarios
+
+**Example**: `--materialize` - Forces filesystem materialization for final stage
+
+#### Flag `--pre-cleanup`
+
+Set this flag to clean the filesystem prior to build, allowing customized kaniko images to work properly. This is useful when you need a clean filesystem state before starting the build process.
+
+**Use cases**:
+- Custom kaniko images with pre-existing files
+- Ensuring clean build environment
+- Debugging filesystem-related issues
+
+**Example**: `--pre-cleanup` - Cleans filesystem before build starts
 
 #### Flag `--verbosity`
 
@@ -1615,6 +1707,46 @@ Specify specific components to debug (comma-separated). Allows fine-grained cont
 - `KANIKO_DEBUG=true` - Enable full debug mode
 - `KANIKO_DEBUG_LEVEL=<level>` - Set debug log level
 - `KANIKO_DEBUG_COMPONENTS=<components>` - Set debug components (comma-separated)
+
+### Environment Variables
+
+Kaniko supports several environment variables for configuration:
+
+#### Build Configuration
+
+- `FF_KANIKO_OCI_STAGES` - Enable OCI image layout for intermediate stages instead of tarballs. Set to `true`, `1`, `yes`, or `on` to enable. This is equivalent to using the `--use-oci-stages` flag.
+
+#### Network Configuration
+
+- `FF_KANIKO_DISABLE_HTTP2` - Disable HTTP/2.0 for compatibility with registries that don't support it. Set to `true`, `1`, `yes`, or `on` to disable HTTP/2 and force HTTP/1.1. This is useful when working with registries that have issues with HTTP/2 protocol.
+
+**Example**:
+```bash
+export FF_KANIKO_OCI_STAGES=true
+export FF_KANIKO_DISABLE_HTTP2=true
+```
+
+#### Registry Configuration
+
+- `KANIKO_NO_PUSH` - Equivalent to `--no-push` flag. Set to disable pushing images to registry.
+- `KANIKO_REGISTRY_MAP` - Equivalent to `--registry-map` flag. Define registry remapping.
+- `KANIKO_REGISTRY_MIRROR` - Equivalent to `--registry-mirror` flag. Define registry mirror.
+- `KANIKO_DIR` - Equivalent to `--kaniko-dir` flag. Set kaniko directory path.
+
+#### Credential Environment Variables
+
+When using the `env` credential helper (via `--credential-helpers=env`), the following environment variables can be used for authentication:
+
+- `DOCKER_USERNAME` - Username for Docker registry authentication
+- `DOCKER_PASSWORD` - Password for Docker registry authentication
+- `DOCKER_REGISTRY` - Registry URL (optional, defaults to Docker Hub)
+
+**Example**:
+```bash
+export DOCKER_USERNAME=myuser
+export DOCKER_PASSWORD=mypassword
+export DOCKER_REGISTRY=registry.example.com
+```
 
 #### Flag `--image-fs-extract-retry`
 

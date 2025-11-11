@@ -15,7 +15,8 @@ limitations under the License.
 */
 
 // Package creds provides authentication keychain functionality for container registries.
-// It supports multiple credential helpers including AWS ECR, Azure ACR, GitLab, and Google Container Registry.
+// It supports multiple credential helpers including AWS ECR, Azure ACR, GitLab, Google Container Registry,
+// and environment-based credentials.
 package creds
 
 import (
@@ -26,15 +27,57 @@ import (
 	gitlab "github.com/ePirat/docker-credential-gitlabci/pkg/credhelper"
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/v1/google"
+	"github.com/sirupsen/logrus"
+
+	"github.com/Gosayram/kaniko/pkg/config"
 )
 
 // GetKeychain returns a keychain for accessing container registries.
-func GetKeychain() authn.Keychain {
-	return authn.NewMultiKeychain(
-		authn.DefaultKeychain,
-		google.Keychain,
-		authn.NewKeychainFromHelper(ecr.NewECRHelper(ecr.WithLogger(io.Discard))),
-		authn.NewKeychainFromHelper(credhelper.NewACRCredentialsHelper()),
-		authn.NewKeychainFromHelper(gitlab.NewGitLabCredentialsHelper()),
-	)
+// If opts is nil or CredentialHelpers is empty, it uses all available helpers by default.
+// Supported helpers: "env", "google", "ecr", "acr", "gitlab"
+func GetKeychain(opts *config.RegistryOptions) authn.Keychain {
+	var helpers []string
+
+	if opts == nil || len(opts.CredentialHelpers) == 0 {
+		// Default: use all available helpers
+		helpers = []string{"env", "google", "ecr", "acr", "gitlab"}
+	} else {
+		helpers = opts.CredentialHelpers
+	}
+
+	keychains := []authn.Keychain{authn.DefaultKeychain}
+	for _, source := range helpers {
+		switch source {
+		case "":
+			logrus.Info("all credential helpers disabled")
+		case "env":
+			keychains = append(keychains,
+				authn.NewKeychainFromHelper(EnvCredentialsHelper),
+			)
+		case "google":
+			keychains = append(keychains, google.Keychain)
+		case "ecr":
+			keychains = append(keychains,
+				authn.NewKeychainFromHelper(
+					ecr.NewECRHelper(ecr.WithLogger(io.Discard)),
+				),
+			)
+		case "acr":
+			keychains = append(keychains,
+				authn.NewKeychainFromHelper(
+					credhelper.NewACRCredentialsHelper(),
+				),
+			)
+		case "gitlab":
+			keychains = append(keychains,
+				authn.NewKeychainFromHelper(
+					gitlab.NewGitLabCredentialsHelper(),
+				),
+			)
+		default:
+			logrus.Warnf("Unknown credential helper %q, skipping.", source)
+		}
+	}
+
+	return authn.NewMultiKeychain(keychains...)
 }

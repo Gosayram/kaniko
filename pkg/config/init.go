@@ -53,3 +53,9 @@ func Initialize() {
 	RootDir = constants.RootDir
 	MountInfoPath = constants.MountInfoPath
 }
+
+// EnvBool returns true if the environment variable is set to a truthy value
+func EnvBool(key string) bool {
+	val := os.Getenv(key)
+	return val == "true" || val == "1" || val == "yes" || val == "on"
+}

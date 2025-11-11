@@ -598,6 +598,9 @@ func addRegistryFlags() {
 		"If an image is not found on any mirrors (defined with registry-mirror) "+
 			"do not fallback to the default registry. "+
 			"If registry-mirror is not defined, this flag is ignored.")
+	RootCmd.PersistentFlags().VarP(&opts.CredentialHelpers, "credential-helpers", "",
+		"Use these credential helpers automatically, select from (env, google, ecr, acr, gitlab). "+
+			"Set it repeatedly for multiple helpers, defaults to all, set it to empty string to deactivate.")
 }
 
 // addCacheFlags adds caching-related flags
@@ -658,10 +661,12 @@ func addBasicBuildFlags() {
 		"Strip timestamps out of the image to make it reproducible")
 	RootCmd.PersistentFlags().BoolVarP(&opts.NoPush, "no-push", "", false,
 		"Do not push the image to the registry")
+	// Set default value before registering the flag
+	opts.Compression = config.ZStd
 	RootCmd.PersistentFlags().VarP(&opts.Compression, "compression", "",
 		"Compression algorithm (gzip, zstd). Default: zstd for better performance")
 	RootCmd.PersistentFlags().IntVarP(&opts.CompressionLevel, "compression-level", "", defaultCompressionLevel,
-		"Compression level (default: 3 for zstd, balance between speed and size)")
+		"Compression level (default: 2 for zstd, balance between speed and CPU usage)")
 	RootCmd.PersistentFlags().BoolVarP(&opts.Cleanup, "cleanup", "", false,
 		"Clean the filesystem at the end")
 	RootCmd.PersistentFlags().VarP(&opts.Labels, "label", "",
@@ -671,6 +676,17 @@ func addBasicBuildFlags() {
 			"even the unnecessaries ones until it reaches the target stage / end of Dockerfile")
 	RootCmd.PersistentFlags().BoolVarP(&opts.RunV2, "use-new-run", "", false,
 		"Use the experimental run implementation for detecting changes without requiring file system snapshots.")
+	RootCmd.PersistentFlags().BoolVarP(&opts.PreserveContext, "preserve-context", "", false,
+		"Preserve build context across build stages by taking a snapshot of the full filesystem "+
+			"before build and restore it after we switch stages. Restores in the end too if passed together with 'cleanup'")
+	RootCmd.PersistentFlags().BoolVarP(&opts.UseOCIStages, "use-oci-stages", "", false,
+		"Use OCI image layout for intermediate stages instead of tarballs. "+
+			"Improves performance and OCI compatibility. Can also be enabled via FF_KANIKO_OCI_STAGES environment variable.")
+	RootCmd.PersistentFlags().BoolVarP(&opts.Materialize, "materialize", "", false,
+		"Guarantee that the final state of the file system corresponds to what was specified "+
+			"as the build target, even if we have 100% cache hitrate and wouldn't need to unpack any layers")
+	RootCmd.PersistentFlags().BoolVarP(&opts.PreCleanup, "pre-cleanup", "", false,
+		"Clean the filesystem prior to build, allowing customized kaniko images to work properly")
 }
 
 func addOutputFlags() {
