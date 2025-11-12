@@ -358,9 +358,18 @@ func (s *Snapshotter) scanFullFilesystem() (filesToAdd, filesToWhiteout []string
 	changedPaths, deletedPaths, err := optimizer.OptimizedWalkFS(s.directory, s.l.GetCurrentPaths())
 	walkDuration := time.Since(startTime)
 	if err != nil {
-		logrus.Errorf("Optimized filesystem walk failed after %v: %v", walkDuration, err)
-		// Simplified: no fallback - if optimizer fails, return error
-		return nil, nil, errors.Wrap(err, "optimized filesystem walk failed")
+		logrus.Warnf("Optimized filesystem walk failed after %v: %v, falling back to standard WalkFS", walkDuration, err)
+		// Fallback to standard WalkFS implementation
+		changedPaths, deletedPaths = util.WalkFS(s.directory, s.l.GetCurrentPaths(), s.l.CheckFileChange)
+		// Resolve paths safely
+		var resolveErr error
+		changedPaths, resolveErr = filesystem.ResolvePaths(changedPaths, s.ignorelist)
+		if resolveErr != nil {
+			return nil, nil, errors.Wrap(resolveErr, "failed to resolve paths in fallback")
+		}
+		walkDuration = time.Since(startTime)
+		logrus.Infof("Fallback WalkFS completed in %v: found %d changed files, %d deleted files",
+			walkDuration, len(changedPaths), len(deletedPaths))
 	}
 	if walkDuration > 10*time.Second {
 		logrus.Infof("Filesystem walk completed in %v: found %d changed files, %d deleted files",

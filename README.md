@@ -398,6 +398,7 @@ docker run -v $(pwd):/workspace \
       - [Network Configuration](#network-configuration)
       - [Timeout Configuration](#timeout-configuration)
       - [Resource Limits Configuration](#resource-limits-configuration)
+      - [Directory Hashing Configuration](#directory-hashing-configuration)
       - [Registry Configuration](#registry-configuration)
       - [Credential Environment Variables](#credential-environment-variables)
       - [Flag `--image-fs-extract-retry`](#flag---image-fs-extract-retry)
@@ -1785,11 +1786,25 @@ export HASH_DIR_TIMEOUT=15m
 
 #### Resource Limits Configuration
 
-- `MAX_FILES_PROCESSED` - Maximum number of files to process during directory scanning. Defaults to `100000` (100k files). This helps prevent resource exhaustion on very large projects.
+- `MAX_FILES_PROCESSED` - Maximum number of files to process during directory scanning. Defaults to `1000000` (1M files). This helps prevent resource exhaustion on very large projects. When the limit is exceeded, Kaniko automatically falls back to a standard filesystem walk.
 
 **Example**:
 ```bash
-export MAX_FILES_PROCESSED=200000
+export MAX_FILES_PROCESSED=2000000
+```
+
+#### Directory Hashing Configuration
+
+- `USE_ADAPTIVE_DIR_HASH` - Enable adaptive directory hashing strategy for better performance on large monorepos. Defaults to `true`. When enabled:
+  - Small files (<10MB) are hashed using full content hashing for maximum accuracy
+  - Large files (>=10MB) are hashed using metadata-only (mtime, size, mode, uid, gid) for better performance
+  - Directories with >1000 files use metadata-only hashing for all files
+  - This can improve directory hashing performance by 10-100x for large projects
+  - Set to `false` to use the legacy timeout-based hashing approach
+
+**Example**:
+```bash
+export USE_ADAPTIVE_DIR_HASH=true
 ```
 
 #### Registry Configuration
