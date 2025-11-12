@@ -36,8 +36,13 @@ const (
 	mbToBytes           = 1024 * 1024
 	percentageBase      = 100
 	directoryPerms      = 0o750
-	// Conservative max workers limit for I/O-bound operations
-	maxWorkersLimit = 4
+	// Increased max workers limit for I/O-bound operations
+	// min(8, GOMAXPROCS * 2) for better I/O throughput
+	maxWorkersLimit = 8
+	// Small file threshold for batching optimization (per performance plan)
+	smallFileThreshold = 1 * mbToBytes // 1MB
+	// Batch size for small files (per performance plan: optimize I/O operations)
+	smallFileBatchSize = 10 // Process up to 10 small files in a batch
 )
 
 // AdvancedCopy provides high-performance file copying with sendfile() and parallel processing
@@ -86,10 +91,11 @@ type CopyTask struct {
 // Uses conservative defaults to avoid excessive CPU usage
 func NewAdvancedCopy(maxWorkers, bufferSize int, useSendfile bool) *AdvancedCopy {
 	if maxWorkers <= 0 {
-		// Conservative default: min(4, NumCPU) for I/O operations
-		// Copy operations are I/O bound, not CPU bound
-		numCPU := runtime.NumCPU()
-		maxWorkers = numCPU
+		// Use GOMAXPROCS for better resource utilization
+		// Copy operations are I/O bound, so we can use more workers
+		gomaxprocs := runtime.GOMAXPROCS(0)
+		const concurrencyMultiplier = 2
+		maxWorkers = gomaxprocs * concurrencyMultiplier
 		if maxWorkers > maxWorkersLimit {
 			maxWorkers = maxWorkersLimit
 		}
@@ -114,6 +120,7 @@ func NewAdvancedCopy(maxWorkers, bufferSize int, useSendfile bool) *AdvancedCopy
 }
 
 // CopyFiles copies multiple files in parallel
+// Per performance plan: optimizes I/O operations with batching for small files
 func (ac *AdvancedCopy) CopyFiles(tasks []CopyTask) error {
 	// Reduced logging - only log summary statistics, not start/completion for each operation
 
@@ -124,68 +131,104 @@ func (ac *AdvancedCopy) CopyFiles(tasks []CopyTask) error {
 		ac.stats.TotalBytes += task.Size
 	}
 
-	// Create worker pool
-	var wg sync.WaitGroup
-	errorChan := make(chan error, len(tasks))
-
+	// Separate small and large files for optimized processing (per performance plan)
+	smallFiles := make([]CopyTask, 0)
+	largeFiles := make([]CopyTask, 0)
 	for _, task := range tasks {
-		wg.Add(1)
-		go func(t CopyTask) {
-			defer wg.Done()
-
-			// Check context before starting work
-			select {
-			case <-ac.ctx.Done():
-				return
-			default:
-			}
-
-			// Acquire worker
-			select {
-			case ac.workers <- struct{}{}:
-			case <-ac.ctx.Done():
-				return
-			}
-			defer func() {
-				select {
-				case <-ac.workers:
-				case <-ac.ctx.Done():
-				}
-			}()
-
-			// Check context again before copying
-			select {
-			case <-ac.ctx.Done():
-				return
-			default:
-			}
-
-			// Copy file
-			if err := ac.copySingleFile(&t); err != nil {
-				// Check context before sending error
-				select {
-				case errorChan <- fmt.Errorf("failed to copy %s to %s: %w", t.Src, t.Dst, err):
-					ac.recordError()
-				case <-ac.ctx.Done():
-					return
-				}
-			} else {
-				ac.recordSuccess(t.Size)
-			}
-		}(task)
+		if task.Size < smallFileThreshold {
+			smallFiles = append(smallFiles, task)
+		} else {
+			largeFiles = append(largeFiles, task)
+		}
 	}
 
-	// Wait for all workers to complete
+	// Process small files in batches for better I/O efficiency
+	if len(smallFiles) > 0 {
+		if err := ac.copySmallFilesBatched(smallFiles); err != nil {
+			return err
+		}
+	}
+
+	// Process large files individually (already optimized with sendfile)
+	if len(largeFiles) == 0 {
+		// All files were small, update stats and return
+		ac.updateFinalStats()
+		return nil
+	}
+
+	if err := ac.copyLargeFiles(largeFiles); err != nil {
+		return err
+	}
+
+	// Update final statistics
+	ac.updateFinalStats()
+	return nil
+}
+
+// copyLargeFiles processes large files in parallel using worker pool
+func (ac *AdvancedCopy) copyLargeFiles(largeFiles []CopyTask) error {
+	var wg sync.WaitGroup
+	errorChan := make(chan error, len(largeFiles))
+
+	for i := range largeFiles {
+		wg.Add(1)
+		go ac.copyLargeFileWorker(&wg, &largeFiles[i], errorChan)
+	}
+
 	wg.Wait()
 	close(errorChan)
 
-	// Check for errors
 	var errors []error
 	for err := range errorChan {
 		errors = append(errors, err)
 	}
 
-	// Update final statistics
+	if len(errors) > 0 {
+		return fmt.Errorf("copy completed with %d errors: %v", len(errors), errors[0])
+	}
+
+	return nil
+}
+
+// copyLargeFileWorker handles copying a single large file in a worker goroutine
+func (ac *AdvancedCopy) copyLargeFileWorker(wg *sync.WaitGroup, task *CopyTask, errorChan chan<- error) {
+	defer wg.Done()
+
+	if ac.ctx.Err() != nil {
+		return
+	}
+
+	// Acquire worker
+	select {
+	case ac.workers <- struct{}{}:
+	case <-ac.ctx.Done():
+		return
+	}
+	defer func() {
+		select {
+		case <-ac.workers:
+		case <-ac.ctx.Done():
+		}
+	}()
+
+	if ac.ctx.Err() != nil {
+		return
+	}
+
+	// Copy file
+	if err := ac.copySingleFile(task); err != nil {
+		select {
+		case errorChan <- fmt.Errorf("failed to copy %s to %s: %w", task.Src, task.Dst, err):
+			ac.recordError()
+		case <-ac.ctx.Done():
+		}
+	} else {
+		ac.recordSuccess(task.Size)
+	}
+}
+
+// updateFinalStats updates final statistics and logs them
+func (ac *AdvancedCopy) updateFinalStats() {
 	ac.stats.EndTime = time.Now()
 	ac.stats.Duration = ac.stats.EndTime.Sub(ac.stats.StartTime)
 	if ac.stats.Duration > 0 {
@@ -194,12 +237,78 @@ func (ac *AdvancedCopy) CopyFiles(tasks []CopyTask) error {
 
 	// Log statistics
 	ac.logStatistics()
+}
 
-	if len(errors) > 0 {
-		return fmt.Errorf("copy completed with %d errors: %v", len(errors), errors[0])
+// copySmallFilesBatched copies small files in batches for better I/O efficiency
+// Per performance plan: optimize I/O operations with batching
+func (ac *AdvancedCopy) copySmallFilesBatched(tasks []CopyTask) error {
+	// Process small files in batches
+	for i := 0; i < len(tasks); i += smallFileBatchSize {
+		end := i + smallFileBatchSize
+		if end > len(tasks) {
+			end = len(tasks)
+		}
+		batch := tasks[i:end]
+
+		// Process batch in parallel
+		var wg sync.WaitGroup
+		errorChan := make(chan error, len(batch))
+
+		for _, task := range batch {
+			wg.Add(1)
+			go func(t CopyTask) {
+				defer wg.Done()
+
+				// Check context
+				select {
+				case <-ac.ctx.Done():
+					return
+				default:
+				}
+
+				// Acquire worker
+				select {
+				case ac.workers <- struct{}{}:
+				case <-ac.ctx.Done():
+					return
+				}
+				defer func() {
+					select {
+					case <-ac.workers:
+					case <-ac.ctx.Done():
+					}
+				}()
+
+				// Copy file (small files use buffer copy for consistency)
+				if err := ac.copyWithBuffer(&t); err != nil {
+					select {
+					case errorChan <- fmt.Errorf("failed to copy %s to %s: %w", t.Src, t.Dst, err):
+						ac.recordError()
+					case <-ac.ctx.Done():
+						return
+					}
+				} else {
+					ac.recordSuccess(t.Size)
+					ac.recordBufferCopy()
+				}
+			}(task)
+		}
+
+		// Wait for batch to complete
+		wg.Wait()
+		close(errorChan)
+
+		// Check for errors in batch
+		var errors []error
+		for err := range errorChan {
+			errors = append(errors, err)
+		}
+
+		if len(errors) > 0 {
+			return fmt.Errorf("batch copy failed with %d errors: %v", len(errors), errors[0])
+		}
 	}
 
-	// Removed completion log - statistics are logged in logStatistics()
 	return nil
 }
 

@@ -489,6 +489,7 @@ func writeWhiteoutsToTar(t util.Tar, whiteouts []string, addedPaths map[string]b
 }
 
 // writeFilesToTar writes files to tar with caching
+// Optimized: sorts files by size (small files first) for better I/O performance
 func writeFilesToTar(
 	t util.Tar,
 	files []string,
@@ -497,7 +498,42 @@ func writeFilesToTar(
 ) ([]string, error) {
 	var missingFiles []string
 
+	// Optimize file order: sort by size (small files first) for better I/O performance
+	// This allows faster initial progress and better cache locality
+	type fileWithSize struct {
+		path string
+		size int64
+	}
+	filesWithSize := make([]fileWithSize, 0, len(files))
 	for _, path := range files {
+		fi, ok := fileStatsCache[path]
+		if !ok {
+			// If not in cache, stat it
+			var err error
+			fi, err = os.Lstat(path)
+			if err != nil {
+				if os.IsNotExist(err) {
+					missingFiles = append(missingFiles, path)
+					continue
+				}
+				// For other errors, use size 0 (will be processed normally)
+				filesWithSize = append(filesWithSize, fileWithSize{path: path, size: 0})
+				continue
+			}
+			// Cache it for later use
+			fileStatsCache[path] = fi
+		}
+		filesWithSize = append(filesWithSize, fileWithSize{path: path, size: fi.Size()})
+	}
+
+	// Sort by size: small files first for faster initial progress
+	sort.Slice(filesWithSize, func(i, j int) bool {
+		return filesWithSize[i].size < filesWithSize[j].size
+	})
+
+	// Process files in optimized order
+	for _, fileInfo := range filesWithSize {
+		path := fileInfo.path
 		fi, statErr := getFileInfoWithCache(path, fileStatsCache)
 		if statErr != nil {
 			if os.IsNotExist(statErr) {

@@ -34,8 +34,9 @@ const (
 	adjustmentCooldownSec = 5
 	sleepIntervalMs       = 10
 	mixedTaskMultiplier   = 1.5
-	// Maximum absolute limit for workers to prevent excessive CPU usage
-	maxWorkersAbsoluteLimit = 8
+	// Maximum absolute limit for workers - increased for better CPU utilization
+	// min(32, GOMAXPROCS * 4) for adaptive worker pool
+	maxWorkersAbsoluteLimit = 32
 )
 
 // AdaptiveWorkerPool provides an adaptive worker pool that adjusts size based on workload
@@ -85,10 +86,10 @@ func NewAdaptiveWorkerPool(minWorkers, maxWorkers int) *AdaptiveWorkerPool {
 		minWorkers = 1
 	}
 	if maxWorkers <= 0 {
-		// Conservative default: min(8, NumCPU) instead of NumCPU * 2
-		// This prevents excessive CPU usage when multiple builds run in parallel
-		numCPU := runtime.NumCPU()
-		maxWorkers = numCPU
+		// Use GOMAXPROCS for better resource utilization
+		gomaxprocs := runtime.GOMAXPROCS(0)
+		const concurrencyMultiplier = 4
+		maxWorkers = gomaxprocs * concurrencyMultiplier
 		if maxWorkers > maxWorkersAbsoluteLimit {
 			maxWorkers = maxWorkersAbsoluteLimit
 		}
@@ -316,23 +317,23 @@ func (awp *AdaptiveWorkerPool) WaitForCompletion() {
 }
 
 // GetOptimalWorkerCount calculates the optimal number of workers based on system resources
-// Uses conservative limits to avoid excessive CPU usage
+// Uses GOMAXPROCS for better resource utilization
 func GetOptimalWorkerCount(taskType string) int {
-	numCPU := runtime.NumCPU()
+	gomaxprocs := runtime.GOMAXPROCS(0)
 	var optimal int
 
 	switch taskType {
 	case "cpu_intensive":
-		optimal = numCPU
+		optimal = gomaxprocs
 	case "io_intensive":
-		optimal = int(float64(numCPU) * ioIntensiveMultiplier)
+		optimal = int(float64(gomaxprocs) * ioIntensiveMultiplier)
 	case "mixed":
-		optimal = int(float64(numCPU) * mixedTaskMultiplier)
+		optimal = int(float64(gomaxprocs) * mixedTaskMultiplier)
 	default:
-		optimal = numCPU
+		optimal = gomaxprocs
 	}
 
-	// Apply absolute limit to prevent excessive CPU usage
+	// Apply absolute limit
 	if optimal > maxWorkersAbsoluteLimit {
 		optimal = maxWorkersAbsoluteLimit
 	}

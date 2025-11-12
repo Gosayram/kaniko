@@ -74,6 +74,10 @@ type FileHashCache struct {
 	cleanupCancel  context.CancelFunc
 	cleanupOnce    sync.Once
 	cleanupRunning int32 // Atomic flag
+
+	// Cache statistics (per performance plan: optimize cache usage)
+	hits   int64 // Atomic counter for cache hits
+	misses int64 // Atomic counter for cache misses
 }
 
 const (
@@ -471,18 +475,54 @@ func (fhc *FileHashCache) Clear() {
 	fhc.totalMemoryMu.Unlock()
 }
 
-// GetStats returns cache statistics
+// GetStats returns cache statistics (per performance plan: optimize cache usage)
 func (fhc *FileHashCache) GetStats() map[string]interface{} {
 	fhc.totalMemoryMu.RLock()
 	totalMemory := fhc.totalMemory
 	fhc.totalMemoryMu.RUnlock()
 
+	hits := atomic.LoadInt64(&fhc.hits)
+	misses := atomic.LoadInt64(&fhc.misses)
+	totalRequests := hits + misses
+	var hitRate float64
+	if totalRequests > 0 {
+		const percentageBase = 100
+		hitRate = float64(hits) / float64(totalRequests) * percentageBase
+	}
+
 	return map[string]interface{}{
-		"entries":       fhc.getTotalEntries(),
-		"max_entries":   fhc.maxEntries,
-		"memory_bytes":  totalMemory,
-		"max_memory_mb": fhc.maxMemoryMB,
-		"shard_count":   fhc.shardCount,
+		"entries":        fhc.getTotalEntries(),
+		"max_entries":    fhc.maxEntries,
+		"memory_bytes":   totalMemory,
+		"max_memory_mb":  fhc.maxMemoryMB,
+		"shard_count":    fhc.shardCount,
+		"cache_hits":     hits,
+		"cache_misses":   misses,
+		"total_requests": totalRequests,
+		"hit_rate_pct":   hitRate,
+	}
+}
+
+// LogStats logs cache statistics (per performance plan: optimize cache usage)
+func (fhc *FileHashCache) LogStats() {
+	if fhc == nil {
+		return
+	}
+	stats := fhc.GetStats()
+	hits := stats["cache_hits"].(int64)
+	misses := stats["cache_misses"].(int64)
+	totalRequests := stats["total_requests"].(int64)
+	hitRate := stats["hit_rate_pct"].(float64)
+
+	if totalRequests > 0 {
+		const percentageBase = 100
+		const bytesPerKB = 1024
+		memoryMB := float64(stats["memory_bytes"].(int64)) / bytesPerKB / bytesPerKB
+		maxMemoryMB := float64(stats["max_memory_mb"].(int))
+		logrus.Infof("File hash cache statistics: Total requests: %d, Hits: %d (%.1f%%), "+
+			"Misses: %d (%.1f%%), Entries: %d/%d, Memory: %.1fMB/%.1fMB",
+			totalRequests, hits, hitRate, misses, percentageBase-hitRate,
+			stats["entries"].(int), stats["max_entries"].(int), memoryMB, maxMemoryMB)
 	}
 }
 
@@ -507,6 +547,7 @@ func getFileHashWithCache(path string, _ util.FileContext, opts *config.KanikoOp
 
 	// Check cache first
 	if cachedHash, found := cache.Get(path); found {
+		atomic.AddInt64(&cache.hits, 1)
 		if logrus.IsLevelEnabled(logrus.DebugLevel) {
 			logging.AsyncDebugf("File hash cache hit for: %s", path)
 		}
@@ -514,6 +555,7 @@ func getFileHashWithCache(path string, _ util.FileContext, opts *config.KanikoOp
 	}
 
 	// Cache miss - compute hash
+	atomic.AddInt64(&cache.misses, 1)
 	// Use MaxFileHashSize from options for partial hashing of large files
 	maxFileHashSize := int64(defaultMaxFileHashSizeMB * fileHashBytesPerMegabyte) // Default: 10MB
 	if opts != nil && opts.MaxFileHashSize > 0 {

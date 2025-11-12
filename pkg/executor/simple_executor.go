@@ -19,6 +19,7 @@ package executor
 import (
 	"context"
 	"fmt"
+	"runtime"
 	"sync"
 
 	v1 "github.com/google/go-containerregistry/pkg/v1"
@@ -125,8 +126,22 @@ func NewSimpleExecutor(
 func (e *SimpleExecutor) ExecuteSequentially(compositeKey *CompositeCache, initSnapshotTaken bool) error {
 	cacheGroup := errgroup.Group{}
 	// Limit concurrent cache push operations to avoid overwhelming registry/network
-	// Default: 5 concurrent pushes (good balance between speed and resource usage)
-	maxConcurrentPushes := 5
+	// Increased default: min(15, GOMAXPROCS * 2) for better network throughput
+	var maxConcurrentPushes int
+	if e.opts != nil && e.opts.MaxNetworkConcurrency > 0 {
+		maxConcurrentPushes = e.opts.MaxNetworkConcurrency
+	} else {
+		gomaxprocs := runtime.GOMAXPROCS(0)
+		const concurrencyMultiplier = 2
+		const maxNetworkConcurrency = 15
+		maxConcurrentPushes = gomaxprocs * concurrencyMultiplier
+		if maxConcurrentPushes > maxNetworkConcurrency {
+			maxConcurrentPushes = maxNetworkConcurrency
+		}
+		if maxConcurrentPushes < 1 {
+			maxConcurrentPushes = 1
+		}
+	}
 	cacheGroup.SetLimit(maxConcurrentPushes)
 
 	var commandErrors []error
@@ -205,7 +220,22 @@ func (e *SimpleExecutor) ExecuteInParallel(compositeKey *CompositeCache, initSna
 	// Create shared cache group with limit for push operations
 	// This ensures all push operations respect the same concurrency limit
 	sharedCacheGroup := errgroup.Group{}
-	maxConcurrentPushes := 5 // Limit concurrent cache pushes to avoid overwhelming registry
+	// Increased default: min(15, GOMAXPROCS * 2) for better network throughput
+	var maxConcurrentPushes int
+	if e.opts != nil && e.opts.MaxNetworkConcurrency > 0 {
+		maxConcurrentPushes = e.opts.MaxNetworkConcurrency
+	} else {
+		gomaxprocs := runtime.GOMAXPROCS(0)
+		const concurrencyMultiplier = 2
+		const maxNetworkConcurrency = 15
+		maxConcurrentPushes = gomaxprocs * concurrencyMultiplier
+		if maxConcurrentPushes > maxNetworkConcurrency {
+			maxConcurrentPushes = maxNetworkConcurrency
+		}
+		if maxConcurrentPushes < 1 {
+			maxConcurrentPushes = 1
+		}
+	}
 	sharedCacheGroup.SetLimit(maxConcurrentPushes)
 
 	// Group commands by dependencies

@@ -41,8 +41,9 @@ const (
 	minFileSizeBytes         = 2048
 	percentageMultiplier     = 100
 	averageDivisor           = 2
-	// Conservative max workers limit for I/O-bound operations
-	maxWorkersLimit = 4
+	// Increased max workers limit for better CPU utilization
+	// min(16, GOMAXPROCS * 2) for CPU-bound operations
+	maxWorkersLimit = 16
 	// DefaultDirectoryScanTimeout is the default timeout for directory scanning
 	DefaultDirectoryScanTimeout = 10 * time.Minute
 	// DefaultMaxFilesProcessed is the default maximum number of files to process
@@ -190,9 +191,10 @@ func NewSafeSnapshotOptimizer(snapshotter *Snapshotter, opts *config.KanikoOptio
 		maxWorkers = opts.MaxParallelCommands
 	}
 	if maxWorkers <= 0 {
-		// Conservative default: min(4, NumCPU) instead of NumCPU
-		numCPU := runtime.NumCPU()
-		maxWorkers = numCPU
+		// Use GOMAXPROCS for better resource utilization
+		gomaxprocs := runtime.GOMAXPROCS(0)
+		const concurrencyMultiplier = 2
+		maxWorkers = gomaxprocs * concurrencyMultiplier
 		if maxWorkers > maxWorkersLimit {
 			maxWorkers = maxWorkersLimit
 		}
@@ -211,10 +213,21 @@ func NewSafeSnapshotOptimizer(snapshotter *Snapshotter, opts *config.KanikoOptio
 	}
 
 	// Initialize components
-	// Use MaxParallelHashing from options if set, otherwise use maxWorkers
-	hashWorkers := maxWorkers
+	// Use MaxParallelHashing from options if set, otherwise calculate default
+	var hashWorkers int
 	if opts.MaxParallelHashing > 0 {
 		hashWorkers = opts.MaxParallelHashing
+	} else {
+		// Default: min(8, GOMAXPROCS) for CPU-intensive hashing
+		gomaxprocs := runtime.GOMAXPROCS(0)
+		hashWorkers = gomaxprocs
+		const maxHashWorkers = 8
+		if hashWorkers > maxHashWorkers {
+			hashWorkers = maxHashWorkers
+		}
+		if hashWorkers < 1 {
+			hashWorkers = 1
+		}
 	}
 	optimizer.parallelHasher = NewParallelHasher(hashWorkers, snapshotter.l.hasher, opts.IntegrityCheck)
 	optimizer.integrityChecker = NewIntegrityChecker(opts.MaxExpectedChanges)
@@ -228,10 +241,11 @@ func NewSafeSnapshotOptimizer(snapshotter *Snapshotter, opts *config.KanikoOptio
 // NewParallelHasher creates a new parallel hasher
 // Uses conservative defaults to avoid excessive CPU usage
 func NewParallelHasher(maxWorkers int, hasher func(string) (string, error), integrityCheck bool) *ParallelHasher {
-	// Apply conservative limit if not set
+	// Apply limit if not set, using GOMAXPROCS for better resource utilization
 	if maxWorkers <= 0 {
-		numCPU := runtime.NumCPU()
-		maxWorkers = numCPU
+		gomaxprocs := runtime.GOMAXPROCS(0)
+		const concurrencyMultiplier = 2
+		maxWorkers = gomaxprocs * concurrencyMultiplier
 		if maxWorkers > maxWorkersLimit {
 			maxWorkers = maxWorkersLimit
 		}

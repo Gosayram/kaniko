@@ -1939,19 +1939,19 @@ Set this flag to specify the maximum number of concurrent cache checks. This con
 
 #### Flag `--max-workers`
 
-Set this flag to specify the maximum number of workers for parallel operations. When set to `0` (default), automatically uses `min(6, NumCPU)` with a maximum of 8 workers. This conservative default helps avoid excessive CPU usage when running multiple parallel builds.
+Set this flag to specify the maximum number of workers for parallel operations. When set to `0` (default), automatically uses `min(16, GOMAXPROCS * 2)`. This increased default provides better CPU utilization for parallel builds.
 
 **Example**: `--max-workers=4`
 
 #### Flag `--max-parallel-hashing`
 
-Set this flag to specify the maximum number of parallel file hashing operations. When set to `0` (default), automatically uses `4` workers. This conservative default helps reduce CPU usage for CPU-intensive hashing operations.
+Set this flag to specify the maximum number of parallel file hashing operations. When set to `0` (default), automatically uses `min(8, GOMAXPROCS)`. This increased default provides better CPU utilization for CPU-intensive hashing operations.
 
 **Example**: `--max-parallel-hashing=8`
 
 #### Flag `--max-parallel-copy`
 
-Set this flag to specify the maximum number of parallel file copy operations. When set to `0` (default), automatically uses `2` workers. This conservative default is optimized for I/O-bound operations and helps prevent excessive CPU usage.
+Set this flag to specify the maximum number of parallel file copy operations. When set to `0` (default), automatically uses `min(8, GOMAXPROCS * 2)`. This increased default is optimized for I/O-bound operations and provides better I/O throughput.
 
 **Example**: `--max-parallel-copy=4`
 
@@ -1969,7 +1969,7 @@ Set this flag to specify the maximum file size in bytes for full hashing. Files 
 
 #### Flag `--max-network-concurrency`
 
-Set this flag to specify the maximum number of parallel network requests. When set to `0` (default), automatically uses `5` workers. This conservative default is optimized for I/O-bound network operations and helps prevent excessive CPU usage.
+Set this flag to specify the maximum number of parallel network requests. When set to `0` (default), automatically uses `min(15, GOMAXPROCS * 2)`. This increased default is optimized for I/O-bound network operations and provides better network throughput.
 
 **Example**: `--max-network-concurrency=10`
 
@@ -2269,10 +2269,10 @@ Kaniko includes comprehensive CPU optimization features to reduce resource consu
 #### **CPU Configuration**
 ```bash
 # CPU resource limits (for optimization and multiple parallel builds)
---max-workers=0                    # Maximum workers (0=auto: min(6, NumCPU), max: 8)
---max-parallel-hashing=0           # Parallel hashing workers (0=auto: 4)
---max-parallel-copy=0              # Parallel copy workers (0=auto: 2)
---max-network-concurrency=0        # Network concurrency (0=auto: 5)
+--max-workers=0                    # Maximum workers (0=auto: min(16, GOMAXPROCS * 2))
+--max-parallel-hashing=0           # Parallel hashing workers (0=auto: min(8, GOMAXPROCS))
+--max-parallel-copy=0              # Parallel copy workers (0=auto: min(8, GOMAXPROCS * 2))
+--max-network-concurrency=0        # Network concurrency (0=auto: min(15, GOMAXPROCS * 2))
 --max-file-hash-size=10485760     # Max file size for full hashing (default: 10MB)
 --disable-compression=false        # Disable compression for maximum speed
 --compression-level=2              # Compression level (default: 2 for lower CPU usage)

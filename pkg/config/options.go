@@ -150,11 +150,11 @@ type KanikoOptions struct {
 	EnableLazyImageLoading bool
 
 	// CPU resource limits (for optimization and multiple parallel builds)
-	MaxWorkers            int   // --max-workers=6 (default: min(6, NumCPU), max: 8)
-	MaxParallelHashing    int   // --max-parallel-hashing=4 (default: 4)
-	MaxParallelCopy       int   // --max-parallel-copy=2 (default: 2)
+	MaxWorkers            int   // --max-workers (default: min(16, GOMAXPROCS * 2))
+	MaxParallelHashing    int   // --max-parallel-hashing (default: min(8, GOMAXPROCS))
+	MaxParallelCopy       int   // --max-parallel-copy (default: min(8, GOMAXPROCS * 2))
 	MaxFileHashSize       int64 // --max-file-hash-size=10MB (default: 10MB, files larger use partial hashing)
-	MaxNetworkConcurrency int   // --max-network-concurrency=5 (default: 5, conservative for I/O operations)
+	MaxNetworkConcurrency int   // --max-network-concurrency (default: min(15, GOMAXPROCS * 2))
 
 	// Source policy for security (validates image sources before loading)
 	// Set via SetSourcePolicy() to avoid circular dependencies

@@ -180,7 +180,35 @@ func (t *Tar) writeFileContent(p string) error {
 		return err
 	}
 	defer r.Close()
-	if _, err := io.Copy(t.w, r); err != nil {
+
+	// Use buffered copy for better I/O performance
+	// Get file size to choose appropriate buffer size
+	fi, err := r.Stat()
+	if err != nil {
+		// If we can't get file size, use default buffer
+		bufferPool := GetGlobalBufferPool()
+		buffer := bufferPool.GetLargeBuffer()
+		defer bufferPool.PutLargeBuffer(buffer)
+		_, err = io.CopyBuffer(t.w, r, buffer)
+		return err
+	}
+
+	// Choose buffer size based on file size for optimal performance
+	bufferPool := GetGlobalBufferPool()
+	var buffer []byte
+	fileSize := fi.Size()
+
+	// Use appropriate buffer size: small files (< 64KB) use medium buffer,
+	// larger files use large buffer for better throughput
+	if fileSize < 64*1024 {
+		buffer = bufferPool.GetMediumBuffer()
+		defer bufferPool.PutMediumBuffer(buffer)
+	} else {
+		buffer = bufferPool.GetLargeBuffer()
+		defer bufferPool.PutLargeBuffer(buffer)
+	}
+
+	if _, err := io.CopyBuffer(t.w, r, buffer); err != nil {
 		return err
 	}
 	return nil

@@ -92,6 +92,12 @@ type Manager struct {
 	initMutex      sync.Mutex
 }
 
+// Global network manager instance (initialized on first use)
+var (
+	globalNetworkManager   *Manager
+	globalNetworkManagerMu sync.Mutex
+)
+
 // ManagerStats holds statistics about network manager usage
 type ManagerStats struct {
 	TotalRequests      int64         `json:"total_requests"`
@@ -115,8 +121,20 @@ func NewManager(config *ManagerConfig) *Manager {
 		},
 	}
 
+	// Set as global instance (per performance plan: optimize connection pooling)
+	globalNetworkManagerMu.Lock()
+	globalNetworkManager = manager
+	globalNetworkManagerMu.Unlock()
+
 	logrus.Info("Network manager created")
 	return manager
+}
+
+// GetGlobalNetworkManager returns the global network manager instance
+func GetGlobalNetworkManager() *Manager {
+	globalNetworkManagerMu.Lock()
+	defer globalNetworkManagerMu.Unlock()
+	return globalNetworkManager
 }
 
 // Initialize initializes the network manager components

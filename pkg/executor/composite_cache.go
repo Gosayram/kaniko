@@ -23,12 +23,16 @@ import (
 	"hash"
 	"os"
 	"path/filepath"
+	"runtime"
+	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/Gosayram/kaniko/pkg/util"
 )
@@ -405,31 +409,26 @@ func countFilesInDir(p string, fileContext util.FileContext) (int, error) {
 }
 
 // walkDirectoryForHashAdaptive walks directory and hashes files using adaptive strategy
-// Simplified version without timeouts for better performance
+// Optimized: uses parallel hashing for large directories to prevent timeouts
 func walkDirectoryForHashAdaptive(
 	p string,
 	fileContext util.FileContext,
 	sha hash.Hash,
 	useMetadataOnly bool,
 ) (isEmpty bool, fileCount int, err error) {
+	// First pass: collect all files to hash
+	var filesToHash []string
+	var filesToHashMutex sync.Mutex
+
 	err = filepath.Walk(p, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			if os.IsNotExist(err) || os.IsPermission(err) {
-				if logrus.IsLevelEnabled(logrus.DebugLevel) {
-					logrus.Debugf("File %s is not accessible during directory walk, skipping: %v", path, err)
-				}
 				return nil
-			}
-			if logrus.IsLevelEnabled(logrus.DebugLevel) {
-				logrus.Debugf("Error accessing file %s during directory walk, skipping: %v", path, err)
 			}
 			return nil
 		}
 
 		if info != nil && info.Mode()&os.ModeSymlink != 0 {
-			if logrus.IsLevelEnabled(logrus.DebugLevel) {
-				logrus.Debugf("Skipping symlink %s during directory hash", path)
-			}
 			return nil
 		}
 
@@ -443,22 +442,140 @@ func walkDirectoryForHashAdaptive(
 			return nil
 		}
 
-		fileHash, hashErr := hashFileInDirAdaptive(path, fileContext, useMetadataOnly)
-		if hashErr != nil {
-			if logrus.IsLevelEnabled(logrus.DebugLevel) {
-				logrus.Debugf("Failed to hash file %s: %v, skipping", path, hashErr)
-			}
-			return nil
-		}
-
-		if _, err := sha.Write([]byte(fileHash)); err != nil {
-			return err
-		}
-		isEmpty = false
+		filesToHashMutex.Lock()
+		filesToHash = append(filesToHash, path)
+		filesToHashMutex.Unlock()
 		return nil
 	})
 
-	return isEmpty, fileCount, err
+	if err != nil {
+		return false, fileCount, err
+	}
+
+	if len(filesToHash) == 0 {
+		return true, fileCount, nil
+	}
+
+	// For small directories (< 50 files), use sequential hashing (more efficient)
+	const smallDirectoryThreshold = 50
+	if len(filesToHash) < smallDirectoryThreshold {
+		for _, path := range filesToHash {
+			fileHash, hashErr := hashFileInDirAdaptive(path, fileContext, useMetadataOnly)
+			if hashErr != nil {
+				if logrus.IsLevelEnabled(logrus.DebugLevel) {
+					logrus.Debugf("Failed to hash file %s: %v, skipping", path, hashErr)
+				}
+				continue
+			}
+			if _, err := sha.Write([]byte(fileHash)); err != nil {
+				return false, fileCount, err
+			}
+			isEmpty = false
+		}
+		return isEmpty, fileCount, nil
+	}
+
+	// For large directories, use parallel hashing
+	return walkDirectoryForHashParallel(filesToHash, fileContext, sha, useMetadataOnly, fileCount)
+}
+
+// walkDirectoryForHashParallel hashes files in parallel for large directories
+func walkDirectoryForHashParallel(
+	files []string,
+	fileContext util.FileContext,
+	sha hash.Hash,
+	useMetadataOnly bool,
+	totalFileCount int,
+) (isEmpty bool, fileCount int, err error) {
+	startTime := time.Now()
+
+	// Determine optimal worker count
+	gomaxprocs := runtime.GOMAXPROCS(0)
+	const concurrencyMultiplier = 2
+	const maxWorkerPoolSize = 16
+	const minWorkerPoolSize = 2
+	maxWorkers := gomaxprocs * concurrencyMultiplier
+	if maxWorkers > maxWorkerPoolSize {
+		maxWorkers = maxWorkerPoolSize
+	}
+	if maxWorkers < minWorkerPoolSize {
+		maxWorkers = minWorkerPoolSize
+	}
+
+	// Use errgroup for parallel processing
+	var g errgroup.Group
+	g.SetLimit(maxWorkers)
+
+	// Collect hashes with mutex protection
+	type hashResult struct {
+		path string
+		hash string
+	}
+	hashResults := make([]hashResult, 0, len(files))
+	var resultsMutex sync.Mutex
+	var processedCount int64
+	var lastProgressLog time.Time
+	const progressInterval = 5 * time.Second
+
+	// Hash files in parallel
+	for _, path := range files {
+		filePath := path // Capture for closure
+		g.Go(func() error {
+			fileHash, hashErr := hashFileInDirAdaptive(filePath, fileContext, useMetadataOnly)
+			if hashErr != nil {
+				if logrus.IsLevelEnabled(logrus.DebugLevel) {
+					logrus.Debugf("Failed to hash file %s: %v, skipping", filePath, hashErr)
+				}
+				return nil // Continue with other files
+			}
+
+			resultsMutex.Lock()
+			hashResults = append(hashResults, hashResult{path: filePath, hash: fileHash})
+			resultsMutex.Unlock()
+
+			// Progress tracking
+			processed := atomic.AddInt64(&processedCount, 1)
+			now := time.Now()
+			const largeFileListThreshold = 100
+			if totalFileCount > largeFileListThreshold && now.Sub(lastProgressLog) > progressInterval {
+				lastProgressLog = now
+				const percentageBase = 100
+				percentage := float64(processed) / float64(totalFileCount) * percentageBase
+				elapsed := time.Since(startTime)
+				rate := float64(processed) / elapsed.Seconds()
+				logrus.Infof("Directory hash progress: %d/%d files (%.1f%%) processed in %v (%.1f files/sec)",
+					processed, totalFileCount, percentage, elapsed, rate)
+			}
+
+			return nil
+		})
+	}
+
+	// Wait for all hashing to complete
+	if err := g.Wait(); err != nil {
+		return false, totalFileCount, err
+	}
+
+	// Sort results by path for deterministic hash
+	sort.Slice(hashResults, func(i, j int) bool {
+		return hashResults[i].path < hashResults[j].path
+	})
+
+	// Write hashes to SHA in sorted order
+	for _, result := range hashResults {
+		if _, err := sha.Write([]byte(result.hash)); err != nil {
+			return false, totalFileCount, err
+		}
+		isEmpty = false
+	}
+
+	duration := time.Since(startTime)
+	if totalFileCount > 100 || duration > 5*time.Second {
+		logrus.Infof("Directory hash completed: %d files processed in %v (%.1f files/sec)",
+			totalFileCount, duration, float64(totalFileCount)/duration.Seconds())
+	}
+
+	return isEmpty, totalFileCount, nil
 }
 
 // walkDirectoryForHash walks directory and hashes files (legacy implementation with timeouts)

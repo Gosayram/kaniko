@@ -31,8 +31,8 @@ const (
 	defaultRequestTimeout      = 60
 
 	// Parallel client defaults
-	// Conservative default: 5-8 instead of 10 to avoid excessive CPU usage with multiple parallel builds
-	defaultMaxConcurrency = 5
+	// Increased default: min(15, GOMAXPROCS * 2) for better network throughput
+	defaultMaxConcurrency = 15
 	defaultRetryAttempts  = 3
 	defaultRetryDelay     = 1
 

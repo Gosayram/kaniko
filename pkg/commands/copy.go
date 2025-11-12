@@ -21,6 +21,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 
@@ -33,6 +34,13 @@ import (
 	"github.com/Gosayram/kaniko/pkg/dockerfile"
 	"github.com/Gosayram/kaniko/pkg/rootless"
 	"github.com/Gosayram/kaniko/pkg/util"
+)
+
+const (
+	// DefaultConcurrencyMultiplier is the multiplier for GOMAXPROCS to calculate default concurrency
+	DefaultConcurrencyMultiplier = 2
+	// MaxCopyConcurrency is the maximum concurrent copy operations
+	MaxCopyConcurrency = 8
 )
 
 // for testing
@@ -202,9 +210,16 @@ func (c *CopyCommand) copySourcesParallel(
 	errChan := make(chan error, len(srcs))
 
 	// Limit concurrent copies to avoid overwhelming the filesystem
-	// Conservative default: 2 workers for I/O-bound operations (not CPU-bound)
-	// This prevents excessive CPU usage, especially with multiple parallel builds
-	maxConcurrent := 2
+	// Default: min(8, GOMAXPROCS * 2) for I/O-bound operations
+	// Note: MaxParallelCopy from opts is handled at executor level
+	gomaxprocs := runtime.GOMAXPROCS(0)
+	maxConcurrent := gomaxprocs * DefaultConcurrencyMultiplier
+	if maxConcurrent > MaxCopyConcurrency {
+		maxConcurrent = MaxCopyConcurrency
+	}
+	if maxConcurrent < 1 {
+		maxConcurrent = 1
+	}
 	if len(srcs) < maxConcurrent {
 		maxConcurrent = len(srcs)
 	}

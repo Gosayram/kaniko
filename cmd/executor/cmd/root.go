@@ -768,14 +768,14 @@ func addParallelExecutionFlags() {
 
 	// CPU resource limits (for optimization and multiple parallel builds)
 	RootCmd.PersistentFlags().IntVarP(&opts.MaxWorkers, "max-workers", "", 0,
-		"Maximum number of workers for parallel operations (0 = auto: min(6, NumCPU), max: 8). "+
-			"Conservative default to avoid excessive CPU usage with multiple parallel builds. Default: auto")
+		"Maximum number of workers for parallel operations (0 = auto: min(16, GOMAXPROCS * 2)). "+
+			"Increased default for better CPU utilization. Default: min(16, GOMAXPROCS * 2)")
 	RootCmd.PersistentFlags().IntVarP(&opts.MaxParallelHashing, "max-parallel-hashing", "", 0,
-		"Maximum number of parallel file hashing operations (0 = auto: 4). "+
-			"Conservative default for CPU-intensive hashing. Default: 4")
+		"Maximum number of parallel file hashing operations (0 = auto: min(8, GOMAXPROCS)). "+
+			"Increased default for better CPU utilization. Default: min(8, GOMAXPROCS)")
 	RootCmd.PersistentFlags().IntVarP(&opts.MaxParallelCopy, "max-parallel-copy", "", 0,
-		"Maximum number of parallel file copy operations (0 = auto: 2). "+
-			"Conservative default for I/O-bound operations. Default: 2")
+		"Maximum number of parallel file copy operations (0 = auto: min(8, GOMAXPROCS * 2)). "+
+			"Increased default for better I/O throughput. Default: min(8, GOMAXPROCS * 2)")
 	RootCmd.PersistentFlags().BoolVar(&opts.DisableCompression, "disable-compression", false,
 		"Disable layer compression for maximum speed (increases layer size but reduces CPU usage)")
 
@@ -821,8 +821,8 @@ func addUnifiedCacheFlags() {
 
 	// Network concurrency limits
 	RootCmd.PersistentFlags().IntVarP(&opts.MaxNetworkConcurrency, "max-network-concurrency", "", 0,
-		"Maximum number of parallel network requests (0 = auto: 5). "+
-			"Conservative default for I/O-bound network operations. Default: 5")
+		"Maximum number of parallel network requests (0 = auto: min(15, GOMAXPROCS * 2)). "+
+			"Increased default for better network throughput. Default: min(15, GOMAXPROCS * 2)")
 
 	// Connection pooling flags for registry cache
 	RootCmd.PersistentFlags().IntVarP(&opts.CacheMaxConns, "cache-max-conns", "", defaultCacheMaxConns,

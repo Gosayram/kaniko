@@ -26,6 +26,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/go-containerregistry/pkg/name"
@@ -111,13 +112,37 @@ const (
 
 	// Performance optimization constants
 	// NoCacheParallelMultiplier removed - parallel execution is no longer supported
-	MemoryLimitGB         = 2
-	MemoryLimitBytes      = 2 * 1024 * 1024 * 1024 // 2GB
-	CommandTimeoutMinutes = 30
+	MemoryLimitGB    = 2
+	MemoryLimitBytes = 2 * 1024 * 1024 * 1024 // 2GB
+
+	// Concurrency and worker pool constants
+	DefaultConcurrencyMultiplier = 2
+	MaxWorkerPoolSize            = 16
+	MinWorkerPoolSize            = 2
+	MaxNetworkConcurrency        = 15
+
+	// File count thresholds
+	ParallelProcessingFileThreshold = 10
+	LargeFileListThreshold          = 100
+
+	// Timeout and interval constants
+	ProgressLogInterval       = 5 * time.Second
+	ProgressTickerInterval    = 10 * time.Second
+	FileTimeoutMultiplierMs   = 100
+	MaxAdaptiveTimeoutMinutes = 10
+	LongOperationThresholdSec = 5
+	ProgressLogThresholdSec   = 30
+
+	// Percentage constants
+	PercentageBase = 100
+	BytesPerKB     = 1024
+
+	// File size constants
 	MaxFileSizeMB         = 500
 	MaxFileSizeBytes      = 500 * 1024 * 1024 // 500MB
 	MaxTotalFileSizeGB    = 10
 	MaxTotalFileSizeBytes = 10 * 1024 * 1024 * 1024 // 10GB
+	CommandTimeoutMinutes = 30
 
 	// Network optimization constants
 	MaxIdleConns            = 200
@@ -178,6 +203,10 @@ type stageBuilder struct {
 	// Cache for cross-stage file search results (per performance plan: optimize cross-stage deps)
 	fileSearchCache  map[string][]string
 	searchCacheMutex sync.RWMutex //nolint:unused // Used in findFilesForDependencyWithArgsFromRoot
+
+	// Cache for FilesUsedFromContext results (per performance plan: cache file scanning results)
+	filesUsedCache map[string][]string
+	filesUsedMutex sync.RWMutex
 
 	// Predictive cache (experimental, for performance optimization)
 	predictiveCache *cache.PredictiveCache
@@ -440,6 +469,8 @@ func newStageBuilder(
 		layersValid:  true,
 		// Initialize file search cache (per performance plan: optimize cross-stage deps)
 		fileSearchCache: make(map[string][]string),
+		// Initialize files used cache (per performance plan: cache file scanning results)
+		filesUsedCache: make(map[string][]string),
 		// Initialize predictive cache if enabled (experimental)
 		predictiveCache: cache.NewPredictiveCache(opts),
 		cmds:            cmds,
@@ -740,12 +771,130 @@ func (s *stageBuilder) populateCompositeKey(
 	// Add the next command to the cache key.
 	compositeKey.AddKey(command.String())
 
+	// Optimize: parallel hashing for large file lists to prevent timeouts
+	// Use parallel processing for > 10 files to improve performance
+	if len(files) > ParallelProcessingFileThreshold {
+		return s.populateCompositeKeyParallel(files, compositeKey)
+	}
+
+	// Sequential processing for small file lists (more efficient for few files)
 	for _, f := range files {
 		if err := compositeKey.AddPath(f, s.fileContext); err != nil {
 			return compositeKey, err
 		}
 	}
 	return compositeKey, nil
+}
+
+// populateCompositeKeyParallel populates composite key with parallel hashing for large file lists
+// This prevents timeouts for monorepo projects with thousands of files
+func (s *stageBuilder) populateCompositeKeyParallel(
+	files []string,
+	compositeKey CompositeCache,
+) (CompositeCache, error) {
+	startTime := time.Now()
+	totalFiles := len(files)
+
+	// Log progress for large file lists
+	if totalFiles > LargeFileListThreshold {
+		logrus.Infof("Populating cache key for %d files in parallel...", totalFiles)
+	}
+
+	// Determine optimal worker count based on available resources
+	gomaxprocs := runtime.GOMAXPROCS(0)
+	maxWorkers := gomaxprocs * DefaultConcurrencyMultiplier
+	if maxWorkers > MaxWorkerPoolSize {
+		maxWorkers = MaxWorkerPoolSize // Cap at 16 to avoid excessive resource usage
+	}
+	if maxWorkers < MinWorkerPoolSize {
+		maxWorkers = MinWorkerPoolSize
+	}
+
+	// Use errgroup for parallel processing with error handling
+	var g errgroup.Group
+	g.SetLimit(maxWorkers)
+
+	// Mutex to protect compositeKey.keys (AddPath modifies keys)
+	var keysMutex sync.Mutex
+	var firstError error
+	var errorOnce sync.Once
+
+	// Progress tracking
+	var processedCount int64
+	var lastProgressLog time.Time
+	progressInterval := ProgressLogInterval
+
+	// Process files in parallel
+	for _, f := range files {
+		file := f // Capture for closure
+		g.Go(func() error {
+			// Add path with mutex protection
+			keysMutex.Lock()
+			err := compositeKey.AddPath(file, s.fileContext)
+			keysMutex.Unlock()
+
+			if err != nil {
+				errorOnce.Do(func() {
+					firstError = err
+				})
+				return err
+			}
+
+			// Update progress counter
+			processed := atomic.AddInt64(&processedCount, 1)
+
+			// Log progress periodically for large file lists
+			now := time.Now()
+			if totalFiles > LargeFileListThreshold && now.Sub(lastProgressLog) > progressInterval {
+				lastProgressLog = now
+				percentage := float64(processed) / float64(totalFiles) * PercentageBase
+				elapsed := time.Since(startTime)
+				rate := float64(processed) / elapsed.Seconds()
+				logrus.Infof("Cache key progress: %d/%d files (%.1f%%) processed in %v (%.1f files/sec)",
+					processed, totalFiles, percentage, elapsed, rate)
+			}
+
+			return nil
+		})
+	}
+
+	// Wait for all goroutines to complete
+	if err := g.Wait(); err != nil {
+		if firstError != nil {
+			return compositeKey, firstError
+		}
+		return compositeKey, err
+	}
+
+	duration := time.Since(startTime)
+	if totalFiles > LargeFileListThreshold || duration > LongOperationThresholdSec*time.Second {
+		logrus.Infof("Cache key populated: %d files processed in %v (%.1f files/sec)",
+			totalFiles, duration, float64(totalFiles)/duration.Seconds())
+	}
+
+	return compositeKey, nil
+}
+
+// calculateAdaptiveTimeout calculates adaptive timeout based on file count
+// Formula: min(maxTimeout, fileCount * 100ms), but not less than minTimeout
+// This prevents timeouts for large monorepo projects
+func calculateAdaptiveTimeout(fileCount int, minTimeout, maxTimeout time.Duration) time.Duration {
+	if fileCount <= 0 {
+		return minTimeout
+	}
+
+	// Calculate timeout: fileCount * 100ms
+	calculatedTimeout := time.Duration(fileCount) * FileTimeoutMultiplierMs * time.Millisecond
+
+	// Apply limits: min(minTimeout, max(maxTimeout, calculatedTimeout))
+	if calculatedTimeout < minTimeout {
+		return minTimeout
+	}
+	if calculatedTimeout > maxTimeout {
+		return maxTimeout
+	}
+
+	return calculatedTimeout
 }
 
 type cacheCheckResult struct {
@@ -759,46 +908,112 @@ type cacheCheckResult struct {
 	err          error
 }
 
-// getFilesForCacheKey gets files for a command with timeout
+// getFilesFromContextWorker executes file retrieval in a separate goroutine
+func (s *stageBuilder) getFilesFromContextWorker(
+	ctx context.Context,
+	command commands.DockerCommand,
+	commandStr string,
+	cacheKey string,
+	cfg *v1.Config,
+	filesCh chan<- struct {
+		files []string
+		err   error
+	},
+	startTime time.Time,
+) {
+	defer func() {
+		// Channel will be closed by sender, no need to drain here
+	}()
+
+	if ctx.Err() != nil {
+		return
+	}
+
+	if logrus.IsLevelEnabled(logrus.DebugLevel) {
+		logrus.Debugf("Getting files from context for command: %s", commandStr)
+	}
+
+	files, err := command.FilesUsedFromContext(cfg, s.args)
+
+	duration := time.Since(startTime)
+	if duration > LongOperationThresholdSec*time.Second {
+		logrus.Infof("FilesUsedFromContext completed: %d files in %v for command %s",
+			len(files), duration, commandStr)
+	}
+
+	if err == nil {
+		s.filesUsedMutex.Lock()
+		s.filesUsedCache[cacheKey] = files
+		s.filesUsedMutex.Unlock()
+	}
+
+	select {
+	case filesCh <- struct {
+		files []string
+		err   error
+	}{files: files, err: err}:
+	case <-ctx.Done():
+	}
+}
+
+// showFilesProgress shows progress for file retrieval
+func (s *stageBuilder) showFilesProgress(
+	ctx context.Context,
+	commandStr string,
+	startTime time.Time,
+	progressTicker *time.Ticker,
+	filesCh <-chan struct {
+		files []string
+		err   error
+	},
+) {
+	for {
+		select {
+		case <-progressTicker.C:
+			elapsed := time.Since(startTime)
+			if elapsed > ProgressLogThresholdSec*time.Second {
+				logrus.Infof("FilesUsedFromContext still running for command %s (elapsed: %v)...",
+					commandStr, elapsed)
+			}
+		case <-ctx.Done():
+			return
+		case <-filesCh:
+			return
+		}
+	}
+}
+
 func (s *stageBuilder) getFilesForCacheKey(
 	ctx context.Context,
 	command commands.DockerCommand,
 	commandStr string,
 	cfg *v1.Config,
 ) ([]string, error) {
+	// Check cache first (per performance plan: cache file scanning results)
+	cacheKey := commandStr
+	s.filesUsedMutex.RLock()
+	if cachedFiles, exists := s.filesUsedCache[cacheKey]; exists {
+		s.filesUsedMutex.RUnlock()
+		if logrus.IsLevelEnabled(logrus.DebugLevel) {
+			logrus.Debugf("Using cached files for command %s: %d files", commandStr, len(cachedFiles))
+		}
+		return cachedFiles, nil
+	}
+	s.filesUsedMutex.RUnlock()
+
 	filesCh := make(chan struct {
 		files []string
 		err   error
 	}, 1)
 
-	go func() {
-		defer func() {
-			// Ensure channel is always drained to prevent goroutine leak
-			select {
-			case <-filesCh:
-			default:
-			}
-		}()
+	startTime := time.Now()
+	progressTicker := time.NewTicker(ProgressTickerInterval)
+	defer progressTicker.Stop()
 
-		// Check context before starting work
-		select {
-		case <-ctx.Done():
-			return
-		default:
-		}
+	go s.getFilesFromContextWorker(ctx, command, commandStr, cacheKey, cfg, filesCh, startTime)
+	go s.showFilesProgress(ctx, commandStr, startTime, progressTicker, filesCh)
 
-		files, err := command.FilesUsedFromContext(cfg, s.args)
-
-		// Check context before sending result
-		select {
-		case filesCh <- struct {
-			files []string
-			err   error
-		}{files: files, err: err}:
-		case <-ctx.Done():
-			return
-		}
-	}()
+	timeout := DefaultFilesUsedTimeout
 
 	select {
 	case result := <-filesCh:
@@ -811,8 +1026,8 @@ func (s *stageBuilder) getFilesForCacheKey(
 	case <-ctx.Done():
 		logrus.Warnf("FilesUsedFromContext timed out for command %s", commandStr)
 		return nil, ctx.Err()
-	case <-time.After(DefaultFilesUsedTimeout):
-		logrus.Warnf("FilesUsedFromContext timed out after 2 minutes for command %s, skipping", commandStr)
+	case <-time.After(timeout):
+		logrus.Warnf("FilesUsedFromContext timed out after %v for command %s, skipping", timeout, commandStr)
 		return []string{}, nil
 	}
 }
@@ -859,6 +1074,10 @@ func (s *stageBuilder) populateKeyForCacheKey(
 		}
 	}()
 
+	// Use adaptive timeout based on file count: min(10min, fileCount * 100ms)
+	// For large file lists, increase timeout to prevent premature timeouts
+	timeout := calculateAdaptiveTimeout(len(files), DefaultPopulateKeyTimeout, MaxAdaptiveTimeoutMinutes*time.Minute)
+
 	select {
 	case result := <-populateCh:
 		if result.err != nil {
@@ -868,8 +1087,8 @@ func (s *stageBuilder) populateKeyForCacheKey(
 		return result.key, nil
 	case <-ctx.Done():
 		return currentCompositeKey, ctx.Err()
-	case <-time.After(DefaultPopulateKeyTimeout):
-		logrus.Warnf("populateCompositeKey timed out after 5 minutes, continuing with current key")
+	case <-time.After(timeout):
+		logrus.Warnf("populateCompositeKey timed out after %v (%d files), continuing with current key", timeout, len(files))
 		return currentCompositeKey, context.DeadlineExceeded
 	}
 }
@@ -1360,7 +1579,7 @@ func (s *stageBuilder) populateCacheKeyIfNeeded(
 		} else {
 			*compositeKey = result.key
 			duration := time.Since(startTime)
-			if duration > 5*time.Second {
+			if duration > LongOperationThresholdSec*time.Second {
 				logrus.Infof("Composite cache key populated in %v for command %d: %s", duration, index, command.String())
 			} else {
 				logrus.Debugf("Composite cache key populated in %v for command %d", duration, index)
@@ -2162,6 +2381,18 @@ func buildStage(
 	// Log stage completion
 	stageDuration := time.Since(stageStartTime).Milliseconds()
 	globalLogger.LogStageComplete(stage.Index, stage.BaseName, stageDuration, true)
+
+	// Log file hash cache statistics (per performance plan: optimize cache usage)
+	if hashCacheOpts := getOptsForHashCache(); hashCacheOpts != nil {
+		if fileHashCache := GetGlobalFileHashCache(hashCacheOpts); fileHashCache != nil {
+			fileHashCache.LogStats()
+		}
+	}
+
+	// Log network manager statistics (per performance plan: optimize connection pooling)
+	if nm := network.GetGlobalNetworkManager(); nm != nil {
+		nm.LogStats()
+	}
 
 	reviewConfig(stage, &sb.cf.Config)
 
@@ -3606,8 +3837,15 @@ func initializeNetworkManager(opts *config.KanikoOptions) *network.Manager {
 			logrus.Infof("Using KANIKO_MAX_CONCURRENCY=%d", intVal)
 		}
 	} else {
-		// Use conservative default from constants (already set to 5)
-		maxConcurrency = MaxConcurrency
+		// Default: min(15, GOMAXPROCS * 2) for better network throughput
+		gomaxprocs := runtime.GOMAXPROCS(0)
+		maxConcurrency = gomaxprocs * DefaultConcurrencyMultiplier
+		if maxConcurrency > MaxNetworkConcurrency {
+			maxConcurrency = MaxNetworkConcurrency
+		}
+		if maxConcurrency < 1 {
+			maxConcurrency = 1
+		}
 	}
 
 	maxIdleConns := MaxIdleConns
