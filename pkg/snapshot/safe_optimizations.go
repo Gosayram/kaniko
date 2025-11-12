@@ -531,7 +531,13 @@ func (sso *SafeSnapshotOptimizer) parallelDirectoryScan(dir string) (*ScanResult
 
 		wg.Wait()
 		close(workers)
-		resultCh <- walkResult{files: walkFiles, err: walkErr}
+
+		// Check context before sending result
+		select {
+		case resultCh <- walkResult{files: walkFiles, err: walkErr}:
+		case <-ctx.Done():
+			return
+		}
 	}()
 
 	select {

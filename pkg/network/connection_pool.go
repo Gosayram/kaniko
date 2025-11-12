@@ -143,20 +143,33 @@ func (cp *ConnectionPool) GetClient() *http.Client {
 
 // GetTransport returns the optimized HTTP transport
 func (cp *ConnectionPool) GetTransport() *http.Transport {
+	if cp.transport == nil {
+		return nil
+	}
 	return cp.transport
 }
 
 // Close closes the connection pool and cleans up resources
 func (cp *ConnectionPool) Close() error {
+	// Check if already closed (idempotent)
+	if cp.transport == nil {
+		return nil
+	}
+
 	logrus.Info("Closing connection pool")
 
 	// Close DNS cache if enabled
 	if cp.dnsCache != nil {
 		cp.dnsCache.Close()
+		cp.dnsCache = nil
 	}
 
 	// Close idle connections
 	cp.transport.CloseIdleConnections()
+
+	// Mark as closed
+	cp.transport = nil
+	cp.client = nil
 
 	logrus.Info("Connection pool closed successfully")
 	return nil

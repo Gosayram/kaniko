@@ -197,8 +197,17 @@ func (mc *ManifestCache) cleanupExpired() {
 
 // Close closes the manifest cache and stops cleanup goroutine
 func (mc *ManifestCache) Close() {
-	close(mc.stopChan)
-	logrus.Info("Manifest cache closed")
+	mc.mutex.Lock()
+	defer mc.mutex.Unlock()
+
+	select {
+	case <-mc.stopChan:
+		// Already closed
+		return
+	default:
+		close(mc.stopChan)
+		logrus.Info("Manifest cache closed")
+	}
 }
 
 // LogStats logs manifest cache statistics

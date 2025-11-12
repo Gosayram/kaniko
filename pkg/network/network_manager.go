@@ -64,7 +64,7 @@ func DefaultManagerConfig() *ManagerConfig {
 
 		// Parallel client settings
 		MaxConcurrency: defaultMaxConcurrency,
-		RequestTimeout: DefaultResponseTimeout,
+		RequestTimeout: DefaultRequestTimeout, // Use RequestTimeout, not ResponseTimeout
 		RetryAttempts:  defaultRetryAttempts,
 		RetryDelay:     1 * time.Second,
 

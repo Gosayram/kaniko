@@ -42,7 +42,7 @@ type ParallelClientConfig struct {
 func DefaultParallelClientConfig() *ParallelClientConfig {
 	return &ParallelClientConfig{
 		MaxConcurrency:    defaultMaxConcurrency,
-		RequestTimeout:    DefaultResponseTimeout,
+		RequestTimeout:    DefaultRequestTimeout, // Use RequestTimeout, not ResponseTimeout
 		RetryAttempts:     defaultRetryAttempts,
 		RetryDelay:        defaultRetryDelay * time.Second,
 		EnableCompression: true,
@@ -171,87 +171,123 @@ func (pc *ParallelClient) ExecuteParallel(ctx context.Context, requests []Parall
 	return responses, nil
 }
 
-// executeRequest executes a single HTTP request with retry logic
-func (pc *ParallelClient) executeRequest(ctx context.Context, req ParallelRequest) ParallelResponse {
-	start := time.Now()
-
-	// Create request context with timeout
-	requestCtx := ctx
+// createRequestContext creates a context with timeout for the request
+func (pc *ParallelClient) createRequestContext(
+	ctx context.Context,
+	req ParallelRequest,
+) (context.Context, context.CancelFunc) {
 	if req.Timeout > 0 {
-		var cancel context.CancelFunc
-		requestCtx, cancel = context.WithTimeout(ctx, req.Timeout)
-		defer cancel()
-	} else if pc.config.RequestTimeout > 0 {
-		var cancel context.CancelFunc
-		requestCtx, cancel = context.WithTimeout(ctx, pc.config.RequestTimeout)
-		defer cancel()
+		return context.WithTimeout(ctx, req.Timeout)
 	}
+	if pc.config.RequestTimeout > 0 {
+		return context.WithTimeout(ctx, pc.config.RequestTimeout)
+	}
+	return ctx, func() {}
+}
 
-	// Create HTTP request
+// createHTTPRequest creates an HTTP request with headers
+func (pc *ParallelClient) createHTTPRequest(requestCtx context.Context, req ParallelRequest) (*http.Request, error) {
 	httpReq, err := http.NewRequestWithContext(requestCtx, req.Method, req.URL, req.Body)
 	if err != nil {
-		return ParallelResponse{
-			Error:   fmt.Errorf("failed to create request: %w", err),
-			Latency: time.Since(start),
-		}
+		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
-	// Set headers
 	for key, value := range req.Headers {
 		httpReq.Header.Set(key, value)
 	}
 
-	// Set default headers
 	httpReq.Header.Set("User-Agent", pc.config.UserAgent)
 	if pc.config.EnableCompression {
 		httpReq.Header.Set("Accept-Encoding", "gzip")
 	}
 
-	// Execute request with retry logic
+	return httpReq, nil
+}
+
+// executeRequestWithRetry executes HTTP request with retry logic
+func (pc *ParallelClient) executeRequestWithRetry(
+	requestCtx context.Context,
+	httpReq *http.Request,
+) (*http.Response, error) {
 	var resp *http.Response
 	var lastErr error
 
 	for attempt := 0; attempt <= pc.config.RetryAttempts; attempt++ {
+		select {
+		case <-requestCtx.Done():
+			return nil, requestCtx.Err()
+		default:
+		}
+
 		if attempt > 0 {
 			pc.recordRetry()
 			select {
 			case <-time.After(pc.config.RetryDelay * time.Duration(attempt)):
 			case <-requestCtx.Done():
-				return ParallelResponse{
-					Error:   requestCtx.Err(),
-					Latency: time.Since(start),
-				}
+				return nil, requestCtx.Err()
+			}
+
+			select {
+			case <-requestCtx.Done():
+				return nil, requestCtx.Err()
+			default:
 			}
 		}
 
 		if pc.client == nil {
-			lastErr = fmt.Errorf("HTTP client is nil")
-			break
+			return nil, fmt.Errorf("HTTP client is nil")
 		}
 
 		resp, lastErr = pc.client.Do(httpReq)
 		if lastErr == nil {
-			break
+			return resp, nil
 		}
 
 		logrus.Debugf("Request attempt %d failed: %v", attempt+1, lastErr)
 	}
 
-	if lastErr != nil {
+	return nil, fmt.Errorf("request failed after %d attempts: %w", pc.config.RetryAttempts+1, lastErr)
+}
+
+// readResponseBody reads the response body
+func readResponseBody(resp *http.Response) ([]byte, error) {
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response body: %w", err)
+	}
+	return body, nil
+}
+
+// executeRequest executes an HTTP request with retry logic
+func (pc *ParallelClient) executeRequest(ctx context.Context, req ParallelRequest) ParallelResponse {
+	start := time.Now()
+
+	requestCtx, cancel := pc.createRequestContext(ctx, req)
+	defer cancel()
+
+	httpReq, err := pc.createHTTPRequest(requestCtx, req)
+	if err != nil {
 		return ParallelResponse{
-			Error:   fmt.Errorf("request failed after %d attempts: %w", pc.config.RetryAttempts+1, lastErr),
+			Error:   err,
+			Latency: time.Since(start),
+		}
+	}
+
+	resp, err := pc.executeRequestWithRetry(requestCtx, httpReq)
+	if err != nil {
+		return ParallelResponse{
+			Error:   err,
 			Latency: time.Since(start),
 		}
 	}
 	defer resp.Body.Close()
 
-	// Read response body
-	body, err := io.ReadAll(resp.Body)
+	body, err := readResponseBody(resp)
 	if err != nil {
 		return ParallelResponse{
 			StatusCode: resp.StatusCode,
 			Headers:    resp.Header,
-			Error:      fmt.Errorf("failed to read response body: %w", err),
+			Error:      err,
 			Latency:    time.Since(start),
 		}
 	}

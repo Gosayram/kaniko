@@ -83,6 +83,22 @@ const (
 	DefaultRetryMaxDelay = 30 * time.Second
 	// DefaultRetryBackoff is the default exponential backoff multiplier
 	DefaultRetryBackoff = 2.0
+	// DefaultPrefetchTimeout is the default timeout for prefetch key calculation
+	DefaultPrefetchTimeout = 5 * time.Minute
+	// DefaultFilesUsedTimeout is the default timeout for FilesUsedFromContext operations
+	DefaultFilesUsedTimeout = 2 * time.Minute
+	// DefaultPopulateKeyTimeout is the default timeout for populateCompositeKey operations
+	DefaultPopulateKeyTimeout = 5 * time.Minute
+	// DefaultCacheKeyComputationTimeout is the default timeout for cache key computation
+	DefaultCacheKeyComputationTimeout = 10 * time.Minute
+	// DefaultProcessCommandTimeout is the default timeout for processCommand operations
+	DefaultProcessCommandTimeout = 15 * time.Minute
+	// DefaultDirectoryWalkTimeout is the default timeout for directory walk operations
+	DefaultDirectoryWalkTimeout = 5 * time.Minute
+	// DefaultFindSimilarPathsTimeout is the default timeout for finding similar paths
+	DefaultFindSimilarPathsTimeout = 3 * time.Minute
+	// DefaultFindBuildOutputTimeout is the default timeout for finding build output directories
+	DefaultFindBuildOutputTimeout = 3 * time.Minute
 )
 
 // Optimization constants
@@ -547,9 +563,82 @@ func isOCILayout(path string) bool {
 	return strings.HasPrefix(path, "oci:")
 }
 
+// getFilesForPrefetchCommand gets files for a prefetch command with timeout
+func (s *stageBuilder) getFilesForPrefetchCommand(
+	ctx context.Context,
+	command commands.DockerCommand,
+	commandIndex int,
+	cfg *v1.Config,
+	args *dockerfile.BuildArgs,
+) ([]string, error) {
+	filesCh := make(chan struct {
+		files []string
+		err   error
+	}, 1)
+
+	go func() {
+		files, err := command.FilesUsedFromContext(cfg, args)
+		filesCh <- struct {
+			files []string
+			err   error
+		}{files: files, err: err}
+	}()
+
+	select {
+	case result := <-filesCh:
+		return result.files, result.err
+	case <-ctx.Done():
+		logrus.Debugf("FilesUsedFromContext canceled for prefetch command %d", commandIndex)
+		return nil, ctx.Err()
+	case <-time.After(1 * time.Minute):
+		logrus.Debugf("FilesUsedFromContext timed out for prefetch command %d, skipping", commandIndex)
+		return nil, context.DeadlineExceeded
+	}
+}
+
+// populateKeyForPrefetchCommand populates composite key for a prefetch command with timeout
+func (s *stageBuilder) populateKeyForPrefetchCommand(
+	ctx context.Context,
+	command commands.DockerCommand,
+	commandIndex int,
+	files []string,
+	compositeKey CompositeCache,
+	args *dockerfile.BuildArgs,
+	envs []string,
+) (CompositeCache, error) {
+	populateCh := make(chan struct {
+		key CompositeCache
+		err error
+	}, 1)
+
+	go func() {
+		key, populateErr := s.populateCompositeKey(command, files, compositeKey, args, envs)
+		populateCh <- struct {
+			key CompositeCache
+			err error
+		}{key: key, err: populateErr}
+	}()
+
+	select {
+	case result := <-populateCh:
+		if result.err != nil {
+			if logrus.IsLevelEnabled(logrus.DebugLevel) {
+				logging.AsyncDebugf("Failed to populate composite key for prefetch command %d: %v", commandIndex, result.err)
+			}
+			return compositeKey, result.err
+		}
+		return result.key, nil
+	case <-ctx.Done():
+		logrus.Debugf("populateCompositeKey canceled for prefetch command %d", commandIndex)
+		return compositeKey, ctx.Err()
+	case <-time.After(DefaultFilesUsedTimeout):
+		logrus.Debugf("populateCompositeKey timed out for prefetch command %d, skipping", commandIndex)
+		return compositeKey, context.DeadlineExceeded
+	}
+}
+
 // calculatePrefetchKeys calculates cache keys for next N commands for prefetching
-// This improves cache hit rate by preloading potential layers (per performance plan)
-// N is configurable via PrefetchWindow option (default: 10, increased from 3)
+// nolint:gocyclo // Complex function with multiple timeout and error handling paths
 func (s *stageBuilder) calculatePrefetchKeys(
 	currentIndex int,
 	currentCompositeKey CompositeCache,
@@ -564,31 +653,47 @@ func (s *stageBuilder) calculatePrefetchKeys(
 		maxPrefetch = 10 // Default value
 	}
 
+	// Add timeout for prefetch key calculation to prevent hangs
+	ctx, cancel := context.WithTimeout(context.Background(), DefaultPrefetchTimeout)
+	defer cancel()
+
 	// Calculate keys for next commands
 	compositeKey := currentCompositeKey
 	for i := currentIndex + 1; i < len(s.cmds) && i <= currentIndex+maxPrefetch; i++ {
+		// Check context cancellation
+		select {
+		case <-ctx.Done():
+			logrus.Debugf("Prefetch key calculation canceled after processing %d commands", i-currentIndex-1)
+			return prefetchKeys
+		default:
+		}
+
 		command := s.cmds[i]
 		if command == nil || !command.ShouldCacheOutput() {
 			continue
 		}
 
-		// Get files for this command
-		files, err := command.FilesUsedFromContext(cfg, args)
+		// Get files for this command with timeout
+		files, err := s.getFilesForPrefetchCommand(ctx, command, i, cfg, args)
 		if err != nil {
+			if err == context.DeadlineExceeded {
+				continue
+			}
 			if logrus.IsLevelEnabled(logrus.DebugLevel) {
 				logging.AsyncDebugf("Failed to get files for prefetch command %d: %v", i, err)
 			}
 			continue
 		}
 
-		// Populate composite key for this command
-		compositeKey, err = s.populateCompositeKey(command, files, compositeKey, args, cfg.Env)
+		// Populate composite key for this command with timeout
+		newKey, err := s.populateKeyForPrefetchCommand(ctx, command, i, files, compositeKey, args, cfg.Env)
 		if err != nil {
-			if logrus.IsLevelEnabled(logrus.DebugLevel) {
-				logging.AsyncDebugf("Failed to populate composite key for prefetch command %d: %v", i, err)
+			if err == context.DeadlineExceeded {
+				continue
 			}
 			continue
 		}
+		compositeKey = newKey
 
 		// Calculate hash
 		ck, err := compositeKey.Hash()
@@ -654,7 +759,123 @@ type cacheCheckResult struct {
 	err          error
 }
 
+// getFilesForCacheKey gets files for a command with timeout
+func (s *stageBuilder) getFilesForCacheKey(
+	ctx context.Context,
+	command commands.DockerCommand,
+	commandStr string,
+	cfg *v1.Config,
+) ([]string, error) {
+	filesCh := make(chan struct {
+		files []string
+		err   error
+	}, 1)
+
+	go func() {
+		defer func() {
+			// Ensure channel is always drained to prevent goroutine leak
+			select {
+			case <-filesCh:
+			default:
+			}
+		}()
+
+		// Check context before starting work
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
+		files, err := command.FilesUsedFromContext(cfg, s.args)
+
+		// Check context before sending result
+		select {
+		case filesCh <- struct {
+			files []string
+			err   error
+		}{files: files, err: err}:
+		case <-ctx.Done():
+			return
+		}
+	}()
+
+	select {
+	case result := <-filesCh:
+		if result.err != nil {
+			logrus.Warnf("Failed to get files used from context for command %s: %v, continuing with empty files",
+				commandStr, result.err)
+			return []string{}, nil
+		}
+		return result.files, nil
+	case <-ctx.Done():
+		logrus.Warnf("FilesUsedFromContext timed out for command %s", commandStr)
+		return nil, ctx.Err()
+	case <-time.After(DefaultFilesUsedTimeout):
+		logrus.Warnf("FilesUsedFromContext timed out after 2 minutes for command %s, skipping", commandStr)
+		return []string{}, nil
+	}
+}
+
+// populateKeyForCacheKey populates composite key for a command with timeout
+func (s *stageBuilder) populateKeyForCacheKey(
+	ctx context.Context,
+	command commands.DockerCommand,
+	files []string,
+	currentCompositeKey CompositeCache,
+	cfg *v1.Config,
+) (CompositeCache, error) {
+	populateCh := make(chan struct {
+		key CompositeCache
+		err error
+	}, 1)
+
+	go func() {
+		defer func() {
+			// Ensure channel is always drained to prevent goroutine leak
+			select {
+			case <-populateCh:
+			default:
+			}
+		}()
+
+		// Check context before starting work
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
+		key, populateErr := s.populateCompositeKey(command, files, currentCompositeKey, s.args, cfg.Env)
+
+		// Check context before sending result
+		select {
+		case populateCh <- struct {
+			key CompositeCache
+			err error
+		}{key: key, err: populateErr}:
+		case <-ctx.Done():
+			return
+		}
+	}()
+
+	select {
+	case result := <-populateCh:
+		if result.err != nil {
+			logrus.Warnf("Failed to populate composite cache key: %v, continuing", result.err)
+			return currentCompositeKey, result.err
+		}
+		return result.key, nil
+	case <-ctx.Done():
+		return currentCompositeKey, ctx.Err()
+	case <-time.After(DefaultPopulateKeyTimeout):
+		logrus.Warnf("populateCompositeKey timed out after 5 minutes, continuing with current key")
+		return currentCompositeKey, context.DeadlineExceeded
+	}
+}
+
 // computeCacheKeys computes cache keys for all commands sequentially
+// nolint:gocyclo // Complex function with multiple timeout and error handling paths
 func (s *stageBuilder) computeCacheKeys(
 	compositeKey CompositeCache,
 	cfg *v1.Config,
@@ -662,24 +883,41 @@ func (s *stageBuilder) computeCacheKeys(
 	keyComputationTimer := timing.Start("Cache Key Computation")
 	defer timing.DefaultRun.Stop(keyComputationTimer)
 
+	// Add timeout for cache key computation to prevent hangs
+	ctx, cancel := context.WithTimeout(context.Background(), DefaultCacheKeyComputationTimeout)
+	defer cancel()
+
 	results := make([]*cacheCheckResult, 0, len(s.cmds))
 	currentCompositeKey := compositeKey
 
 	for i, command := range s.cmds {
+		// Check context cancellation
+		select {
+		case <-ctx.Done():
+			logrus.Warnf("Cache key computation canceled after processing %d commands", i)
+			return results, ctx.Err()
+		default:
+		}
+
 		if command == nil {
 			continue
 		}
 
 		commandStr := command.String()
 
-		files, err := command.FilesUsedFromContext(cfg, s.args)
+		// Get files with timeout to prevent hangs
+		files, err := s.getFilesForCacheKey(ctx, command, commandStr, cfg)
 		if err != nil {
-			return nil, errors.Wrapf(err, "failed to get files used from context for command %s", commandStr)
+			return results, err
 		}
 
-		currentCompositeKey, err = s.populateCompositeKey(command, files, currentCompositeKey, s.args, cfg.Env)
-		if err != nil {
-			return nil, errors.Wrapf(err, "failed to populate composite cache key for command %s", commandStr)
+		// Populate composite key with timeout
+		newKey, err := s.populateKeyForCacheKey(ctx, command, files, currentCompositeKey, cfg)
+		if err != nil && err != context.DeadlineExceeded {
+			return results, err
+		}
+		if err == nil {
+			currentCompositeKey = newKey
 		}
 
 		if logrus.IsLevelEnabled(logrus.DebugLevel) {
@@ -1008,57 +1246,146 @@ func (s *stageBuilder) executeCommandsSequential(compositeKey *CompositeCache, i
 	return executor.ExecuteSequentially(compositeKey, initSnapshotTaken)
 }
 
-func (s *stageBuilder) processCommand(
+// getFilesUsedFromContext gets files used from context with timeout
+func (s *stageBuilder) getFilesUsedFromContext(
+	ctx context.Context,
 	command commands.DockerCommand,
 	index int,
-	compositeKey *CompositeCache,
-	cacheGroup *errgroup.Group,
-	initSnapshotTaken bool,
-) error {
-	// Protect shared state access with read lock
-	s.mutex.RLock()
-	files, err := command.FilesUsedFromContext(&s.cf.Config, s.args)
-	s.mutex.RUnlock()
+) ([]string, error) {
+	filesCh := make(chan struct {
+		files []string
+		err   error
+	}, 1)
 
-	if err != nil {
-		return errors.Wrap(err, "failed to get files used from context")
-	}
+	go func() {
+		defer func() {
+			select {
+			case <-filesCh:
+			default:
+			}
+		}()
 
-	if s.opts.Cache {
-		var err error
-		startTime := time.Now()
-		logrus.Debugf("Populating composite cache key for command %d: %s (%d files)", index, command.String(), len(files))
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
 		s.mutex.RLock()
-		*compositeKey, err = s.populateCompositeKey(command, files, *compositeKey, s.args, s.cf.Config.Env)
+		files, err := command.FilesUsedFromContext(&s.cf.Config, s.args)
 		s.mutex.RUnlock()
-		duration := time.Since(startTime)
-		if err != nil {
-			logrus.Errorf("Failed to populate composite cache key after %v: %v", duration, err)
-			return errors.Wrap(err, "failed to populate composite cache key")
+
+		select {
+		case filesCh <- struct {
+			files []string
+			err   error
+		}{files: files, err: err}:
+		case <-ctx.Done():
+			return
 		}
-		if duration > 5*time.Second {
-			logrus.Infof("Composite cache key populated in %v for command %d: %s", duration, index, command.String())
-		} else {
-			logrus.Debugf("Composite cache key populated in %v for command %d", duration, index)
+	}()
+
+	select {
+	case result := <-filesCh:
+		if result.err != nil {
+			logrus.Warnf("Failed to get files used from context for command %d: %v, continuing with empty files",
+				index, result.err)
+			return []string{}, nil
 		}
+		return result.files, nil
+	case <-ctx.Done():
+		logrus.Warnf("FilesUsedFromContext canceled for command %d: %s", index, command.String())
+		return nil, ctx.Err()
+	case <-time.After(DefaultFilesUsedTimeout):
+		logrus.Warnf("FilesUsedFromContext timed out after 2 minutes for command %d: %s, continuing with empty files",
+			index, command.String())
+		return []string{}, nil
+	}
+}
+
+// populateCacheKeyIfNeeded populates cache key if caching is enabled
+func (s *stageBuilder) populateCacheKeyIfNeeded(
+	ctx context.Context,
+	command commands.DockerCommand,
+	index int,
+	files []string,
+	compositeKey *CompositeCache,
+) {
+	if !s.opts.Cache {
+		return
 	}
 
+	startTime := time.Now()
+	logrus.Debugf("Populating composite cache key for command %d: %s (%d files)", index, command.String(), len(files))
+
+	populateCh := make(chan struct {
+		key CompositeCache
+		err error
+	}, 1)
+
+	go func() {
+		defer func() {
+			select {
+			case <-populateCh:
+			default:
+			}
+		}()
+
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
+		s.mutex.RLock()
+		key, err := s.populateCompositeKey(command, files, *compositeKey, s.args, s.cf.Config.Env)
+		s.mutex.RUnlock()
+
+		select {
+		case populateCh <- struct {
+			key CompositeCache
+			err error
+		}{key: key, err: err}:
+		case <-ctx.Done():
+			return
+		}
+	}()
+
+	select {
+	case result := <-populateCh:
+		if result.err != nil {
+			duration := time.Since(startTime)
+			logrus.Errorf("Failed to populate composite cache key after %v: %v", duration, result.err)
+			logrus.Warnf("Continuing without cache key for command %d", index)
+		} else {
+			*compositeKey = result.key
+			duration := time.Since(startTime)
+			if duration > 5*time.Second {
+				logrus.Infof("Composite cache key populated in %v for command %d: %s", duration, index, command.String())
+			} else {
+				logrus.Debugf("Composite cache key populated in %v for command %d", duration, index)
+			}
+		}
+	case <-ctx.Done():
+		logrus.Warnf("populateCompositeKey canceled for command %d: %s", index, command.String())
+	case <-time.After(DefaultPopulateKeyTimeout):
+		logrus.Warnf("populateCompositeKey timed out after 5 minutes for command %d: %s, continuing without cache key",
+			index, command.String())
+	}
+}
+
+// executeCommandWithLogging executes command with structured logging
+func (s *stageBuilder) executeCommandWithLogging(
+	command commands.DockerCommand,
+	index int,
+) error {
 	logrus.Info(command.String())
 
-	// Log command start with structured logging
 	globalLogger := logging.GetGlobalManager()
 	commandStartTime := time.Now()
 	globalLogger.LogCommandStart(index, command.String(), "stage")
 
-	if !initSnapshotTaken && !isCacheCommand(command) && !command.ProvidesFilesToSnapshot() {
-		if err := s.initSnapshotWithTimings(); err != nil {
-			return err
-		}
-	}
-
-	// Execute command (this is safe as it doesn't modify shared state)
 	if err := command.ExecuteCommand(&s.cf.Config, s.args); err != nil {
-		// Log command failure
 		commandDuration := time.Since(commandStartTime).Milliseconds()
 		globalLogger.LogCommandComplete(index, command.String(), commandDuration, false)
 		globalLogger.LogError("command", "execute", err, map[string]interface{}{
@@ -1068,9 +1395,37 @@ func (s *stageBuilder) processCommand(
 		return errors.Wrap(err, "failed to execute command")
 	}
 
-	// Log command completion
 	commandDuration := time.Since(commandStartTime).Milliseconds()
 	globalLogger.LogCommandComplete(index, command.String(), commandDuration, true)
+	return nil
+}
+
+func (s *stageBuilder) processCommand(
+	command commands.DockerCommand,
+	index int,
+	compositeKey *CompositeCache,
+	cacheGroup *errgroup.Group,
+	initSnapshotTaken bool,
+) error {
+	ctx, cancel := context.WithTimeout(context.Background(), DefaultProcessCommandTimeout)
+	defer cancel()
+
+	files, err := s.getFilesUsedFromContext(ctx, command, index)
+	if err != nil {
+		return err
+	}
+
+	s.populateCacheKeyIfNeeded(ctx, command, index, files, compositeKey)
+
+	if !initSnapshotTaken && !isCacheCommand(command) && !command.ProvidesFilesToSnapshot() {
+		if err := s.initSnapshotWithTimings(); err != nil {
+			return err
+		}
+	}
+
+	if err := s.executeCommandWithLogging(command, index); err != nil {
+		return err
+	}
 
 	files = command.FilesToSnapshot()
 	if !s.shouldTakeSnapshot(index, command.MetadataOnly()) && !s.opts.ForceBuildMetadata {
@@ -2402,27 +2757,70 @@ func processExistingPathFromRoot(searchPath string, info os.FileInfo, searchRoot
 func walkDirectoryFromRoot(searchPath, searchRoot string) ([]string, error) {
 	var srcFiles []string
 
-	walkErr := filepath.Walk(searchPath, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			// Skip problematic paths but continue walking
-			logrus.Debugf("Skipping problematic path %s: %v", path, err)
-			return nil
-		}
-		if !info.IsDir() {
-			relPath := calculateRelativePath(path, searchRoot)
-			if relPath != "" {
-				srcFiles = append(srcFiles, relPath)
-				// Removed per-file debug logging - too verbose for thousands of files
+	// Add timeout to prevent hangs on large directories
+	ctx, cancel := context.WithTimeout(context.Background(), DefaultPrefetchTimeout)
+	defer cancel()
+
+	resultCh := make(chan struct {
+		files []string
+		err   error
+	}, 1)
+
+	go func() {
+		var files []string
+		walkErr := filepath.Walk(searchPath, func(path string, info os.FileInfo, err error) error {
+			// Check context cancellation
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			default:
 			}
+
+			if err != nil {
+				// Skip problematic paths but continue walking
+				if os.IsNotExist(err) || os.IsPermission(err) {
+					logrus.Debugf("Skipping problematic path %s: %v", path, err)
+					return nil
+				}
+				// For other errors, log and continue to prevent hangs
+				logrus.Debugf("Error accessing path %s, skipping: %v", path, err)
+				return nil
+			}
+
+			// Skip symlinks to prevent infinite loops and hangs
+			if info != nil && info.Mode()&os.ModeSymlink != 0 {
+				logrus.Debugf("Skipping symlink %s during directory walk", path)
+				return nil
+			}
+
+			if !info.IsDir() {
+				relPath := calculateRelativePath(path, searchRoot)
+				if relPath != "" {
+					files = append(files, relPath)
+					// Removed per-file debug logging - too verbose for thousands of files
+				}
+			}
+			return nil
+		})
+
+		resultCh <- struct {
+			files []string
+			err   error
+		}{files: files, err: walkErr}
+	}()
+
+	select {
+	case result := <-resultCh:
+		if result.err != nil && result.err != context.DeadlineExceeded && result.err != context.Canceled {
+			logrus.Warnf("Failed to walk directory %s: %v", searchPath, result.err)
+		} else if result.err == context.DeadlineExceeded {
+			logrus.Warnf("Directory walk timed out for %s, returning partial results (%d files)", searchPath, len(result.files))
 		}
-		return nil
-	})
-
-	if walkErr != nil {
-		logrus.Warnf("Failed to walk directory %s: %v", searchPath, walkErr)
+		return result.files, nil
+	case <-ctx.Done():
+		logrus.Warnf("Directory walk canceled for %s due to timeout", searchPath)
+		return srcFiles, nil
 	}
-
-	return srcFiles, nil
 }
 
 // findSimilarPathsFromRoot tries to find similar paths when the exact path doesn't exist, searching from root
@@ -2450,6 +2848,7 @@ func findSimilarPathsFromRoot(searchPath, searchRoot string) ([]string, error) {
 }
 
 // findBuildOutputDirectoriesFromRoot searches for common build output directories from specified root
+// nolint:gocyclo // Complex function with multiple pattern matching and error handling paths
 func findBuildOutputDirectoriesFromRoot(searchPath, searchRoot string) []string {
 	var srcFiles []string
 
@@ -2463,9 +2862,31 @@ func findBuildOutputDirectoriesFromRoot(searchPath, searchRoot string) []string 
 		if parentInfo, err := os.Stat(parentDir); err == nil && parentInfo.IsDir() {
 			logrus.Debugf("Searching for build output patterns in: %s", parentDir)
 
+			// Add timeout to prevent hangs
+			ctx, cancel := context.WithTimeout(context.Background(), DefaultFindSimilarPathsTimeout)
+			defer cancel()
+
 			err := filepath.Walk(parentDir, func(path string, info os.FileInfo, err error) error {
+				// Check context cancellation
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				default:
+				}
+
 				if err != nil {
-					return nil // Skip errors
+					if os.IsNotExist(err) || os.IsPermission(err) {
+						return nil // Skip errors
+					}
+					// For other errors, log and continue to prevent hangs
+					logrus.Debugf("Error accessing path %s, skipping: %v", path, err)
+					return nil
+				}
+
+				// Skip symlinks to prevent infinite loops and hangs
+				if info != nil && info.Mode()&os.ModeSymlink != 0 {
+					logrus.Debugf("Skipping symlink %s during build output search", path)
+					return nil
 				}
 
 				// Check if this directory matches common build output patterns
@@ -2482,8 +2903,10 @@ func findBuildOutputDirectoriesFromRoot(searchPath, searchRoot string) []string 
 				}
 				return nil
 			})
-			if err != nil {
+			if err != nil && err != context.DeadlineExceeded && err != context.Canceled {
 				logrus.Debugf("Failed to search for build output patterns in %s: %v", parentDir, err)
+			} else if err == context.DeadlineExceeded {
+				logrus.Warnf("Build output pattern search timed out for %s", parentDir)
 			}
 		}
 	}
@@ -2518,10 +2941,32 @@ func walkPatternDirectory(parentDir, baseName, searchRoot string) []string {
 	logrus.Debugf("Searching in parent directory: %s for pattern: %s (root: %s)",
 		parentDir, baseName, searchRoot)
 
+	// Add timeout to prevent hangs
+	ctx, cancel := context.WithTimeout(context.Background(), DefaultFindBuildOutputTimeout)
+	defer cancel()
+
 	// Search for files matching the base name pattern
 	err := filepath.Walk(parentDir, func(path string, info os.FileInfo, err error) error {
+		// Check context cancellation
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
 		if err != nil {
-			return nil // Skip errors
+			if os.IsNotExist(err) || os.IsPermission(err) {
+				return nil // Skip errors
+			}
+			// For other errors, log and continue to prevent hangs
+			logrus.Debugf("Error accessing path %s, skipping: %v", path, err)
+			return nil
+		}
+
+		// Skip symlinks to prevent infinite loops and hangs
+		if info != nil && info.Mode()&os.ModeSymlink != 0 {
+			logrus.Debugf("Skipping symlink %s during pattern search", path)
+			return nil
 		}
 
 		if matchPattern(path, baseName) {
@@ -2530,8 +2975,10 @@ func walkPatternDirectory(parentDir, baseName, searchRoot string) []string {
 		return nil
 	})
 
-	if err != nil {
+	if err != nil && err != context.DeadlineExceeded && err != context.Canceled {
 		logrus.Debugf("Failed to search in parent directory %s: %v", parentDir, err)
+	} else if err == context.DeadlineExceeded {
+		logrus.Warnf("Pattern directory walk timed out for %s", parentDir)
 	}
 
 	return srcFiles

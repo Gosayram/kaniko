@@ -1017,3 +1017,132 @@ func TestIsSrcRemoteFileURL(t *testing.T) {
 		)
 	}
 }
+
+func TestResolveEnvAndWildcards_Basic(t *testing.T) {
+	tempDir := t.TempDir()
+
+	// Create test files
+	testFile1 := filepath.Join(tempDir, "file1.txt")
+	testFile2 := filepath.Join(tempDir, "file2.txt")
+	os.WriteFile(testFile1, []byte("content1"), 0644)
+	os.WriteFile(testFile2, []byte("content2"), 0644)
+
+	fileContext := FileContext{Root: tempDir}
+	sd := instructions.SourcesAndDest{
+		SourcePaths: []string{"file1.txt", "file2.txt"},
+		DestPath:    "/app/",
+	}
+	envs := []string{}
+
+	sources, dest, err := ResolveEnvAndWildcards(sd, fileContext, envs)
+	if err != nil {
+		t.Fatalf("ResolveEnvAndWildcards() error = %v", err)
+	}
+	if len(sources) != 2 {
+		t.Errorf("ResolveEnvAndWildcards() sources count = %d, want 2", len(sources))
+	}
+	if dest != "/app/" {
+		t.Errorf("ResolveEnvAndWildcards() dest = %q, want %q", dest, "/app/")
+	}
+}
+
+func TestResolveEnvAndWildcards_WithEnvironmentVariables(t *testing.T) {
+	tempDir := t.TempDir()
+
+	// Create test file
+	testFile := filepath.Join(tempDir, "test.txt")
+	os.WriteFile(testFile, []byte("content"), 0644)
+
+	fileContext := FileContext{Root: tempDir}
+	sd := instructions.SourcesAndDest{
+		SourcePaths: []string{"$FILENAME"},
+		DestPath:    "/app/",
+	}
+	envs := []string{"FILENAME=test.txt"}
+
+	sources, dest, err := ResolveEnvAndWildcards(sd, fileContext, envs)
+	if err != nil {
+		t.Fatalf("ResolveEnvAndWildcards() error = %v", err)
+	}
+	if len(sources) != 1 {
+		t.Errorf("ResolveEnvAndWildcards() sources count = %d, want 1", len(sources))
+	}
+	if dest != "/app/" {
+		t.Errorf("ResolveEnvAndWildcards() dest = %q, want %q", dest, "/app/")
+	}
+}
+
+func TestResolveEnvAndWildcards_WithWildcards(t *testing.T) {
+	tempDir := t.TempDir()
+
+	// Create test files
+	os.WriteFile(filepath.Join(tempDir, "file1.txt"), []byte("content1"), 0644)
+	os.WriteFile(filepath.Join(tempDir, "file2.txt"), []byte("content2"), 0644)
+	os.WriteFile(filepath.Join(tempDir, "other.log"), []byte("log"), 0644)
+
+	fileContext := FileContext{Root: tempDir}
+	sd := instructions.SourcesAndDest{
+		SourcePaths: []string{"*.txt"},
+		DestPath:    "/app/",
+	}
+	envs := []string{}
+
+	sources, dest, err := ResolveEnvAndWildcards(sd, fileContext, envs)
+	if err != nil {
+		t.Fatalf("ResolveEnvAndWildcards() error = %v", err)
+	}
+	if len(sources) < 2 {
+		t.Errorf("ResolveEnvAndWildcards() sources count = %d, want at least 2", len(sources))
+	}
+	if dest != "/app/" {
+		t.Errorf("ResolveEnvAndWildcards() dest = %q, want %q", dest, "/app/")
+	}
+}
+
+func TestResolveEnvAndWildcards_EmptySources(t *testing.T) {
+	tempDir := t.TempDir()
+
+	fileContext := FileContext{Root: tempDir}
+	sd := instructions.SourcesAndDest{
+		SourcePaths: []string{},
+		DestPath:    "/app/",
+	}
+	envs := []string{}
+
+	sources, dest, err := ResolveEnvAndWildcards(sd, fileContext, envs)
+	// Should return error for empty sources
+	if err == nil {
+		t.Error("ResolveEnvAndWildcards() should return error for empty sources")
+	}
+	if len(sources) != 0 {
+		t.Errorf("ResolveEnvAndWildcards() sources = %v, want empty", sources)
+	}
+	if dest != "" {
+		t.Errorf("ResolveEnvAndWildcards() dest = %q, want empty", dest)
+	}
+}
+
+func TestResolveEnvAndWildcards_RemoteURL(t *testing.T) {
+	tempDir := t.TempDir()
+
+	fileContext := FileContext{Root: tempDir}
+	sd := instructions.SourcesAndDest{
+		SourcePaths: []string{"https://example.com/file.txt"},
+		DestPath:    "/app/",
+	}
+	envs := []string{}
+
+	sources, dest, err := ResolveEnvAndWildcards(sd, fileContext, envs)
+	if err != nil {
+		t.Fatalf("ResolveEnvAndWildcards() error = %v", err)
+	}
+	if len(sources) != 1 {
+		t.Errorf("ResolveEnvAndWildcards() sources count = %d, want 1", len(sources))
+	}
+	if sources[0] != "https://example.com/file.txt" {
+		t.Errorf("ResolveEnvAndWildcards() source = %q, want %q", sources[0], "https://example.com/file.txt")
+	}
+	if dest != "/app/" {
+		t.Errorf("ResolveEnvAndWildcards() dest = %q, want %q", dest, "/app/")
+	}
+}

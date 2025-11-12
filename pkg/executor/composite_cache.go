@@ -17,9 +17,10 @@ limitations under the License.
 package executor
 
 import (
-	ctx "context"
+	"context"
 	"crypto/sha256"
 	"fmt"
+	"hash"
 	"os"
 	"path/filepath"
 	"strings"
@@ -30,6 +31,13 @@ import (
 	"github.com/sirupsen/logrus"
 
 	"github.com/Gosayram/kaniko/pkg/util"
+)
+
+const (
+	// DefaultHashDirTimeout is the default timeout for directory hashing
+	DefaultHashDirTimeout = 10 * time.Minute
+	// DefaultFileHashTimeout is the default timeout for file hashing
+	DefaultFileHashTimeout = 30 * time.Second
 )
 
 // Global file hash cache to avoid recomputing hashes for the same files
@@ -79,20 +87,20 @@ func (s *CompositeCache) Hash() (string, error) {
 	}
 
 	// Compute hash
-	hash, err := util.SHA256(strings.NewReader(s.Key()))
+	hashValue, err := util.SHA256(strings.NewReader(s.Key()))
 	if err != nil {
 		return "", err
 	}
 
 	// Cache the result
-	s.cachedHash = hash
+	s.cachedHash = hashValue
 	s.hashComputed = true
 
-	return hash, nil
+	return hashValue, nil
 }
 
 // AddPath adds a file or directory path to the composite cache key
-func (s *CompositeCache) AddPath(p string, context util.FileContext) error {
+func (s *CompositeCache) AddPath(p string, fileContext util.FileContext) error {
 	startTime := time.Now()
 	logrus.Debugf("Adding path to cache key: %s", p)
 
@@ -110,7 +118,7 @@ func (s *CompositeCache) AddPath(p string, context util.FileContext) error {
 
 	if fi.Mode().IsDir() {
 		logrus.Debugf("Hashing directory for cache key: %s", p)
-		isEmptyDir, k, hashErr := hashDir(p, context)
+		isEmptyDir, k, hashErr := hashDir(p, fileContext)
 		if hashErr != nil {
 			logrus.Errorf("Failed to hash directory %s after %v: %v", p, time.Since(startTime), hashErr)
 			return hashErr
@@ -122,7 +130,7 @@ func (s *CompositeCache) AddPath(p string, context util.FileContext) error {
 
 		// Only add the hash of this directory to the key
 		// if there is any ignored content.
-		if !isEmptyDir || !context.ExcludesFile(p) {
+		if !isEmptyDir || !fileContext.ExcludesFile(p) {
 			s.keys = append(s.keys, k)
 		}
 		// Invalidate hash cache when directory hash is added
@@ -131,7 +139,7 @@ func (s *CompositeCache) AddPath(p string, context util.FileContext) error {
 		return nil
 	}
 
-	if context.ExcludesFile(p) {
+	if fileContext.ExcludesFile(p) {
 		return nil
 	}
 
@@ -141,7 +149,7 @@ func (s *CompositeCache) AddPath(p string, context util.FileContext) error {
 	if opts := getOptsForHashCache(); opts != nil {
 		// Use new cache with invalidation
 		var hashErr error
-		fh, hashErr = getFileHashWithCache(p, context, opts)
+		fh, hashErr = getFileHashWithCache(p, fileContext, opts)
 		if hashErr != nil {
 			return hashErr
 		}
@@ -187,79 +195,58 @@ func (s *CompositeCache) AddPath(p string, context util.FileContext) error {
 	return nil
 }
 
-// HashDir returns a hash of the directory.
-func hashDir(p string, context util.FileContext) (isEmpty bool, hash string, err error) {
-	// Create timeout context for directory hashing to prevent hangs
+// parseHashDirTimeout parses the timeout from environment variable
+func parseHashDirTimeout() time.Duration {
 	timeoutStr := os.Getenv("HASH_DIR_TIMEOUT")
 	if timeoutStr == "" {
-		timeoutStr = "10m" // Default 10 minutes for large directories
+		return DefaultHashDirTimeout
 	}
 	timeout, parseErr := time.ParseDuration(timeoutStr)
 	if parseErr != nil {
 		logrus.Warnf("Invalid HASH_DIR_TIMEOUT value '%s', using default 10m", timeoutStr)
-		timeout = 10 * time.Minute
+		return DefaultHashDirTimeout
 	}
+	return timeout
+}
 
-	hashCtx, cancel := ctx.WithTimeout(ctx.Background(), timeout)
-	defer cancel()
+// hashFileInDir hashes a single file with timeout and caching
+func hashFileInDir(path string, fileContext util.FileContext) (string, error) {
+	type hashResult struct {
+		hash string
+		err  error
+	}
+	hashResultCh := make(chan hashResult, 1)
 
-	startTime := time.Now()
-	logrus.Debugf("Starting directory hash for %s (timeout: %v)", p, timeout)
+	fileHashCtx, hashCancel := context.WithTimeout(context.Background(), DefaultFileHashTimeout)
+	defer hashCancel()
 
-	sha := sha256.New()
-	empty := true
-	var fileCount int
-	lastLogTime := startTime
+	go func() {
+		defer func() {
+			select {
+			case <-hashResultCh:
+			default:
+			}
+			if r := recover(); r != nil {
+				logrus.Debugf("Panic while hashing file %s: %v, skipping", path, r)
+				select {
+				case hashResultCh <- hashResult{err: fmt.Errorf("panic: %v", r)}:
+				case <-fileHashCtx.Done():
+				}
+			}
+		}()
 
-	if err := filepath.Walk(p, func(path string, _ os.FileInfo, err error) error {
-		// Check context cancellation
 		select {
-		case <-hashCtx.Done():
-			logrus.Warnf("Directory hash cancelled after processing %d files in %v (dir: %s)",
-				fileCount, time.Since(startTime), p)
-			return hashCtx.Err()
+		case <-fileHashCtx.Done():
+			return
 		default:
 		}
 
-		if err != nil {
-			// If individual file access fails, log warning and continue
-			// This prevents build failures when some files are inaccessible
-			if os.IsNotExist(err) {
-				logrus.Debugf("File %s does not exist during directory walk, skipping", path)
-				return nil
-			}
-			return err
-		}
-
-		fileCount++
-
-		// Log progress every 10 seconds for large directories
-		if time.Since(lastLogTime) > 10*time.Second {
-			logrus.Infof("Still hashing directory %s: processed %d files in %v (current: %s)",
-				p, fileCount, time.Since(startTime), path)
-			lastLogTime = time.Now()
-		}
-
-		exclude := context.ExcludesFile(path)
-		if exclude {
-			return nil
-		}
-
-		// Use new FileHashCache with invalidation if opts are available
-		// Otherwise fall back to old cache for backward compatibility
 		var fileHash string
+		var hashErr error
+
 		if opts := getOptsForHashCache(); opts != nil {
-			// Use new cache with invalidation
-			var hashErr error
-			fileHash, hashErr = getFileHashWithCache(path, context, opts)
-			if hashErr != nil {
-				// If file hashing fails, log warning and continue
-				// This prevents build failures when some files can't be hashed
-				logrus.Debugf("Failed to hash file %s: %v, skipping", path, hashErr)
-				return nil
-			}
+			fileHash, hashErr = getFileHashWithCache(path, fileContext, opts)
 		} else {
-			// Fall back to old cache (backward compatibility)
 			fileHashCacheMu.RLock()
 			cachedHash, exists := fileHashCache[path]
 			fileHashCacheMu.RUnlock()
@@ -267,36 +254,118 @@ func hashDir(p string, context util.FileContext) (isEmpty bool, hash string, err
 			if exists {
 				fileHash = cachedHash
 			} else {
-				// Compute hash if not cached
-				// Use partial hashing for large files (default: 10MB limit)
-				// This reduces CPU usage while maintaining good change detection
-				var hashErr error
-				maxFileHashSize := int64(defaultMaxFileHashSizeMB * fileHashBytesPerMegabyte) // Default: 10MB
+				select {
+				case <-fileHashCtx.Done():
+					return
+				default:
+				}
+
+				maxFileHashSize := int64(defaultMaxFileHashSizeMB * fileHashBytesPerMegabyte)
 				hasher := util.CacheHasherWithLimit(maxFileHashSize)
 				fileHash, hashErr = hasher(path)
-				if hashErr != nil {
-					// If file hashing fails, log warning and continue
-					// This prevents build failures when some files can't be hashed
-					logrus.Debugf("Failed to hash file %s: %v, skipping", path, hashErr)
-					return nil
+				if hashErr == nil {
+					fileHashCacheMu.Lock()
+					fileHashCache[path] = fileHash
+					fileHashCacheMu.Unlock()
 				}
-				// Cache the result (per performance plan: cache file hashes)
-				fileHashCacheMu.Lock()
-				fileHashCache[path] = fileHash
-				fileHashCacheMu.Unlock()
 			}
+		}
+
+		select {
+		case hashResultCh <- hashResult{hash: fileHash, err: hashErr}:
+		case <-fileHashCtx.Done():
+			return
+		}
+	}()
+
+	select {
+	case result := <-hashResultCh:
+		return result.hash, result.err
+	case <-fileHashCtx.Done():
+		return "", fileHashCtx.Err()
+	case <-time.After(DefaultFileHashTimeout):
+		return "", fmt.Errorf("file hash timed out after %v", DefaultFileHashTimeout)
+	}
+}
+
+// walkDirectoryForHash walks directory and hashes files
+func walkDirectoryForHash(
+	hashCtx context.Context,
+	p string,
+	fileContext util.FileContext,
+	sha hash.Hash,
+	startTime time.Time,
+) (isEmpty bool, fileCount int, err error) {
+	lastLogTime := startTime
+
+	err = filepath.Walk(p, func(path string, info os.FileInfo, err error) error {
+		select {
+		case <-hashCtx.Done():
+			logrus.Warnf("Directory hash canceled after processing %d files in %v (dir: %s)",
+				fileCount, time.Since(startTime), p)
+			return hashCtx.Err()
+		default:
+		}
+
+		if err != nil {
+			if os.IsNotExist(err) || os.IsPermission(err) {
+				logrus.Debugf("File %s is not accessible during directory walk, skipping: %v", path, err)
+				return nil
+			}
+			logrus.Debugf("Error accessing file %s during directory walk, skipping: %v", path, err)
+			return nil
+		}
+
+		if info != nil && info.Mode()&os.ModeSymlink != 0 {
+			logrus.Debugf("Skipping symlink %s during directory hash", path)
+			return nil
+		}
+
+		fileCount++
+
+		if time.Since(lastLogTime) > 10*time.Second {
+			logrus.Infof("Still hashing directory %s: processed %d files in %v (current: %s)",
+				p, fileCount, time.Since(startTime), path)
+			lastLogTime = time.Now()
+		}
+
+		if fileContext.ExcludesFile(path) {
+			return nil
+		}
+
+		fileHash, hashErr := hashFileInDir(path, fileContext)
+		if hashErr != nil {
+			logrus.Debugf("Failed to hash file %s: %v, skipping", path, hashErr)
+			return nil
 		}
 
 		if _, err := sha.Write([]byte(fileHash)); err != nil {
 			return err
 		}
-		empty = false
+		isEmpty = false
 		return nil
-	}); err != nil {
-		if err == ctx.DeadlineExceeded || err == ctx.Canceled {
+	})
+
+	return isEmpty, fileCount, err
+}
+
+// HashDir returns a hash of the directory.
+// hashDir hashes a directory and all its files
+func hashDir(p string, fileContext util.FileContext) (isEmpty bool, hashValue string, err error) {
+	timeout := parseHashDirTimeout()
+	hashCtx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	startTime := time.Now()
+	logrus.Debugf("Starting directory hash for %s (timeout: %v)", p, timeout)
+
+	sha := sha256.New()
+	empty, fileCount, err := walkDirectoryForHash(hashCtx, p, fileContext, sha, startTime)
+
+	if err != nil {
+		if err == context.DeadlineExceeded || err == context.Canceled {
 			logrus.Warnf("Directory hash timed out after processing %d files in %v (dir: %s)",
 				fileCount, time.Since(startTime), p)
-			// Return partial hash to allow build to continue
 			return false, fmt.Sprintf("%x", sha.Sum(nil)), nil
 		}
 		return false, "", err
