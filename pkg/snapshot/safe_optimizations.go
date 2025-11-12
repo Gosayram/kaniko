@@ -46,7 +46,8 @@ const (
 	// DefaultDirectoryScanTimeout is the default timeout for directory scanning
 	DefaultDirectoryScanTimeout = 10 * time.Minute
 	// DefaultMaxFilesProcessed is the default maximum number of files to process
-	DefaultMaxFilesProcessed = 100000
+	// Increased from 100k to 1M to support larger monorepos
+	DefaultMaxFilesProcessed = 1000000
 	// MemoryCheckInterval is the interval for checking memory usage during directory scan
 	MemoryCheckInterval = 10 * time.Second
 	// MemoryBaselineBytes is the baseline memory for percentage calculation (2GB)
@@ -305,8 +306,9 @@ func (sso *SafeSnapshotOptimizer) OptimizedWalkFS(
 	}
 	scanResults, err := sso.parallelDirectoryScan(dir)
 	if err != nil {
+		// Fallback to standard WalkFS for any error (including file count limit exceeded)
 		logrus.Warnf("Parallel directory scan failed: %v, falling back to standard WalkFS", err)
-		return nil, nil, fmt.Errorf("parallel directory scan failed: %w", err)
+		return sso.fullWalkFS(dir, existingPaths)
 	}
 	if logrus.IsLevelEnabled(logrus.DebugLevel) {
 		logging.AsyncDebugf("Parallel directory scan completed: found %d files", len(scanResults.files))

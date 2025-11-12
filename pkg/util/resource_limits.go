@@ -42,7 +42,8 @@ const (
 	MaxSingleFileSize = 1024 * 1024 * 1024 // 1GB max single file
 
 	// File count limits
-	DefaultMaxFilesProcessed = 100000 // 100k files max per operation
+	// Increased from 100k to 1M to support larger monorepos
+	DefaultMaxFilesProcessed = 1000000 // 1M files max per operation
 )
 
 // ResourceLimits provides resource control and monitoring

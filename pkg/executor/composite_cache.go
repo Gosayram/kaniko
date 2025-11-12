@@ -38,6 +38,12 @@ const (
 	DefaultHashDirTimeout = 10 * time.Minute
 	// DefaultFileHashTimeout is the default timeout for file hashing
 	DefaultFileHashTimeout = 30 * time.Second
+	// AdaptiveHashLargeFileThreshold is the file size threshold (10MB) for adaptive hashing
+	// Files >= this size will use metadata-only hashing for performance
+	AdaptiveHashLargeFileThreshold = 10 * 1024 * 1024 // 10MB
+	// AdaptiveHashManyFilesThreshold is the file count threshold (1000) for adaptive hashing
+	// Directories with > this many files will use metadata-only hashing for all files
+	AdaptiveHashManyFilesThreshold = 1000
 )
 
 // Global file hash cache to avoid recomputing hashes for the same files
@@ -209,8 +215,129 @@ func parseHashDirTimeout() time.Duration {
 	return timeout
 }
 
-// hashFileInDir hashes a single file with timeout and caching
+// shouldUseAdaptiveHash checks if adaptive hashing should be used
+func shouldUseAdaptiveHash() bool {
+	useAdaptive := os.Getenv("USE_ADAPTIVE_DIR_HASH")
+	if useAdaptive == "" {
+		return true // Default: use adaptive hashing
+	}
+	return useAdaptive == "true" || useAdaptive == "1"
+}
+
+// hashFileInDirAdaptive hashes a single file using adaptive strategy based on file size
+// For small files (<10MB): uses full content hashing
+// For large files (>=10MB): uses metadata-only hashing
+func hashFileInDirAdaptive(path string, fileContext util.FileContext, useMetadataOnly bool) (string, error) {
+	var fileHash string
+	var hashErr error
+
+	// Check cache first
+	if opts := getOptsForHashCache(); opts != nil {
+		fileHash, hashErr = getFileHashWithCache(path, fileContext, opts)
+		if hashErr == nil {
+			return fileHash, nil
+		}
+	} else {
+		fileHashCacheMu.RLock()
+		cachedHash, exists := fileHashCache[path]
+		fileHashCacheMu.RUnlock()
+
+		if exists {
+			return cachedHash, nil
+		}
+	}
+
+	// Determine hashing strategy
+	if useMetadataOnly {
+		// Use metadata-only hashing (fast)
+		hasher := util.RedoHasher()
+		fileHash, hashErr = hasher(path)
+	} else {
+		// Check file size to decide strategy
+		fi, err := os.Lstat(path)
+		if err != nil {
+			return "", err
+		}
+
+		if fi.Size() >= AdaptiveHashLargeFileThreshold {
+			// Large file: use metadata-only hashing
+			hasher := util.RedoHasher()
+			fileHash, hashErr = hasher(path)
+		} else {
+			// Small file: use full content hashing
+			maxFileHashSize := int64(defaultMaxFileHashSizeMB * fileHashBytesPerMegabyte)
+			hasher := util.CacheHasherWithLimit(maxFileHashSize)
+			fileHash, hashErr = hasher(path)
+		}
+	}
+
+	if hashErr != nil {
+		return "", hashErr
+	}
+
+	// Cache the result
+	if opts := getOptsForHashCache(); opts != nil {
+		_ = GetGlobalFileHashCache(opts).Set(path, fileHash)
+	} else {
+		fileHashCacheMu.Lock()
+		fileHashCache[path] = fileHash
+		fileHashCacheMu.Unlock()
+	}
+
+	return fileHash, nil
+}
+
+// hashFileInDirLegacy performs the actual hashing work for legacy implementation
+func hashFileInDirLegacy(ctx context.Context, path string, fileContext util.FileContext) (string, error) {
+	select {
+	case <-ctx.Done():
+		return "", ctx.Err()
+	default:
+	}
+
+	var fileHash string
+	var hashErr error
+
+	if opts := getOptsForHashCache(); opts != nil {
+		fileHash, hashErr = getFileHashWithCache(path, fileContext, opts)
+	} else {
+		fileHashCacheMu.RLock()
+		cachedHash, exists := fileHashCache[path]
+		fileHashCacheMu.RUnlock()
+
+		if exists {
+			fileHash = cachedHash
+		} else {
+			select {
+			case <-ctx.Done():
+				return "", ctx.Err()
+			default:
+			}
+
+			maxFileHashSize := int64(defaultMaxFileHashSizeMB * fileHashBytesPerMegabyte)
+			hasher := util.CacheHasherWithLimit(maxFileHashSize)
+			fileHash, hashErr = hasher(path)
+			if hashErr == nil {
+				fileHashCacheMu.Lock()
+				fileHashCache[path] = fileHash
+				fileHashCacheMu.Unlock()
+			}
+		}
+	}
+
+	return fileHash, hashErr
+}
+
+// hashFileInDir hashes a single file with timeout and caching (legacy implementation)
+//
+// Deprecated: Use hashFileInDirAdaptive for better performance
 func hashFileInDir(path string, fileContext util.FileContext) (string, error) {
+	// Use adaptive hashing if enabled
+	if shouldUseAdaptiveHash() {
+		return hashFileInDirAdaptive(path, fileContext, false)
+	}
+
+	// Legacy implementation with timeout (kept for backward compatibility)
 	type hashResult struct {
 		hash string
 		err  error
@@ -222,10 +349,6 @@ func hashFileInDir(path string, fileContext util.FileContext) (string, error) {
 
 	go func() {
 		defer func() {
-			select {
-			case <-hashResultCh:
-			default:
-			}
 			if r := recover(); r != nil {
 				logrus.Debugf("Panic while hashing file %s: %v, skipping", path, r)
 				select {
@@ -235,46 +358,10 @@ func hashFileInDir(path string, fileContext util.FileContext) (string, error) {
 			}
 		}()
 
-		select {
-		case <-fileHashCtx.Done():
-			return
-		default:
-		}
-
-		var fileHash string
-		var hashErr error
-
-		if opts := getOptsForHashCache(); opts != nil {
-			fileHash, hashErr = getFileHashWithCache(path, fileContext, opts)
-		} else {
-			fileHashCacheMu.RLock()
-			cachedHash, exists := fileHashCache[path]
-			fileHashCacheMu.RUnlock()
-
-			if exists {
-				fileHash = cachedHash
-			} else {
-				select {
-				case <-fileHashCtx.Done():
-					return
-				default:
-				}
-
-				maxFileHashSize := int64(defaultMaxFileHashSizeMB * fileHashBytesPerMegabyte)
-				hasher := util.CacheHasherWithLimit(maxFileHashSize)
-				fileHash, hashErr = hasher(path)
-				if hashErr == nil {
-					fileHashCacheMu.Lock()
-					fileHashCache[path] = fileHash
-					fileHashCacheMu.Unlock()
-				}
-			}
-		}
-
+		fileHash, hashErr := hashFileInDirLegacy(fileHashCtx, path, fileContext)
 		select {
 		case hashResultCh <- hashResult{hash: fileHash, err: hashErr}:
 		case <-fileHashCtx.Done():
-			return
 		}
 	}()
 
@@ -288,7 +375,93 @@ func hashFileInDir(path string, fileContext util.FileContext) (string, error) {
 	}
 }
 
-// walkDirectoryForHash walks directory and hashes files
+// countFilesInDir counts files in directory (excluding ignored files)
+func countFilesInDir(p string, fileContext util.FileContext) (int, error) {
+	count := 0
+	err := filepath.Walk(p, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			if os.IsNotExist(err) || os.IsPermission(err) {
+				return nil
+			}
+			return nil
+		}
+
+		if info != nil && info.Mode()&os.ModeSymlink != 0 {
+			return nil
+		}
+
+		if !info.Mode().IsRegular() {
+			return nil
+		}
+
+		if fileContext.ExcludesFile(path) {
+			return nil
+		}
+
+		count++
+		return nil
+	})
+	return count, err
+}
+
+// walkDirectoryForHashAdaptive walks directory and hashes files using adaptive strategy
+// Simplified version without timeouts for better performance
+func walkDirectoryForHashAdaptive(
+	p string,
+	fileContext util.FileContext,
+	sha hash.Hash,
+	useMetadataOnly bool,
+) (isEmpty bool, fileCount int, err error) {
+	err = filepath.Walk(p, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			if os.IsNotExist(err) || os.IsPermission(err) {
+				if logrus.IsLevelEnabled(logrus.DebugLevel) {
+					logrus.Debugf("File %s is not accessible during directory walk, skipping: %v", path, err)
+				}
+				return nil
+			}
+			if logrus.IsLevelEnabled(logrus.DebugLevel) {
+				logrus.Debugf("Error accessing file %s during directory walk, skipping: %v", path, err)
+			}
+			return nil
+		}
+
+		if info != nil && info.Mode()&os.ModeSymlink != 0 {
+			if logrus.IsLevelEnabled(logrus.DebugLevel) {
+				logrus.Debugf("Skipping symlink %s during directory hash", path)
+			}
+			return nil
+		}
+
+		if !info.Mode().IsRegular() {
+			return nil
+		}
+
+		fileCount++
+
+		if fileContext.ExcludesFile(path) {
+			return nil
+		}
+
+		fileHash, hashErr := hashFileInDirAdaptive(path, fileContext, useMetadataOnly)
+		if hashErr != nil {
+			if logrus.IsLevelEnabled(logrus.DebugLevel) {
+				logrus.Debugf("Failed to hash file %s: %v, skipping", path, hashErr)
+			}
+			return nil
+		}
+
+		if _, err := sha.Write([]byte(fileHash)); err != nil {
+			return err
+		}
+		isEmpty = false
+		return nil
+	})
+
+	return isEmpty, fileCount, err
+}
+
+// walkDirectoryForHash walks directory and hashes files (legacy implementation with timeouts)
 func walkDirectoryForHash(
 	hashCtx context.Context,
 	p string,
@@ -296,6 +469,19 @@ func walkDirectoryForHash(
 	sha hash.Hash,
 	startTime time.Time,
 ) (isEmpty bool, fileCount int, err error) {
+	// Use adaptive hashing if enabled
+	if shouldUseAdaptiveHash() {
+		// Count files first to determine strategy
+		fileCountForStrategy, countErr := countFilesInDir(p, fileContext)
+		if countErr != nil {
+			logrus.Debugf("Failed to count files in directory %s: %v, using adaptive hashing", p, countErr)
+		}
+
+		useMetadataOnly := fileCountForStrategy > AdaptiveHashManyFilesThreshold
+		return walkDirectoryForHashAdaptive(p, fileContext, sha, useMetadataOnly)
+	}
+
+	// Legacy implementation with timeouts (kept for backward compatibility)
 	lastLogTime := startTime
 
 	err = filepath.Walk(p, func(path string, info os.FileInfo, err error) error {
@@ -324,8 +510,10 @@ func walkDirectoryForHash(
 		fileCount++
 
 		if time.Since(lastLogTime) > 10*time.Second {
-			logrus.Infof("Still hashing directory %s: processed %d files in %v (current: %s)",
-				p, fileCount, time.Since(startTime), path)
+			if logrus.IsLevelEnabled(logrus.DebugLevel) {
+				logrus.Debugf("Still hashing directory %s: processed %d files in %v (current: %s)",
+					p, fileCount, time.Since(startTime), path)
+			}
 			lastLogTime = time.Now()
 		}
 
@@ -350,23 +538,62 @@ func walkDirectoryForHash(
 }
 
 // HashDir returns a hash of the directory.
-// hashDir hashes a directory and all its files
+// hashDir hashes a directory and all its files using adaptive strategy
 func hashDir(p string, fileContext util.FileContext) (isEmpty bool, hashValue string, err error) {
+	startTime := time.Now()
+	if logrus.IsLevelEnabled(logrus.DebugLevel) {
+		logrus.Debugf("Starting directory hash for %s", p)
+	}
+
+	sha := sha256.New()
+
+	// Use adaptive hashing if enabled
+	if shouldUseAdaptiveHash() {
+		// Count files first to determine strategy
+		fileCount, countErr := countFilesInDir(p, fileContext)
+		if countErr != nil {
+			logrus.Debugf("Failed to count files in directory %s: %v, using adaptive hashing", p, countErr)
+		}
+
+		useMetadataOnly := fileCount > AdaptiveHashManyFilesThreshold
+		if logrus.IsLevelEnabled(logrus.DebugLevel) {
+			if useMetadataOnly {
+				logrus.Debugf("Directory %s has %d files, using metadata-only hashing", p, fileCount)
+			} else {
+				logrus.Debugf("Directory %s has %d files, using adaptive hashing", p, fileCount)
+			}
+		}
+
+		empty, actualFileCount, walkErr := walkDirectoryForHashAdaptive(p, fileContext, sha, useMetadataOnly)
+		if walkErr != nil {
+			return false, "", walkErr
+		}
+
+		duration := time.Since(startTime)
+		if duration > 10*time.Second {
+			logrus.Infof("Directory hash completed: %d files in %v (dir: %s)", actualFileCount, duration, p)
+		} else if logrus.IsLevelEnabled(logrus.DebugLevel) {
+			logrus.Debugf("Directory hash completed: %d files in %v (dir: %s)", actualFileCount, duration, p)
+		}
+
+		return empty, fmt.Sprintf("%x", sha.Sum(nil)), nil
+	}
+
+	// Legacy implementation with timeouts (kept for backward compatibility)
 	timeout := parseHashDirTimeout()
 	hashCtx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	startTime := time.Now()
 	logrus.Debugf("Starting directory hash for %s (timeout: %v)", p, timeout)
 
-	sha := sha256.New()
-	empty, fileCount, err := walkDirectoryForHash(hashCtx, p, fileContext, sha, startTime)
+	legacySha := sha256.New()
+	empty, fileCount, err := walkDirectoryForHash(hashCtx, p, fileContext, legacySha, startTime)
 
 	if err != nil {
 		if err == context.DeadlineExceeded || err == context.Canceled {
 			logrus.Warnf("Directory hash timed out after processing %d files in %v (dir: %s)",
 				fileCount, time.Since(startTime), p)
-			return false, fmt.Sprintf("%x", sha.Sum(nil)), nil
+			return false, fmt.Sprintf("%x", legacySha.Sum(nil)), nil
 		}
 		return false, "", err
 	}
@@ -378,5 +605,5 @@ func hashDir(p string, fileContext util.FileContext) (isEmpty bool, hashValue st
 		logrus.Debugf("Directory hash completed: %d files in %v (dir: %s)", fileCount, duration, p)
 	}
 
-	return empty, fmt.Sprintf("%x", sha.Sum(nil)), nil
+	return empty, fmt.Sprintf("%x", legacySha.Sum(nil)), nil
 }

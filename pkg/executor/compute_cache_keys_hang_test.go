@@ -22,10 +22,11 @@ import (
 	"testing"
 	"time"
 
+	v1 "github.com/google/go-containerregistry/pkg/v1"
+
 	"github.com/Gosayram/kaniko/pkg/commands"
 	"github.com/Gosayram/kaniko/pkg/config"
 	"github.com/Gosayram/kaniko/pkg/dockerfile"
-	v1 "github.com/google/go-containerregistry/pkg/v1"
 )
 
 // TestComputeCacheKeys_MockCommand tests computeCacheKeys
