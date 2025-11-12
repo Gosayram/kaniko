@@ -34,6 +34,8 @@ const (
 	WarningThresholdPercent = 80
 	// PercentageMultiplier is used to convert ratio to percentage
 	PercentageMultiplier = 100
+	// DefaultMaxPushTimeout is the maximum timeout for push operations
+	DefaultMaxPushTimeout = 5 * time.Minute
 )
 
 // RegistryClientConfig holds configuration for the registry client
@@ -150,16 +152,24 @@ func (rc *RegistryClient) PullImage(
 
 		// Log timeout warning at 80% of timeout
 		warningThreshold := timeout * WarningThresholdPercent / PercentageMultiplier
+		warningCtx, warningCancel := context.WithCancel(ctx)
 		go func() {
-			time.Sleep(warningThreshold)
+			defer warningCancel() // Ensure cleanup
 			select {
-			case <-ctx.Done():
+			case <-time.After(warningThreshold):
+				select {
+				case <-warningCtx.Done():
+					// Operation completed or canceled
+				default:
+					logrus.Warnf("Image pull operation taking longer than expected: %v elapsed (timeout: %v)",
+						time.Since(start), timeout)
+				}
+			case <-warningCtx.Done():
 				// Operation completed or canceled
-			default:
-				logrus.Warnf("Image pull operation taking longer than expected: %v elapsed (timeout: %v)",
-					time.Since(start), timeout)
 			}
 		}()
+		// Ensure warning goroutine is cleaned up when operation completes
+		defer warningCancel()
 	} else {
 		deadline, _ := ctx.Deadline()
 		timeout = time.Until(deadline)
@@ -277,22 +287,37 @@ func (rc *RegistryClient) PushImage(ctx context.Context, ref name.Reference, ima
 			timeout = DefaultRequestTimeout
 		}
 		// Push operations typically take longer, use 2x timeout
+		// But cap at 5 minutes to avoid conflicts with ResolveEnvAndWildcards (5 min timeout)
 		timeout *= 2
+		maxPushTimeout := DefaultMaxPushTimeout
+		if timeout > maxPushTimeout {
+			logrus.Warnf("PushImage timeout (%v) exceeds maximum (%v), capping to prevent conflicts with file operations",
+				timeout, maxPushTimeout)
+			timeout = maxPushTimeout
+		}
 		ctx, cancel = context.WithTimeout(ctx, timeout)
 		defer cancel()
 
 		// Log timeout warning at 80% of timeout
 		warningThreshold := timeout * WarningThresholdPercent / PercentageMultiplier
+		warningCtx, warningCancel := context.WithCancel(ctx)
 		go func() {
-			time.Sleep(warningThreshold)
+			defer warningCancel() // Ensure cleanup
 			select {
-			case <-ctx.Done():
+			case <-time.After(warningThreshold):
+				select {
+				case <-warningCtx.Done():
+					// Operation completed or canceled
+				default:
+					logrus.Warnf("Image push operation taking longer than expected: %v elapsed (timeout: %v)",
+						time.Since(start), timeout)
+				}
+			case <-warningCtx.Done():
 				// Operation completed or canceled
-			default:
-				logrus.Warnf("Image push operation taking longer than expected: %v elapsed (timeout: %v)",
-					time.Since(start), timeout)
 			}
 		}()
+		// Ensure warning goroutine is cleaned up when operation completes
+		defer warningCancel()
 	} else {
 		deadline, _ := ctx.Deadline()
 		timeout = time.Until(deadline)

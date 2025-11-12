@@ -1547,18 +1547,31 @@ func createTimeoutContext() (context.Context, context.CancelFunc, time.Duration)
 // startTimeoutWarning starts a goroutine that logs a warning if operation takes too long
 func startTimeoutWarning(ctx context.Context, timeout time.Duration, startTime time.Time) {
 	warningThreshold := timeout * WarningThresholdPercent / PercentageMultiplier
+	if warningThreshold <= 0 {
+		return // Skip if threshold is too small
+	}
 	warningSent := make(chan struct{}, 1)
 	go func() {
-		time.Sleep(warningThreshold)
+		// Use context-aware sleep to allow early termination
+		timer := time.NewTimer(warningThreshold)
+		defer timer.Stop()
+
 		select {
 		case <-ctx.Done():
 			// Operation completed or canceled
-		default:
+			return
+		case <-timer.C:
+			// Check context again before logging
 			select {
-			case warningSent <- struct{}{}:
-				logrus.Warnf("File resolution operation taking longer than expected: %v elapsed (timeout: %v)",
-					time.Since(startTime), timeout)
+			case <-ctx.Done():
+				return
 			default:
+				select {
+				case warningSent <- struct{}{}:
+					logrus.Warnf("File resolution operation taking longer than expected: %v elapsed (timeout: %v)",
+						time.Since(startTime), timeout)
+				default:
+				}
 			}
 		}
 	}()
@@ -1575,7 +1588,7 @@ func walkFilesInPath(ctx context.Context, fullPath, root, cleanedRoot string) ([
 		// Check context cancellation more frequently
 		select {
 		case <-ctx.Done():
-			logrus.Warnf("File walk cancelled after processing %d files in %v", fileCount, time.Since(startTime))
+			logrus.Warnf("File walk canceled after processing %d files in %v", fileCount, time.Since(startTime))
 			return ctx.Err()
 		default:
 		}
@@ -1583,6 +1596,12 @@ func walkFilesInPath(ctx context.Context, fullPath, root, cleanedRoot string) ([
 		if err != nil {
 			// Log errors but continue walking (original behavior)
 			logrus.Debugf("Error walking path %s: %v", path, err)
+			return nil
+		}
+
+		// Skip symlinks to prevent infinite loops and hangs
+		if info != nil && info.Mode()&os.ModeSymlink != 0 {
+			logrus.Debugf("Skipping symlink %s during file walk", path)
 			return nil
 		}
 
@@ -1655,8 +1674,29 @@ func RelativeFiles(fp, root string) ([]string, error) {
 
 	resultCh := make(chan result, 1)
 	go func() {
+		defer func() {
+			// Ensure channel is always drained to prevent goroutine leak
+			select {
+			case <-resultCh:
+			default:
+			}
+		}()
+
+		// Check context before starting work
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
 		files, walkErr := walkFilesInPath(ctx, fullPath, root, cleanedRoot)
-		resultCh <- result{files: files, err: walkErr}
+
+		// Check context before sending result
+		select {
+		case resultCh <- result{files: files, err: walkErr}:
+		case <-ctx.Done():
+			return
+		}
 	}()
 
 	select {

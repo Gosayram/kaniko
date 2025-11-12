@@ -133,14 +133,42 @@ func (ac *AdvancedCopy) CopyFiles(tasks []CopyTask) error {
 		go func(t CopyTask) {
 			defer wg.Done()
 
+			// Check context before starting work
+			select {
+			case <-ac.ctx.Done():
+				return
+			default:
+			}
+
 			// Acquire worker
-			ac.workers <- struct{}{}
-			defer func() { <-ac.workers }()
+			select {
+			case ac.workers <- struct{}{}:
+			case <-ac.ctx.Done():
+				return
+			}
+			defer func() {
+				select {
+				case <-ac.workers:
+				case <-ac.ctx.Done():
+				}
+			}()
+
+			// Check context again before copying
+			select {
+			case <-ac.ctx.Done():
+				return
+			default:
+			}
 
 			// Copy file
 			if err := ac.copySingleFile(&t); err != nil {
-				errorChan <- fmt.Errorf("failed to copy %s to %s: %w", t.Src, t.Dst, err)
-				ac.recordError()
+				// Check context before sending error
+				select {
+				case errorChan <- fmt.Errorf("failed to copy %s to %s: %w", t.Src, t.Dst, err):
+					ac.recordError()
+				case <-ac.ctx.Done():
+					return
+				}
 			} else {
 				ac.recordSuccess(t.Size)
 			}

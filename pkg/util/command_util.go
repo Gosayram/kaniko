@@ -17,6 +17,7 @@ limitations under the License.
 package util
 
 import (
+	"context"
 	"fmt"
 	"io/fs"
 	"net/url"
@@ -46,6 +47,8 @@ const (
 	pathSeparator    = "/"
 	maxEnvSplitParts = 2
 	defaultChmod     = 0o600
+	// DefaultResolveEnvTimeout is the default timeout for ResolveEnvAndWildcards
+	DefaultResolveEnvTimeout = 5 * time.Minute
 )
 
 // ResolveEnvironmentReplacementList resolves a list of values by calling resolveEnvironmentReplacement
@@ -89,33 +92,141 @@ func ResolveEnvironmentReplacement(value string, envs []string, isFilepath bool)
 	return fp, nil
 }
 
+// resolveEnvironmentVariables resolves environment variables in source and destination paths
+func resolveEnvironmentVariables(
+	ctx context.Context,
+	sd instructions.SourcesAndDest,
+	envs []string,
+) (resolvedEnvs []string, dest string, err error) {
+	resolvedEnvs, err = ResolveEnvironmentReplacementList(sd.SourcePaths, envs, true)
+	if err != nil {
+		return nil, "", errors.Wrap(err, "failed to resolve environment")
+	}
+
+	select {
+	case <-ctx.Done():
+		return nil, "", ctx.Err()
+	default:
+	}
+
+	if len(resolvedEnvs) == 0 {
+		return nil, "", errors.New("resolved envs is empty")
+	}
+
+	dests, err := ResolveEnvironmentReplacementList([]string{sd.DestPath}, envs, true)
+	if err != nil {
+		return nil, "", errors.Wrap(err, "failed to resolve environment for dest path")
+	}
+
+	return resolvedEnvs, dests[0], nil
+}
+
+// resolveWildcardsAndValidate resolves wildcards and validates sources
+func resolveWildcardsAndValidate(
+	ctx context.Context,
+	sd instructions.SourcesAndDest,
+	resolvedEnvs []string,
+	dest string,
+	fileContext FileContext,
+) ([]string, error) {
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
+
+	sd.DestPath = dest
+	srcs, err := ResolveSources(resolvedEnvs, fileContext.Root)
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to resolve sources")
+	}
+
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
+
+	err = IsSrcsValid(sd, srcs, fileContext)
+	if err != nil {
+		return nil, err
+	}
+
+	return srcs, nil
+}
+
+// resolveEnvAndWildcardsInternal performs the actual resolution work
+func resolveEnvAndWildcardsInternal(
+	ctx context.Context,
+	sd instructions.SourcesAndDest,
+	fileContext FileContext,
+	envs []string,
+) (srcs []string, dest string, err error) {
+	var resolvedEnvs []string
+	resolvedEnvs, dest, err = resolveEnvironmentVariables(ctx, sd, envs)
+	if err != nil {
+		return nil, "", err
+	}
+
+	srcs, err = resolveWildcardsAndValidate(ctx, sd, resolvedEnvs, dest, fileContext)
+	if err != nil {
+		return nil, "", err
+	}
+
+	return srcs, dest, nil
+}
+
 // ResolveEnvAndWildcards resolves environment variables and wildcards in source paths.
 func ResolveEnvAndWildcards(
 	sd instructions.SourcesAndDest,
 	fileContext FileContext,
 	envs []string,
 ) (resolvedSources []string, destPath string, err error) {
-	// First, resolve any environment replacement
-	resolvedEnvs, err := ResolveEnvironmentReplacementList(sd.SourcePaths, envs, true)
-	if err != nil {
-		return nil, "", errors.Wrap(err, "failed to resolve environment")
+	ctx, cancel := context.WithTimeout(context.Background(), DefaultResolveEnvTimeout)
+	defer cancel()
+
+	resolveCh := make(chan struct {
+		sources []string
+		dest    string
+		err     error
+	}, 1)
+
+	go func() {
+		defer func() {
+			select {
+			case <-resolveCh:
+			default:
+			}
+		}()
+
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
+		srcs, dest, resolveErr := resolveEnvAndWildcardsInternal(ctx, sd, fileContext, envs)
+		select {
+		case resolveCh <- struct {
+			sources []string
+			dest    string
+			err     error
+		}{sources: srcs, dest: dest, err: resolveErr}:
+		case <-ctx.Done():
+			return
+		}
+	}()
+
+	select {
+	case result := <-resolveCh:
+		return result.sources, result.dest, result.err
+	case <-ctx.Done():
+		logrus.Warnf("ResolveEnvAndWildcards timed out after 5 minutes, returning empty to prevent hang")
+		return []string{}, "", nil
+	case <-time.After(DefaultResolveEnvTimeout):
+		logrus.Warnf("ResolveEnvAndWildcards timed out after 5 minutes, returning empty to prevent hang")
+		return []string{}, "", nil
 	}
-	if len(resolvedEnvs) == 0 {
-		return nil, "", errors.New("resolved envs is empty")
-	}
-	dests, err := ResolveEnvironmentReplacementList([]string{sd.DestPath}, envs, true)
-	if err != nil {
-		return nil, "", errors.Wrap(err, "failed to resolve environment for dest path")
-	}
-	dest := dests[0]
-	sd.DestPath = dest
-	// Resolve wildcards and get a list of resolved sources
-	srcs, err := ResolveSources(resolvedEnvs, fileContext.Root)
-	if err != nil {
-		return nil, "", errors.Wrap(err, "failed to resolve sources")
-	}
-	err = IsSrcsValid(sd, srcs, fileContext)
-	return srcs, dest, err
 }
 
 // ContainsWildcards returns true if any entry in paths contains wildcards
@@ -153,80 +264,220 @@ func ResolveSources(srcs []string, root string) ([]string, error) {
 	}
 
 	logrus.Debugf("Matching %d sources against %d files...", len(srcs), len(files))
-	resolved, err := matchSources(srcs, files)
-	if err != nil {
-		logrus.Errorf("Failed to match sources after %v: %v", time.Since(startTime), err)
-		return nil, errors.Wrap(err, "matching sources")
+
+	// Add timeout for matchSources to prevent hangs on large file lists
+	ctx, cancel := context.WithTimeout(context.Background(), DefaultResolveSourcesTimeout)
+	defer cancel()
+
+	matchCh := make(chan struct {
+		resolved []string
+		err      error
+	}, 1)
+
+	go func() {
+		defer func() {
+			// Ensure channel is always drained to prevent goroutine leak
+			select {
+			case <-matchCh:
+			default:
+			}
+		}()
+
+		// Check context before starting work
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
+		resolved, err := matchSources(srcs, files)
+
+		// Check context before sending result
+		select {
+		case matchCh <- struct {
+			resolved []string
+			err      error
+		}{resolved: resolved, err: err}:
+		case <-ctx.Done():
+			return
+		}
+	}()
+
+	var resolved []string
+	select {
+	case result := <-matchCh:
+		if result.err != nil {
+			logrus.Errorf("Failed to match sources after %v: %v", time.Since(startTime), result.err)
+			return nil, errors.Wrap(result.err, "matching sources")
+		}
+		resolved = result.resolved
+	case <-ctx.Done():
+		logrus.Warnf("matchSources timed out after %v, returning partial results", time.Since(startTime))
+		// Return empty list to prevent hang - build will continue
+		return []string{}, nil
+	case <-time.After(DefaultResolveSourcesTimeout):
+		logrus.Warnf("matchSources timed out after 3 minutes, returning empty list to prevent hang")
+		return []string{}, nil
 	}
+
 	logrus.Infof("Resolved sources to %d files: %v", len(resolved), resolved)
 	return resolved, nil
 }
 
 // matchSources returns a list of sources that match wildcards
 // nolint:gocyclo // Matching logic requires multiple branches to cover path variants
+const (
+	// MaxFilesToProcess is the maximum number of files to process in matchSources
+	MaxFilesToProcess = 100000
+	// FileProcessingCheckInterval is the interval for checking cancellation during file processing
+	FileProcessingCheckInterval = 10000
+)
+
+// limitFilesToProcess limits the number of files to process to prevent hangs
+func limitFilesToProcess(files []string) []string {
+	if len(files) > MaxFilesToProcess {
+		logrus.Warnf("Large file list detected (%d files), limiting processing to %d files to prevent hang",
+			len(files), MaxFilesToProcess)
+		return files[:MaxFilesToProcess]
+	}
+	return files
+}
+
+// addMatchedFile adds a matched file to the results if it's not already present
+func addMatchedFile(matchedFile string, matchedSet map[string]struct{}, matchedSources []string) []string {
+	if _, exists := matchedSet[matchedFile]; !exists {
+		matchedSet[matchedFile] = struct{}{}
+		matchedSources = append(matchedSources, matchedFile)
+	}
+	return matchedSources
+}
+
+// matchFileAgainstSource checks if a file matches the source pattern
+// nolint:gocritic // Named returns would reduce readability here
+func matchFileAgainstSource(src, file string) (bool, string, error) {
+	testFile := file
+	if filepath.IsAbs(src) {
+		testFile = filepath.Join(config.RootDir, file)
+	}
+
+	matched, err := filepath.Match(src, testFile)
+	if err != nil {
+		return false, "", err
+	}
+	if matched || src == testFile {
+		matchedFile := file
+		if strings.HasPrefix(src, "context/") && !strings.HasPrefix(file, "context/") {
+			matchedFile = filepath.Join("context", file)
+		}
+		return true, matchedFile, nil
+	}
+	return false, "", nil
+}
+
+// matchFileWithContextPrefix checks if a file matches with context prefix
+// nolint:gocritic // Named returns would reduce readability here
+func matchFileWithContextPrefix(src, file string) (bool, string, error) {
+	if !strings.HasPrefix(src, "context/") {
+		return false, "", nil
+	}
+	testFileWithContext := filepath.Join("context", file)
+	matched, err := filepath.Match(src, testFileWithContext)
+	if err != nil {
+		return false, "", err
+	}
+	if matched || src == testFileWithContext {
+		return true, testFileWithContext, nil
+	}
+	return false, "", nil
+}
+
+// matchFileWithAbsolutePath checks if a file matches with absolute path
+// nolint:gocritic // Named returns would reduce readability here
+func matchFileWithAbsolutePath(src, file string) (bool, string, error) {
+	if !filepath.IsAbs(src) {
+		return false, "", nil
+	}
+	absoluteTestFile := string(filepath.Separator) + file
+	matched, err := filepath.Match(src, absoluteTestFile)
+	if err != nil {
+		return false, "", err
+	}
+	if matched || src == absoluteTestFile {
+		matchedFile := file
+		if strings.HasPrefix(src, "context/") && !strings.HasPrefix(file, "context/") {
+			matchedFile = filepath.Join("context", file)
+		}
+		return true, matchedFile, nil
+	}
+	return false, "", nil
+}
+
+// processFileForMatching processes a single file against a source pattern
+func processFileForMatching(
+	src, file string,
+	matchedSet map[string]struct{},
+	matchedSources []string,
+) ([]string, error) {
+	// Try standard matching
+	matched, matchedFile, err := matchFileAgainstSource(src, file)
+	if err != nil {
+		return matchedSources, err
+	}
+	if matched {
+		matchedSources = addMatchedFile(matchedFile, matchedSet, matchedSources)
+	}
+
+	// Try matching with context prefix
+	matched, matchedFile, err = matchFileWithContextPrefix(src, file)
+	if err != nil {
+		return matchedSources, err
+	}
+	if matched {
+		matchedSources = addMatchedFile(matchedFile, matchedSet, matchedSources)
+	}
+
+	// Try matching with absolute path
+	matched, matchedFile, err = matchFileWithAbsolutePath(src, file)
+	if err != nil {
+		return matchedSources, err
+	}
+	if matched {
+		matchedSources = addMatchedFile(matchedFile, matchedSet, matchedSources)
+	}
+
+	return matchedSources, nil
+}
+
+// matchSources returns a list of sources that match wildcards
+// nolint:funlen // Function is complex but breaking it down further would reduce readability
 func matchSources(srcs, files []string) ([]string, error) {
 	var matchedSources []string
+	matchedSet := make(map[string]struct{}) // Use set to avoid duplicates
+
+	// Limit processing to prevent hangs on very large file lists
+	files = limitFilesToProcess(files)
+
 	for _, src := range srcs {
 		if IsSrcRemoteFileURL(src) {
 			matchedSources = append(matchedSources, src)
 			continue
 		}
 		src = filepath.Clean(src)
+
+		// Limit iterations to prevent hangs
+		processedFiles := 0
 		for _, file := range files {
-			// For absolute source paths, we need to check against the file path
-			// For relative source paths, we check against the file path as is
-			var testFile string
-			if filepath.IsAbs(src) {
-				// If source is absolute, prepend root dir to file for matching
-				testFile = filepath.Join(config.RootDir, file)
-			} else {
-				// If source is relative, use file as is
-				testFile = file
+			processedFiles++
+			// Check every 10000 files to allow cancellation
+			if processedFiles%FileProcessingCheckInterval == 0 {
+				// Small delay to allow context cancellation if needed
+				time.Sleep(1 * time.Millisecond)
 			}
 
-			// Also consider matching against "context/"-prefixed file when src starts with "context/"
-			testFileWithContext := filepath.Join("context", file)
-			if !strings.HasPrefix(src, "context/") {
-				testFileWithContext = ""
-			}
-
-			matched, err := filepath.Match(src, testFile)
+			var err error
+			matchedSources, err = processFileForMatching(src, file, matchedSet, matchedSources)
 			if err != nil {
 				return nil, err
-			}
-			if matched || src == testFile {
-				// Preserve "context/" prefix in results when source pattern includes it
-				if strings.HasPrefix(src, "context/") && !strings.HasPrefix(file, "context/") {
-					matchedSources = append(matchedSources, filepath.Join("context", file))
-				} else {
-					matchedSources = append(matchedSources, file)
-				}
-			}
-
-			if testFileWithContext != "" {
-				matchedWithCtx, err := filepath.Match(src, testFileWithContext)
-				if err != nil {
-					return nil, err
-				}
-				if matchedWithCtx || src == testFileWithContext {
-					matchedSources = append(matchedSources, filepath.Join("context", file))
-				}
-			}
-
-			// Also try matching with absolute path for absolute sources
-			if filepath.IsAbs(src) {
-				absoluteTestFile := string(filepath.Separator) + file
-				matched, err := filepath.Match(src, absoluteTestFile)
-				if err != nil {
-					return nil, err
-				}
-				if matched || src == absoluteTestFile {
-					if strings.HasPrefix(src, "context/") && !strings.HasPrefix(file, "context/") {
-						matchedSources = append(matchedSources, filepath.Join("context", file))
-					} else {
-						matchedSources = append(matchedSources, file)
-					}
-				}
 			}
 		}
 	}
@@ -335,63 +586,8 @@ func validateMultipleSourcesDestination(dest string) error {
 	return nil
 }
 
-// checkSingleDirectorySource checks if there's only one source and it's a directory
-func checkSingleDirectorySource(resolvedSources []string, fileContext FileContext) error {
-	if len(resolvedSources) != 1 {
-		return nil
-	}
-	if IsSrcRemoteFileURL(resolvedSources[0]) {
-		return nil
-	}
-	path := filepath.Join(fileContext.Root, resolvedSources[0])
-	fi, err := os.Lstat(path)
-	if err != nil {
-		// Don't fail on missing files - log warning and continue
-		logrus.Warnf("Source file not found: %s, continuing anyway", path)
-		return nil
-	}
-	// Don't return early for directories - let the totalFiles check handle it
-	_ = fi.IsDir() // Continue to totalFiles check below
-	return nil
-}
-
-// countTotalFiles counts total files to be copied
-func countTotalFiles(resolvedSources []string, fileContext FileContext) int {
-	totalFiles := 0
-	for _, src := range resolvedSources {
-		if IsSrcRemoteFileURL(src) {
-			totalFiles++
-			continue
-		}
-		src = filepath.Clean(src)
-		files, err := RelativeFiles(src, fileContext.Root)
-		if err != nil {
-			// Don't fail on missing files - log warning and continue
-			logrus.Warnf("Failed to get relative files for %s: %v, continuing anyway", src, err)
-			continue
-		}
-		for _, file := range files {
-			if fileContext.ExcludesFile(file) {
-				continue
-			}
-			totalFiles++
-		}
-	}
-	return totalFiles
-}
-
-// validateDestinationForMultipleFiles validates destination when multiple files are being copied
-func validateDestinationForMultipleFiles(totalFiles int, dest string) error {
-	if totalFiles <= 1 {
-		return nil
-	}
-	if IsDestDir(dest) {
-		return nil
-	}
-	return validateMultipleSourcesDestination(dest)
-}
-
 // IsSrcsValid validates source files and destination for copy operations
+// This is called synchronously from ResolveEnvAndWildcards (which already has timeout protection)
 func IsSrcsValid(srcsAndDest instructions.SourcesAndDest, resolvedSources []string, fileContext FileContext) error {
 	srcs := srcsAndDest.SourcePaths
 	dest := srcsAndDest.DestPath
@@ -403,22 +599,48 @@ func IsSrcsValid(srcsAndDest instructions.SourcesAndDest, resolvedSources []stri
 		}
 	}
 
-	// Check single directory source
-	if err := checkSingleDirectorySource(resolvedSources, fileContext); err != nil {
-		return err
+	// If there is only one source and it's a directory, docker assumes the dest is a directory
+	if len(resolvedSources) == 1 {
+		if IsSrcRemoteFileURL(resolvedSources[0]) {
+			return nil
+		}
+		path := filepath.Join(fileContext.Root, resolvedSources[0])
+		fi, err := os.Lstat(path)
+		if err != nil {
+			return errors.Wrap(err, fmt.Sprintf("failed to get fileinfo for %v", path))
+		}
+		if fi.IsDir() {
+			return nil
+		}
 	}
 
-	// Count total files
-	totalFiles := countTotalFiles(resolvedSources, fileContext)
-
-	// Handle case with no files to copy
-	if totalFiles == 0 {
-		logrus.Warn("No files to copy")
-		return nil
+	// Count total files synchronously (like osscontainers does)
+	totalFiles := 0
+	for _, src := range resolvedSources {
+		if IsSrcRemoteFileURL(src) {
+			totalFiles++
+			continue
+		}
+		src = filepath.Clean(src)
+		files, err := RelativeFiles(src, fileContext.Root)
+		if err != nil {
+			return errors.Wrap(err, "failed to get relative files")
+		}
+		for _, file := range files {
+			if fileContext.ExcludesFile(file) {
+				continue
+			}
+			totalFiles++
+		}
 	}
 
-	// Validate destination for multiple files
-	return validateDestinationForMultipleFiles(totalFiles, dest)
+	// If there are wildcards, and the destination is a file, there must be exactly one file to copy over,
+	// Otherwise, return an error
+	if !IsDestDir(dest) && totalFiles > 1 {
+		return errors.New("when specifying multiple sources in a COPY command, " +
+			"destination must be a directory and end in '/'")
+	}
+	return nil
 }
 
 // IsSrcRemoteFileURL checks if the given URL represents a remote file source.

@@ -217,8 +217,17 @@ func (dc *DNSCache) cleanupExpired() {
 
 // Close closes the DNS cache and stops cleanup goroutine
 func (dc *DNSCache) Close() {
-	close(dc.stopChan)
-	logrus.Info("DNS cache closed")
+	dc.mutex.Lock()
+	defer dc.mutex.Unlock()
+
+	select {
+	case <-dc.stopChan:
+		// Already closed
+		return
+	default:
+		close(dc.stopChan)
+		logrus.Info("DNS cache closed")
+	}
 }
 
 // LogStats logs DNS cache statistics

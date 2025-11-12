@@ -613,12 +613,16 @@ Kaniko's modern implementation includes several advanced subsystems:
 
 Kaniko now includes comprehensive timeout mechanisms to prevent hangs and improve reliability:
 
-- **File System Operations**: Timeouts for file resolution and directory scanning operations to prevent hangs on large projects
+- **File System Operations**: Timeouts for file resolution, directory scanning, and file hashing operations to prevent hangs on large projects
+- **Cache Operations**: Timeouts for cache key computation, prefetch operations, and composite key population to prevent build hangs
+- **Command Processing**: Timeouts for individual command execution and file context resolution to ensure builds complete reliably
 - **Network Operations**: Timeouts for image retrieval, registry pull/push operations, and remote cache operations
 - **Resource Limits**: Configurable limits for file count processing to prevent resource exhaustion
 - **Memory Monitoring**: Automatic memory usage checks during directory scanning with warnings when thresholds are exceeded
+- **Goroutine Leak Prevention**: Enhanced context cancellation and channel cleanup to prevent goroutine leaks
+- **Symlink Handling**: Improved symlink detection and skipping to prevent infinite loops during directory walks
 
-These improvements ensure that kaniko builds complete reliably even with very large build contexts or slow network connections. Configure timeouts using environment variables (see [Timeout Configuration](#timeout-configuration)).
+These improvements ensure that kaniko builds complete reliably even with very large build contexts or slow network connections. All timeout values are configurable via constants and can be adjusted for specific use cases (see [Timeout Configuration](#timeout-configuration)).
 
 ### Enhanced Logging
 
@@ -1752,6 +1756,21 @@ The following environment variables control timeouts for various operations to p
 - `DIRECTORY_SCAN_TIMEOUT` - Timeout for directory scanning operations. Defaults to `10m`. Format: `10m`, `15m`, `30m`.
 - `IMAGE_RETRIEVE_TIMEOUT` - Timeout for retrieving images from remote registries. Defaults to `15m`. Format: `15m`, `30m`, `1h`.
 - `REMOTE_CACHE_TIMEOUT` - Timeout for remote cache operations. Defaults to `5m`. Format: `5m`, `10m`, `15m`.
+- `HASH_DIR_TIMEOUT` - Timeout for directory hashing operations. Defaults to `10m`. Format: `10m`, `15m`, `30m`.
+
+**Internal Timeout Constants** (configured in code, not via environment variables):
+
+- **Prefetch Operations**: 5 minutes - Timeout for prefetch key calculation
+- **Files Used from Context**: 2 minutes - Timeout for resolving files used by commands
+- **Populate Cache Key**: 5 minutes - Timeout for populating composite cache keys
+- **Cache Key Computation**: 10 minutes - Timeout for overall cache key computation
+- **Process Command**: 15 minutes - Timeout for processing individual commands
+- **Directory Walk**: 5 minutes - Timeout for walking directory structures
+- **Find Similar Paths**: 3 minutes - Timeout for finding similar file paths
+- **Find Build Output**: 3 minutes - Timeout for finding build output directories
+- **Resolve Environment**: 5 minutes - Timeout for resolving environment variables and wildcards
+- **File Hashing**: 30 seconds - Timeout for hashing individual files
+- **Max Push Timeout**: 5 minutes - Maximum timeout for push operations to prevent conflicts
 
 **Example**:
 ```bash
@@ -1761,6 +1780,7 @@ export RESOLVE_SOURCES_TIMEOUT=10m
 export DIRECTORY_SCAN_TIMEOUT=15m
 export IMAGE_RETRIEVE_TIMEOUT=30m
 export REMOTE_CACHE_TIMEOUT=10m
+export HASH_DIR_TIMEOUT=15m
 ```
 
 #### Resource Limits Configuration

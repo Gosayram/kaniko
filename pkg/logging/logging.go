@@ -60,10 +60,11 @@ func Configure(level, format string, logTimestamp bool) error {
 			FullTimestamp: logTimestamp,
 		}
 	case FormatColor:
-		formatter = &logrus.TextFormatter{
-			ForceColors:   true,
-			FullTimestamp: logTimestamp,
-		}
+		// Use KanikoFormatter for better color support and level visibility
+		kanikoFormatter := NewKanikoFormatter()
+		kanikoFormatter.ForceColors = true
+		kanikoFormatter.ShowTimestamp = logTimestamp
+		formatter = kanikoFormatter
 	case FormatJSON:
 		formatter = &logrus.JSONFormatter{}
 	default:

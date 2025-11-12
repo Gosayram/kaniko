@@ -97,13 +97,26 @@ func (f *KanikoFormatter) shouldUseColors() bool {
 	if os.Getenv("NO_COLOR") != "" {
 		return false
 	}
-	// Check if output is a terminal (basic check via TERM variable)
-	// In CI/CD environments, TERM is usually not set or set to "dumb"
-	term := os.Getenv("TERM")
-	if term == "" || term == "dumb" {
+	// Check KANIKO_DISABLE_COLORS environment variable
+	if os.Getenv("KANIKO_DISABLE_COLORS") != "" {
 		return false
 	}
-	// Default to colors if TERM is set (most terminals support ANSI colors)
+	// Check if output is a terminal using file descriptor check
+	// This is more reliable than TERM variable in CI/CD environments
+	if fileInfo, err := os.Stdout.Stat(); err == nil {
+		// Check if it's a character device (terminal)
+		if (fileInfo.Mode() & os.ModeCharDevice) != 0 {
+			return true
+		}
+	}
+	// Check TERM variable as fallback
+	term := os.Getenv("TERM")
+	if term != "" && term != "dumb" {
+		return true
+	}
+	// In CI/CD environments, check if we're in a container with TTY
+	// Most CI systems support ANSI colors even without TERM
+	// Default to true for better visibility, unless explicitly disabled
 	return true
 }
 
@@ -160,6 +173,8 @@ func NewKanikoFormatter() *KanikoFormatter {
 		ShowTimestamp: true,
 		ShowLevel:     true,
 		CompactMode:   false,
+		ForceColors:   false, // Will be determined by shouldUseColors()
+		DisableColors: false,
 	}
 }
 
