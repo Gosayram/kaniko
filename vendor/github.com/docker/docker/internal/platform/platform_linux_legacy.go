@@ -1,4 +1,4 @@
-//go:build !windows && !linux
+//go:build linux && !go1.23
 
 package platform
 
@@ -15,19 +15,10 @@ func runtimeArchitecture() (string, error) {
 	return unix.ByteSliceToString(utsname.Machine[:]), nil
 }
 
-// NumProcs returns the number of processors on the system
-//
-// Deprecated: temporary stub for non-Windows to provide an alias for the deprecated github.com/docker/docker/pkg/platform package.
-//
-// FIXME(thaJeztah): remove once we remove  github.com/docker/docker/pkg/platform
-func NumProcs() uint32 {
-	return 0
-}
-
 // possibleCPUs returns the set of possible CPUs on the host.
-// For Unix systems other than Linux, this is not implemented and returns nil,
+// For Linux systems without Go 1.23+, this is not implemented and returns nil,
 // which will trigger the fallback in platform.go
 func possibleCPUs() []int {
-	// not implemented for Unix systems other than Linux
+	// not implemented for Linux without Go 1.23+
 	return nil
 }

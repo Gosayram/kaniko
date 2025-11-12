@@ -1,5 +1,5 @@
 // TODO(thaJeztah): remove once we are a module; the go:build directive prevents go from downgrading language version to go1.16:
-//go:build go1.23
+//go:build go1.23 && linux
 
 package platform
 
@@ -8,7 +8,18 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+
+	"golang.org/x/sys/unix"
 )
+
+// runtimeArchitecture gets the name of the current architecture (x86, x86_64, i86pc, sun4v, ...)
+func runtimeArchitecture() (string, error) {
+	utsname := &unix.Utsname{}
+	if err := unix.Uname(utsname); err != nil {
+		return "", err
+	}
+	return unix.ByteSliceToString(utsname.Machine[:]), nil
+}
 
 // possibleCPUs returns the set of possible CPUs on the host (which is
 // equal or larger to the number of CPUs currently online). The returned
