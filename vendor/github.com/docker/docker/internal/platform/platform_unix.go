@@ -1,4 +1,4 @@
-//go:build !windows && !linux
+//go:build !windows
 
 package platform
 
@@ -22,12 +22,4 @@ func runtimeArchitecture() (string, error) {
 // FIXME(thaJeztah): remove once we remove  github.com/docker/docker/pkg/platform
 func NumProcs() uint32 {
 	return 0
-}
-
-// possibleCPUs returns the set of possible CPUs on the host.
-// For Unix systems other than Linux, this is not implemented and returns nil,
-// which will trigger the fallback in platform.go
-func possibleCPUs() []int {
-	// not implemented for Unix systems other than Linux
-	return nil
 }
